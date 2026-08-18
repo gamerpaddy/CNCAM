@@ -57,7 +57,7 @@ are features of the part.
 
 ### Milling operations
 
-| | |
+| Group | Operations |
 |---|---|
 | Prepare the stock | Face |
 | Roughing | Adaptive rough, Z-level rough |
