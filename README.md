@@ -33,6 +33,20 @@ You have been warned. With that out of the way:
 
 ---
 
+## Try it without installing anything
+
+**[gamerpaddy.github.io/CNCAM](https://gamerpaddy.github.io/CNCAM/)**
+
+That is the current `main` branch, running. It is the whole application, not a
+cut down demo: nothing is sent anywhere, and everything happens in your own
+browser. Load one of the models from `samples/`, or your own, and have a look.
+
+The unit tests run in the browser too, at
+[/test.html](https://gamerpaddy.github.io/CNCAM/test.html), if you want to see
+what the thing checks about itself before you trust any of it.
+
+Re-read the warning at the top before you point any of the output at a machine.
+
 ## What it does
 
 CNCAM covers the middle of the CAM workflow: model in, program out. It does not
@@ -122,20 +136,6 @@ turning.** Nothing else is built.
   what the strategies emit themselves.
 * No sender. It writes a file. Getting the file to the machine is your problem.
 * No cloud, no account, no telemetry. Nothing leaves your browser.
-
-## Try it without installing anything
-
-**[gamerpaddy.github.io/CNCAM](https://gamerpaddy.github.io/CNCAM/)**
-
-That is the current `main` branch, running. It is the whole application, not a
-cut down demo: nothing is sent anywhere, and everything happens in your own
-browser. Load one of the models from `samples/`, or your own, and have a look.
-
-The unit tests run in the browser too, at
-[/test.html](https://gamerpaddy.github.io/CNCAM/test.html), if you want to see
-what the thing checks about itself before you trust any of it.
-
-Re-read the warning at the top before you point any of the output at a machine.
 
 ## Running it locally
 
