@@ -3,6 +3,16 @@
 A CAM program that runs in your browser. You load a 3D model, tell it what tools
 you have and what cuts you want, and it writes G-code.
 
+### ▶ Try it now: **[gamerpaddy.github.io/CNCAM](https://gamerpaddy.github.io/CNCAM/)**
+
+No install, no sign up, nothing sent anywhere. That link is the current `main`
+branch running in your own browser, and it is the whole application rather than
+a cut down demo. Load a model from [samples/](samples/), or one of your own.
+The test suite runs there too, at
+[/test.html](https://gamerpaddy.github.io/CNCAM/test.html).
+
+**Read the warning below before you point any of the output at a machine.**
+
 ---
 
 # ⚠️ THIS IS AN EXPERIMENT. IT IS NOT FINISHED.
@@ -33,19 +43,20 @@ You have been warned. With that out of the way:
 
 ---
 
-## Try it without installing anything
+## Contents
 
-**[gamerpaddy.github.io/CNCAM](https://gamerpaddy.github.io/CNCAM/)**
-
-That is the current `main` branch, running. It is the whole application, not a
-cut down demo: nothing is sent anywhere, and everything happens in your own
-browser. Load one of the models from `samples/`, or your own, and have a look.
-
-The unit tests run in the browser too, at
-[/test.html](https://gamerpaddy.github.io/CNCAM/test.html), if you want to see
-what the thing checks about itself before you trust any of it.
-
-Re-read the warning at the top before you point any of the output at a machine.
+* [What it does](#what-it-does)
+  * [Getting a part in](#getting-a-part-in)
+  * [Milling operations](#milling-operations)
+  * [Turning operations](#turning-operations)
+  * [Tools](#tools)
+  * [Machines](#machines)
+  * [Everything else](#everything-else)
+* [What it does not do](#what-it-does-not-do)
+* [Running it locally](#running-it-locally)
+  * [Tests](#tests)
+* [Licence](#licence)
+* [More detail](#more-detail)
 
 ## What it does
 
