@@ -1097,6 +1097,22 @@ export function generateTurnDrill({ mesh, tool, params, stock, fixtures }) {
     cl.warn('drilling needs a drill with a diameter');
     return cl.finish();
   }
+  // A hole on the centreline is made by a drill and by nothing else. A turning
+  // insert cannot reach the axis — it is a corner working on the outside of a
+  // spinning bar — and a boring bar needs a hole to already be there before it
+  // can go in. tool-match.js has said both are unusable here for a long time,
+  // but the strategy went ahead and emitted the cycle anyway, and a drill cycle
+  // with an insert fitted is what the simulation then had to draw: it rolled
+  // the insert's profile along X0 and took the bar's outside radius down to
+  // nothing over the whole depth of the "hole", which reads on screen as the
+  // part being shoved backwards. Refusing here is the honest answer, and it
+  // stops the picture being drawn at all.
+  if (tool.type !== 'drill') {
+    cl.warn(`${tool.name ? `${tool.name} is a ` : 'this is a '}${tool.type ?? 'non-drill'} `
+      + 'tool, and a hole on the centreline can only be made by a drill. '
+      + 'Fit a drill, or use Bore to open a hole that is already there.');
+    return cl.finish();
+  }
 
   cl.rapid(0, 0, retract);
   cl.drill(0, 0, zEnd, {

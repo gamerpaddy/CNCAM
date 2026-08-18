@@ -525,7 +525,14 @@ export function simulateTurning({
       ? Math.max(0.05, (tool.bladeWidth || tool.diameter || 1) / 2)
       : 0;
     const internal = isInternalTool(tool);
-    const drillR = tool?.type === 'drill' ? Math.max(0.05, (tool.diameter ?? 3) / 2) : 0;
+    // The radius a drill *cycle* opens, read from the tool's diameter whatever
+    // the tool is: a DRILL opcode means a hole on the centreline, and that is
+    // not a move different tooling performs differently. See the `isDrill`
+    // branch below.
+    const cycleR = Math.max(0.05, (tool?.diameter ?? 3) / 2);
+    // The radius a drill *tool* sweeps on its ordinary moves, and zero for
+    // everything else — an insert cuts with its nose, not with its shank.
+    const drillR = tool?.type === 'drill' ? cycleR : 0;
     const d = cl.moves;
     let feeds = { cut: 120, plunge: 80 };
     let prev = null;
@@ -584,10 +591,18 @@ export function simulateTurning({
         const a = [prev[0] + (target[0] - prev[0]) * t0, prev[1] + (target[1] - prev[1]) * t0];
         const b = [prev[0] + (target[0] - prev[0]) * t1, prev[1] + (target[1] - prev[1]) * t1];
         step++;
-        const took = internal
-          ? boreCut(surface, mask, log, step, grid, a, b,
-            drillR > 0 ? drillR : nose, drillR > 0 ? drillR : half, drillR > 0, pitch)
-          : turnCut(surface, mask, log, step, grid, a, b, nose, half, bar.radius, pitch);
+        // What the move *is* decides how it cuts, before what the tool is does.
+        // A drill cycle opens a hole on the centreline and can do nothing else;
+        // only a move that is not a cycle is a question about what is in the
+        // turret. Asking the tool first is what let a centre drill programmed
+        // with a turning insert fall through to `turnCut` along X0 — an
+        // external pass at radius zero, which takes the whole bar with it.
+        const took = isDrill
+          ? boreCut(surface, mask, log, step, grid, a, b, cycleR, cycleR, true, 0)
+          : internal
+            ? boreCut(surface, mask, log, step, grid, a, b,
+              drillR > 0 ? drillR : nose, drillR > 0 ? drillR : half, drillR > 0, pitch)
+            : turnCut(surface, mask, log, step, grid, a, b, nose, half, bar.radius, pitch);
         // A plunge — a groove, a parting cut, a drill — is full depth by nature
         // and is governed by the peck, not by the depth of cut. What the depth
         // of cut governs is a pass running *along* the bar.
