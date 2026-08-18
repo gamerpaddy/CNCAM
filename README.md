@@ -123,7 +123,21 @@ turning.** Nothing else is built.
 * No sender. It writes a file. Getting the file to the machine is your problem.
 * No cloud, no account, no telemetry. Nothing leaves your browser.
 
-## Running it
+## Try it without installing anything
+
+**[gamerpaddy.github.io/CNCAM](https://gamerpaddy.github.io/CNCAM/)**
+
+That is the current `main` branch, running. It is the whole application, not a
+cut down demo: nothing is sent anywhere, and everything happens in your own
+browser. Load one of the models from `samples/`, or your own, and have a look.
+
+The unit tests run in the browser too, at
+[/test.html](https://gamerpaddy.github.io/CNCAM/test.html), if you want to see
+what the thing checks about itself before you trust any of it.
+
+Re-read the warning at the top before you point any of the output at a machine.
+
+## Running it locally
 
 You need a **modern browser** and a **way to serve a folder over HTTP**. It will
 not run from a `file://` URL, because the WebAssembly importer and the background
@@ -171,15 +185,26 @@ node src/test/node-run.js
 
 The ones that need a browser live at `/test.html` on the running server.
 
-## Licensing
+## Licence
 
-The vendored libraries under `vendor/` carry their own licences, and one of them
-(the OpenCASCADE WebAssembly build used for STEP and IGES import) is LGPL. See
-[vendor/README.md](vendor/README.md) before you ship anything commercial built on
-this.
+CNCAM is released under the [WTFPL](LICENSE). Do whatever you want with it. Use
+it, change it, sell it, fork it, strip my name off it, I genuinely do not care.
+There is no attribution requirement and nothing to ask permission for.
 
-No licence has been chosen for the CNCAM code itself yet, which means the default
-applies and you do not have permission to redistribute it. That will change.
+Two footnotes, neither of which restricts you:
+
+The `LICENSE` file adds a plain no-warranty notice under the licence text. The
+WTFPL does not include one, and this program writes G-code for machines that can
+hurt people, so it is worth saying out loud that there is no guarantee attached.
+It does not limit what you may do with the software.
+
+The libraries under `vendor/` are other people's work and keep their own
+licences, so those apply if you redistribute them. three.js is MIT and Clipper
+is BSL-1.0, both of which ask for little more than leaving the notices alone.
+The OpenCASCADE build behind STEP and IGES import is LGPL-2.1, which asks that
+people be able to replace it. They can: it loads at runtime from `vendor/occt/`
+over a relative path, so swapping those two files needs no rebuild. Keep them
+swappable and you have met it. See [vendor/README.md](vendor/README.md).
 
 ## More detail
 

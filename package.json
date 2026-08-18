@@ -1,6 +1,7 @@
 {
   "name": "cncam",
   "private": true,
+  "license": "WTFPL",
   "type": "module",
   "scripts": {
     "test": "node src/test/node-run.js",

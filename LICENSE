@@ -1,0 +1,74 @@
+CNCAM
+Copyright (C) 2026 gamerpaddy
+
+Released under the WTFPL, Version 2:
+
+
+           DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
+                   Version 2, December 2004
+
+Copyright (C) 2004 Sam Hocevar <sam@hocevar.net>
+
+Everyone is permitted to copy and distribute verbatim or modified
+copies of this license document, and changing it is allowed as long
+as the name is changed.
+
+           DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
+  TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
+
+ 0. You just DO WHAT THE FUCK YOU WANT TO.
+
+
+================================================================
+NO WARRANTY
+================================================================
+
+The following is a separate notice. It is not part of the WTFPL
+above and it takes nothing away from it: you may still do whatever
+you want with this software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+This software generates G-code for machine tools. Machine tools cut,
+crush and throw things. The output has never been validated against
+a real machine. Whoever runs it is responsible for checking it
+first, and for whatever happens when they do not.
+
+
+================================================================
+THIRD-PARTY COMPONENTS
+================================================================
+
+The WTFPL above covers the CNCAM source only. The libraries under
+vendor/ are other people's work and keep their own licenses, which
+you have to honour if you redistribute them:
+
+  three.js            MIT
+                      vendor/three/, Copyright (C) 2010-2024
+                      three.js authors
+
+  Clipper 6.4.2       Boost Software License 1.0
+                      vendor/clipper/, Copyright (C) 2010-2017
+                      Angus Johnson
+
+  occt-import-js      LGPL-2.1
+                      vendor/occt/, an OpenCASCADE build by
+                      Viktor Kovacs. Used for STEP and IGES import.
+
+The LGPL one is the only one with a condition worth reading twice.
+CNCAM does not link it statically: occt-import-js.js and its .wasm
+are loaded at runtime, by their own worker, over a relative path.
+Anyone who receives a copy can swap those two files for a different
+build and the app picks the new one up, which is what LGPL-2.1 asks
+for. Keep them replaceable and keep this notice with them and you
+are fine. Delete vendor/occt/ and you lose STEP and IGES import but
+the LGPL question goes away entirely.
+
+See vendor/README.md for versions and upstream sources.
