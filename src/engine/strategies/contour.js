@@ -131,14 +131,58 @@ export function generateContour({
   }
   const levels = [...depthPasses(params.topZ, params.bottomZ, params.stepdown)];
   const tabTop = params.bottomZ + tabs.height;
-  levels.forEach((z, i) => {
-    finalShadow = perLevel ? silhouette.down(z) : partShadow;
-    const isFinal = i === levels.length - 1;
-    const cutsIntoTab = z < tabTop - 1e-9;
+
+  // A single-outline contour whose loops are the same shape at every depth can
+  // be taken loop by loop, each in one continuous descent, instead of level by
+  // level. That is what stops the tool leading out, retracting over the stock
+  // and leading back in between every stepdown.
+  //
+  // It needs the loop shape constant with depth. That rules out `level` mode
+  // (the outline is re-read each level) and rest-machining `cleared` snapshots,
+  // which are the one part of region clipping that varies with Z — an avoid or
+  // include keepout clips the same at every depth, so it is applied once, at the
+  // bottom, and holds all the way up. An irrelevant keepout therefore leaves the
+  // loops unchanged and the descent identical to having no region at all, which
+  // is the invariant the region tests hold this to.
+  const clearedVaries = Array.isArray(regions?.cleared) && regions.cleared.length > 0;
+  const continuous = !perLevel && !clearedVaries;
+  if (continuous) {
+    finalShadow = partShadow;
+    const profiles = selectProfiles(finalShadow, params.profile ?? 'outer');
+    const raw = offsetLoops(profiles, offsetFor(side, r, stockToLeave), tolerance);
+    if (raw.length < profiles.length) dropped = Math.max(dropped, profiles.length - raw.length);
+    // avoid/include are depth-invariant, so clipping once at the bottom holds
+    // for the whole descent.
+    const { closed, open } = applyRegionsToPaths(raw, regions, { ...clip, z: params.bottomZ });
     surface.beginLevel();
-    if (emitLevel(finalShadow, stockToLeave, z, isFinal || cutsIntoTab)) cutAnything = true;
-    surface.endLevel(z);
-  });
+    // Each closed loop is one continuous descent; mark it covered so the finish
+    // passes below enter it at final depth rather than re-descending it.
+    for (const loop of orderByProximity(closed, cl.count > 0 ? lastXY(cl) : null)) {
+      if (cutLoopColumn(cl, loop, params.topZ, levels, {
+        clearance, direction, lead, params, tabs, tabTop, crossAt,
+      })) { cutAnything = true; surface.covered(loop); }
+    }
+    // A loop an avoid region has cut open cannot spiral; take it level by level.
+    for (const path of open) {
+      let from = params.topZ;
+      for (const zz of levels) {
+        if (cutOpenPass(cl, path, zz, { clearance, feedPlane: entryPlane(params, from, zz) })) {
+          cutAnything = true;
+        }
+        from = zz;
+      }
+    }
+    surface.endLevel(params.bottomZ);
+  } else {
+    levels.forEach((z, i) => {
+      finalShadow = perLevel ? silhouette.down(z) : partShadow;
+      const isFinal = i === levels.length - 1;
+      const cutsIntoTab = z < tabTop - 1e-9;
+      surface.beginLevel();
+      if (emitLevel(finalShadow, stockToLeave, z, isFinal || cutsIntoTab)) cutAnything = true;
+      surface.endLevel(z);
+    });
+  }
 
   // finish passes: peel the remaining allowance off at final depth, so the wall
   // is cut by a tool that is no longer buried in stock
@@ -351,6 +395,93 @@ export function cutLoopPass(cl, rawLoop, zEntry, z, {
   }
 
   if (exit != null) cl.rapid(...lastXY(cl), exit);
+  return true;
+}
+
+/**
+ * Cut one closed loop down its whole depth in a single continuous descent.
+ *
+ * Level by level, a contour leads in, ramps down one stepdown, walks the lap,
+ * leads out, retracts over the stock, and comes back for the next level — the
+ * "in and out every step" the panel complaint is about. But a closed loop ends
+ * a lap where it began, so between levels the tool is already standing on the
+ * wall it is about to take deeper. There is nothing to retract for and nowhere
+ * to travel to: it drops one stepdown in place and carries on round.
+ *
+ * So the lead-in and lead-out happen once each — at the very top and the very
+ * bottom — and everything between is one helix down the loop. The tool never
+ * leaves the wall, which is the whole point: a first attempt at this instead
+ * left the tool down and then *rapided laterally at depth* back to the lead-in
+ * point, straight through the part. It does not travel between passes at all.
+ *
+ * Only correct where the loop is the same shape at every depth — one outline,
+ * no depth-varying region clipping. The caller (`continuous`) enforces that.
+ *
+ * @param zTop the top of the cut; the first pass enters from here
+ * @param passes the depths to cut, top to bottom (the last is the floor)
+ * @returns whether anything was emitted
+ */
+function cutLoopColumn(cl, rawLoop, zTop, passes, {
+  clearance, direction, lead, params, tabs, tabTop, crossAt,
+}) {
+  if (rawLoop.length / 2 < 3 || passes.length === 0) return false;
+  const zBottom = passes[passes.length - 1];
+  // The plane the tool lifts to when the loop is done and it may cross to
+  // another — above the stock, or clearance when clamps rule a low plane out.
+  const home = crossAt != null && crossAt > zBottom + 1e-9
+    ? Math.min(crossAt, clearance) : clearance;
+  const rampAngle = params.rampAngle ?? 0;
+  const loop0 = orderLoopForEntry(rawLoop, direction, lead,
+    cl.count > 0 ? lastXY(cl) : null, 0);
+  const passLead = leadOnLoop(loop0, resolveLead(rawLoop, lead));
+  const inPts = leadInPoints(loop0, passLead);
+
+  // Tabs apply to any pass cutting into the tab band, exactly as level by level.
+  const walkerFor = (z) => (tabs && tabs.count > 0 && tabs.height > 0 && z < tabTop - 1e-9
+    ? (l, depth) => cutPerimeterWithTabs(cl, l, depth, tabs)
+    : (l, depth) => cutPerimeter(cl, l, depth));
+
+  let current = loop0;   // the loop as last walked; the ramp rotates its start
+  let from = zTop;
+  passes.forEach((z, idx) => {
+    const walk = walkerFor(z);
+    if (idx === 0) {
+      // First pass: enter the wall the way a lone pass does — a lead-in walked
+      // through the metal above, or a ramp down from the travel plane. This is
+      // the one place the tool comes down from clearance.
+      const rawFeedPlane = entryPlane(params, from, z);
+      const feedPlane = rawFeedPlane == null ? null : Math.min(rawFeedPlane, home);
+      if (inPts.length === 0) {
+        cl.rapid(loop0[0], loop0[1], home);
+        current = cutLoopWithRamp(cl, loop0, from, z, rampAngle,
+          { walkPerimeter: walk, feedPlane });
+      } else {
+        const ramping = rampAngle > 0 && from > z + 1e-9;
+        const entryZ = ramping ? from : z;
+        const [sx, sy] = inPts[0];
+        approach(cl, sx, sy, entryZ, { clearance: home, feedPlane });
+        for (let i = 1; i < inPts.length; i++) cl.cut(inPts[i][0], inPts[i][1], entryZ, FEED.LEAD);
+        cl.cut(loop0[0], loop0[1], entryZ, FEED.LEAD);
+        current = ramping
+          ? cutLoopWithRamp(cl, loop0, from, z, rampAngle,
+            { walkPerimeter: walk, feedPlane, alreadyThere: true })
+          : (walk(loop0, z), loop0);
+      }
+    } else {
+      // Every pass after: the tool is standing on `current` at `from`, the level
+      // just cut. Drop one stepdown into that slot right where it is and keep
+      // going round — no lead, no retract, no travel. `alreadyThere` is what
+      // tells the ramp not to lift first.
+      current = cutLoopWithRamp(cl, current, from, z, rampAngle,
+        { walkPerimeter: walk, alreadyThere: true });
+    }
+    from = z;
+  });
+
+  // Out of the wall once, then up to the travel plane for the move to the next
+  // loop (or home, if this was the last).
+  emitLeadOut(cl, current, zBottom, passLead);
+  cl.rapid(...lastXY(cl), home);
   return true;
 }
 

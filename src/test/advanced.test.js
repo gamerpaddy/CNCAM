@@ -255,16 +255,27 @@ test('no tab sits on the point the tool enters at', () => {
 
 // --- which outline a contour follows ---
 
-/** XY bounding box of every closed pass, keyed by the depth it ran at. */
+/**
+ * XY bounding box of the lap at each depth.
+ *
+ * A lap is the run of cutting moves at one Z. Splitting on that rather than on
+ * retracts is what makes this read the same whether the contour goes level by
+ * level (a rapid between laps) or in one continuous descent (a step down between
+ * them, no rapid) — either way, a change of depth starts a new lap.
+ */
 function passBoxes(cl) {
-  const runs = [];
+  const laps = [];
   let cur = null;
+  let curZ = null;
+  const flush = () => { if (cur && cur.length > 2) laps.push(cur); cur = null; curZ = null; };
   eachMove(cl, (op, x, y, z, i, j, k, feed) => {
-    if (feed === FEED.RAPID) { if (cur && cur.length > 2) runs.push(cur); cur = null; return; }
+    if (feed === FEED.RAPID) { flush(); return; }
+    if (curZ !== null && Math.abs(z - curZ) > 1e-6) flush();
     (cur ??= []).push([x, y, z]);
+    curZ = z;
   });
-  if (cur && cur.length > 2) runs.push(cur);
-  return runs.map((r) => ({
+  flush();
+  return laps.map((r) => ({
     z: r[r.length - 1][2],
     width: Math.max(...r.map((p) => p[0])) - Math.min(...r.map((p) => p[0])),
     depth: Math.max(...r.map((p) => p[1])) - Math.min(...r.map((p) => p[1])),
@@ -311,6 +322,41 @@ test('the cut-out never enters the footprint of the part it is freeing', () => {
   for (const box of passBoxes(steppedContour('part'))) {
     assert.ok(box.width > base, `pass at Z${box.z.toFixed(1)} is inside the part's ${base}mm footprint`);
   }
+});
+
+test('a contour steps a loop down without rapiding across the part between passes', () => {
+  // Taking a loop's depth passes as one continuous descent must not be bought by
+  // leaving the tool down and rapiding laterally back to the start of the next
+  // lap — that rapid crosses the part at cutting depth. A shipped attempt did
+  // exactly that (a 34mm rapid at z9 on a 20mm cut-out whose top is z12), so the
+  // rule is blunt: no rapid may move in XY while it is below the stock top.
+  const stockTop = 12;
+  const cl = generateToolpath({
+    type: 'contour2d', name: 'cut out', tool: FLAT,
+    mesh: makeBox(20, 20, stockTop), stock: { min: [0, 0, 0], max: [20, 20, stockTop] },
+    params: {
+      topZ: stockTop, bottomZ: 0, stepdown: 3, clearanceHeight: 25, entryGap: 1,
+      tolerance: 0.02, stockToLeave: 0, direction: 'climb', side: 'outside',
+      profile: 'outer', contourOutline: 'part', leadType: 'arc', leadRadius: 2, rampAngle: 3,
+    },
+  });
+  let prev = null;
+  let levels = 0;
+  let prevZ = null;
+  eachMove(cl, (op, x, y, z, i, j, k, feed) => {
+    if (feed === FEED.RAPID && prev) {
+      const dxy = Math.hypot(x - prev.x, y - prev.y);
+      const below = Math.max(prev.z, z) < stockTop - 1e-6;
+      assert.ok(!(dxy > 0.5 && below),
+        `a rapid moved ${dxy.toFixed(1)}mm in XY at z${Math.max(prev.z, z).toFixed(1)}, `
+        + 'below the stock top — that is a rapid through the part');
+    }
+    if (feed !== FEED.RAPID && prevZ !== null && z < prevZ - 1e-6) levels++;
+    prev = { x, y, z };
+    prevZ = z;
+  });
+  // and it really did step down — several times, not one plunge to the floor
+  assert.ok(levels >= 3, `expected the loop to step down several times, saw ${levels}`);
 });
 
 // --- feeds change partway through a program ---
