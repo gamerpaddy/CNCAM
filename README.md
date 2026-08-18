@@ -191,20 +191,18 @@ CNCAM is released under the [WTFPL](LICENSE). Do whatever you want with it. Use
 it, change it, sell it, fork it, strip my name off it, I genuinely do not care.
 There is no attribution requirement and nothing to ask permission for.
 
-Two footnotes, neither of which restricts you:
+Two footnotes live in [NOTICE](NOTICE), neither of which restricts you.
 
-The `LICENSE` file adds a plain no-warranty notice under the licence text. The
-WTFPL does not include one, and this program writes G-code for machines that can
-hurt people, so it is worth saying out loud that there is no guarantee attached.
-It does not limit what you may do with the software.
+The first is a plain no-warranty disclaimer. The WTFPL grants permission and
+says nothing about liability, and this program writes G-code for machines that
+can hurt people, so it is worth stating that nothing here is guaranteed.
 
-The libraries under `vendor/` are other people's work and keep their own
-licences, so those apply if you redistribute them. three.js is MIT and Clipper
-is BSL-1.0, both of which ask for little more than leaving the notices alone.
-The OpenCASCADE build behind STEP and IGES import is LGPL-2.1, which asks that
-people be able to replace it. They can: it loads at runtime from `vendor/occt/`
-over a relative path, so swapping those two files needs no rebuild. Keep them
-swappable and you have met it. See [vendor/README.md](vendor/README.md).
+The second is the vendored libraries. Those are other people's work and keep
+their own licences, so those apply if you redistribute them. three.js is MIT and
+Clipper is BSL-1.0, which ask for little beyond leaving the notices alone. The
+OpenCASCADE build behind STEP and IGES import is LGPL-2.1, which asks that people
+be able to replace it. They can: it loads at runtime from `vendor/occt/` over a
+relative path, so swapping those two files needs no rebuild of anything else.
 
 ## More detail
 

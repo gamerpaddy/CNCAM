@@ -1,0 +1,58 @@
+CNCAM notices
+=============
+
+Two things that do not fit in the LICENSE file, neither of which takes
+anything away from it. CNCAM is WTFPL. You may still do whatever you
+want with it.
+
+
+NO WARRANTY
+-----------
+
+The WTFPL grants permission and says nothing about liability, so this
+does:
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+This program generates G-code for machine tools. Machine tools cut,
+crush and throw things. Its output has never been validated against a
+real machine. Whoever runs it is responsible for checking it first, and
+for what happens when they do not.
+
+
+THIRD-PARTY COMPONENTS
+----------------------
+
+The WTFPL covers the CNCAM source. The libraries under vendor/ are other
+people's work and keep their own licences, which apply if you
+redistribute them.
+
+  three.js          MIT
+                    vendor/three/
+                    Copyright (C) 2010-2024 three.js authors
+
+  Clipper 6.4.2     Boost Software License 1.0
+                    vendor/clipper/
+                    Copyright (C) 2010-2017 Angus Johnson
+
+  occt-import-js    LGPL-2.1
+                    vendor/occt/
+                    An OpenCASCADE build by Viktor Kovacs.
+                    Used for STEP and IGES import.
+
+The LGPL one is the only condition worth reading twice. CNCAM does not
+link it statically: occt-import-js.js and its .wasm are loaded at
+runtime, by their own worker, over a relative path. Anyone who receives
+a copy can swap those two files for a different build and the app picks
+the new one up, which is the replaceability LGPL-2.1 asks for. Keep them
+replaceable, keep this notice with them, and you have met it. Delete
+vendor/occt/ and you lose STEP and IGES import, and the question with
+it.
+
+Versions and upstream sources are listed in vendor/README.md.
