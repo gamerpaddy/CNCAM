@@ -43,19 +43,6 @@ import { approach, entryPlane, crossingPlane, goHome, EntrySurface } from '../he
 import { applyCutting } from '../cutting.js';
 import { cutPerimeterWithTabs } from '../tabs.js';
 
-/**
- * The lower of two travel heights, either of which may be absent.
- *
- * `crossingPlane` and `entryPlane` both answer null for "no opinion", and null
- * is not a height: `Math.min(null, x)` is 0, which is the floor of the cut
- * rather than a plane above it.
- */
-function lowerPlane(a, b) {
-  if (a == null) return b;
-  if (b == null) return a;
-  return Math.min(a, b);
-}
-
 export function generateContour({
   mesh, tool, params, regions, stock, fixtures,
 }) {
@@ -109,37 +96,13 @@ export function generateContour({
       // with a ⌀6 cutter on the step plate, 23mm on the sloped one — so it is
       // stepped down to like any other. See engine/heights.js EntrySurface.
       let from = surface.entryFor(loop);
-      // The depth passes of one loop are a descent down a single slot, not a
-      // series of separate visits to it. Once the top pass has cut the wall,
-      // the slot beneath it is air the loop itself made, so the passes below
-      // stay down (`exitAt`) and each descends from an entry gap above the
-      // level the one before it left — not from the plane over the billet the
-      // tool arrived at first. Climbing back over the stock to travel a few
-      // millimetres round the same profile, once per stepdown, is the "in and
-      // out every step" the retract used to be: on a 20mm cut-out at a 3mm
-      // stepdown it grew 4, 7, 10mm as the cut deepened, all of it air.
-      const passes = [...depthPasses(from, z, params.stepdown)];
-      passes.forEach((zz, i) => {
+      for (const zz of depthPasses(from, z, params.stepdown)) {
         const useTabsHere = (useTabs && zz <= z + 1e-9) || zz < tabTop - 1e-9;
-        const continues = i < passes.length - 1;
-        // Where this pass *descends* from. The first arrives over the billet;
-        // every one after it drops into the slot the pass above just cut, so it
-        // need only clear that level by an entry gap.
-        const descendFrom = i === 0 ? crossAt
-          : lowerPlane(crossAt, entryPlane(params, from, zz));
-        // Where it *leaves* the tool. A continuing pass stays down for the next
-        // one; the last pass lifts back to the travel plane, because the tool
-        // may now cross to another loop — retracting only into this slot would
-        // drag it through whatever stands between the two. With clamps in the
-        // setup there is no safe low plane (crossAt is null), so the last pass
-        // goes all the way to clearance, which is the height that clears them.
-        const leaveAt = continues ? zz : (crossAt ?? clearance);
         if (cutLoopPass(cl, loop, from, zz, {
-          clearance, direction, lead, params, tabs: useTabsHere ? tabs : null,
-          crossAt: descendFrom, exitAt: leaveAt,
+          clearance, direction, lead, params, tabs: useTabsHere ? tabs : null, crossAt,
         })) { any = true; surface.covered(loop); }
         from = zz;
-      });
+      }
     }
     for (const path of open) {
       let from = surface.entryFor(path, false);
@@ -168,28 +131,14 @@ export function generateContour({
   }
   const levels = [...depthPasses(params.topZ, params.bottomZ, params.stepdown)];
   const tabTop = params.bottomZ + tabs.height;
-  if (perLevel) {
-    // The outline is re-read at every depth, so each level is a different set of
-    // loops and has to be planned on its own — level by level, top down.
-    levels.forEach((z, i) => {
-      finalShadow = silhouette.down(z);
-      const isFinal = i === levels.length - 1;
-      const cutsIntoTab = z < tabTop - 1e-9;
-      surface.beginLevel();
-      if (emitLevel(finalShadow, stockToLeave, z, isFinal || cutsIntoTab)) cutAnything = true;
-      surface.endLevel(z);
-    });
-  } else {
-    // One outline for the whole cut: the loops are the same at every depth, so
-    // each is taken top to bottom in one descent rather than the whole set being
-    // visited once per level. That is what lets a loop's passes link into a
-    // continuous step-down (see the closed-loop pass above) instead of the tool
-    // climbing out and back in between every stepdown.
-    finalShadow = partShadow;
+  levels.forEach((z, i) => {
+    finalShadow = perLevel ? silhouette.down(z) : partShadow;
+    const isFinal = i === levels.length - 1;
+    const cutsIntoTab = z < tabTop - 1e-9;
     surface.beginLevel();
-    if (emitLevel(finalShadow, stockToLeave, params.bottomZ, true)) cutAnything = true;
-    surface.endLevel(params.bottomZ);
-  }
+    if (emitLevel(finalShadow, stockToLeave, z, isFinal || cutsIntoTab)) cutAnything = true;
+    surface.endLevel(z);
+  });
 
   // finish passes: peel the remaining allowance off at final depth, so the wall
   // is cut by a tool that is no longer buried in stock
