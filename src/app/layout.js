@@ -205,7 +205,13 @@ export function buildLayout(root, actions, project) {
   }, ['G-code ▾']);
 
   const toolbar = el('div', { class: 'toolbar' }, [
-    el('span', { class: 'brand' }, ['CNCAM']),
+    el('a', {
+      class: 'brand',
+      href: 'https://github.com/gamerpaddy/CNCAM',
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      title: 'CNCAM on GitHub',
+    }, ['CNCAM']),
     machineTabs.bar,
     // wrapped, not passed straight through: a click handler is called with the
     // event, and openModel's first argument is a file to import

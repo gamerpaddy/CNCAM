@@ -219,9 +219,15 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   white-space: nowrap;
 }
 
-/* The widest bite in the program, and a way to go and look at it. A fixed
-   column for the same reason as .sim-op: nothing beside the scrub bar may
-   change width while the scrub bar is being dragged. */
+/* The widest bite in the program, and a way to go and look at it.
+   Reserved width for the same reason as .sim-op — nothing beside the scrub bar
+   may change width while the scrub bar is being dragged — but a *floor* rather
+   than a fixed size, the way .sim-time does it. 118px was set when the label
+   read "1.00×D" and nothing else; it has said "1.00×D at 3.0mm deep" for a
+   while now, which is 21 characters and needs about 150. The overflow was
+   hidden, so the depth clause was simply cut off mid-word and the reading
+   looked like it stopped at the diameter. The text is bounded (one number, a
+   unit, one more number) so letting it size to its content cannot run away. */
 .sim-load {
   font: 11px/1 Consolas, monospace;
   color: var(--fg-dim);
@@ -229,9 +235,8 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   border: 1px solid transparent;
   border-radius: 4px;
   padding: 3px 5px;
-  flex: 0 0 118px;
-  width: 118px;
-  overflow: hidden;
+  flex: 0 0 auto;
+  min-width: 118px;
   white-space: nowrap;
   text-align: right;
   cursor: pointer;
@@ -336,7 +341,14 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 
 /* Pushes everything after it to the right-hand end of its row. */
 .toolbar .spacer { flex: 1 1 auto; min-width: 0; }
-.toolbar .brand { font-weight: 600; letter-spacing: 1px; margin-right: 12px; color: var(--accent); }
+.toolbar .brand {
+  font-weight: 600;
+  letter-spacing: 1px;
+  margin-right: 12px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.toolbar .brand:hover { text-decoration: underline; }
 
 /* The bar needs 1321px to stand in one row, and 67px of that is a wordmark
    that does nothing. On a 1280px screen keeping it costs a second row — 43px
