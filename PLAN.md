@@ -1,5 +1,9 @@
 # CNCAM — Development Plan (Browser-based, static, no backend)
 
+> This is the original plan, kept as the record of what was intended and why.
+> Where the build diverged from it the divergence is noted inline. For what the
+> tree actually contains today, `README.md` and `vendor/README.md` are authoritative.
+
 A CAM application that runs entirely in the browser as a **static site** — HTML + JavaScript, no server-side code, no accounts, works offline once loaded. A small set of client-side libraries is allowed where they genuinely buy robustness (rendering, geometry kernel); everything is **vendored locally** (copied into the repo, loaded as ES modules/WASM from the same folder) so the app runs from any static host — GitHub Pages, a USB stick with a one-line local server, or as an installable PWA. No build step required.
 
 It imports 3D models, lets the user define tools and machining operations, and generates G-code for:
@@ -17,7 +21,7 @@ Rule: a dependency must run 100% client-side, be vendorable as static files, and
 
 | Dependency | What it buys | Notes |
 |---|---|---|
-| **three.js** | WebGL renderer: shaded models, toolpath lines, stock display, machine sim, camera controls, GPU picking | Single vendored module + `OrbitControls`, `STLLoader`, `OBJLoader`, `3MFLoader` from examples. The whole viewport layer. |
+| **three.js** | WebGL renderer: shaded models, toolpath lines, stock display, machine sim, camera controls, GPU picking | Single vendored module + `OrbitControls` from examples. The whole viewport layer. *(Diverged: the mesh loaders were never used — see below — so `OrbitControls` is the only vendored addon.)* |
 | **occt-import-js** (OpenCASCADE compiled to WASM) | **STEP/IGES import** — B-rep tessellation to meshes with per-face grouping | This is the difference between a hobby STL tool and real CAM input. WASM loads from static files; runs in a worker. |
 | **Clipper2 (JS/WASM port)** | Robust 2D polygon offsetting & booleans — the heart of all 2.5D strategies | The classic "graveyard" component; do not hand-roll. |
 | *(optional, later)* **manifold-3d** (WASM) | Watertight mesh booleans if stock-from-model-offset or fixture subtraction needs them | Deferred until a phase actually needs it. |
@@ -37,7 +41,7 @@ src/
   app/     UI shell, setup/op tree, parameter panels, dialogs (vanilla DOM)
   view/    three.js scene: model, toolpath lines (chunked+LOD), stock,
            tool/holder ghost, machine sim, picking, ZX lathe view
-  io/      STEP/IGES (occt worker), STL/OBJ/3MF/DXF, project JSON,
+  io/      STEP/IGES (occt worker), STL/OBJ/DXF, project JSON,
            File System Access + IndexedDB autosave
   geom/    vec/mat helpers, BVH, Z-slicer, chain stitching, SDF fields,
            arc/biarc fitting, spin-profile extraction, hole recognition
@@ -63,7 +67,7 @@ test.html  in-browser unit suite (also runs under `node --test` for CI)
 ### 3.1 Import & geometry core
 
 - **STEP/IGES** via occt-import-js in a worker → triangle meshes with **per-B-rep-face grouping** preserved (critical: face-level selection for op geometry, hole recognition from cylindrical faces, slope analysis per face). User-controlled tessellation tolerance (default ≤ ⅒ of machining tolerance).
-- **STL/OBJ/3MF** via three.js loaders + in-house cleanup: vertex welding (hash grid), normal generation, degenerate removal. **DXF subset** (LINE/ARC/CIRCLE/LWPOLYLINE) parsed in-house for lathe profiles and 2.5D chains.
+- **STL/OBJ** parsed in-house (`src/io/stl.js`, `src/io/obj.js`) + cleanup: vertex welding (hash grid), normal generation, degenerate removal. *(Diverged: both parsers are ~40 lines against formats that never surprised us, which was less code than adapting three.js's loaders to triangle soup. 3MF was dropped — no demand, and it costs a zip dependency.)* **DXF subset** (LINE/ARC/CIRCLE/LWPOLYLINE) parsed in-house for lathe profiles and 2.5D chains.
 - **BVH** over triangles (in-house, SAH split) — powers drop-cutter, ray picking, and collision queries.
 - **Z-slicer:** mesh × plane → stitched closed loops; feeds roughing, waterline, silhouettes, and lathe spin profiles.
 - **2D engine:** Clipper2 for offsets/booleans; in-house **SDF grid fields** (erosion, engagement queries, stock-safe-region tests — numerically bulletproof complement to exact offsets); polyline simplification; **biarc fitting** for compact, smooth G-code arcs.
@@ -138,7 +142,7 @@ Post-owned correctness details (all under golden-file tests): modality and word 
 Each phase exits as a releasable static build.
 
 ### Phase 0 — Foundation
-Static scaffold (ES modules, vendored deps, PWA shell); three.js viewport (shaded mesh, orbit, GPU picking); STEP/IGES via occt worker + STL/OBJ/3MF/DXF; mesh cleanup + BVH; document model + undo + project JSON (File System Access, IndexedDB autosave + crash recovery); tool library CRUD; setup/WCS/stock; worker pool with cancellation; in-browser test runner + `node --test` CI.
+Static scaffold (ES modules, vendored deps, PWA shell); three.js viewport (shaded mesh, orbit, GPU picking); STEP/IGES via occt worker + STL/OBJ/DXF; mesh cleanup + BVH; document model + undo + project JSON (File System Access, IndexedDB autosave + crash recovery); tool library CRUD; setup/WCS/stock; worker pool with cancellation; in-browser test runner + `node --test` CI.
 **Exit:** load a STEP file offline in a browser tab, orient it, define stock and tools, save/reload the project.
 
 ### Phase 1 — 2.5D milling MVP
