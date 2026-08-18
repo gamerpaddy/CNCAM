@@ -1,0 +1,9 @@
+{
+  "name": "cncam",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node src/test/node-run.js",
+    "start": "python serve.py 8500"
+  }
+}

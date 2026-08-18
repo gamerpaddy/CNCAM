@@ -1,0 +1,33 @@
+# --- App output ------------------------------------------------------------
+# serve.py's POST /_shot/ endpoint writes rendered viewport captures here.
+# They are debugging evidence for one session, never source.
+/shots/
+
+# Anything the app itself saves. Exporting a program or a project while the
+# dev server is running lands it in the repo root; none of it belongs in git.
+*.ngc
+*.nc
+*.gcode
+*.tap
+*.cncam
+*-tools.json
+
+# --- Tooling ---------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-error.log*
+__pycache__/
+*.py[cod]
+
+# Project-level Claude Code config (.claude/launch.json) is committed on
+# purpose — it is how the dev server gets started. Personal overrides are not.
+.claude/settings.local.json
+
+# --- Editors and OS --------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini

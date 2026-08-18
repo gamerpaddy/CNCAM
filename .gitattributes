@@ -1,0 +1,12 @@
+# Normalize text to LF in the repository. Without this, the line endings a file
+# is committed with depend on the contributor's core.autocrlf, and the diff for
+# a one-line change becomes the whole file.
+* text=auto eol=lf
+
+# Binary assets: never touch these. An STL or a WASM module that has had its
+# 0x0A bytes rewritten is silently corrupt — it still loads, it just is not the
+# same mesh. The test suite hashes some of these, so mangling them fails loudly,
+# but the point is not to rely on that.
+*.stl   binary
+*.wasm  binary
+*.png   binary
