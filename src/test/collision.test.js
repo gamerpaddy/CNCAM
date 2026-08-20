@@ -198,11 +198,11 @@ const CLAMP_FIXTURE = {
   size: [CLAMP.x1 - CLAMP.x0, CLAMP.y1 - CLAMP.y0], rotationDeg: 0, baseZ: 0, height: CLAMP.top,
 };
 
-/** The keep-out the app hands a strategy for this clamp — see regions-ui.js. */
-function clampAvoid(type, tool, params) {
+/** The keep-out the app hands a strategy for these clamps — see regions-ui.js. */
+function clampAvoid(type, tool, params, fixtures = [CLAMP_FIXTURE]) {
   const body = Math.max(0, (tool.diameter ?? 0) / 2);
   const { cutRadius } = regionReachFor({ type, params }, tool);
-  const loops = fixtureLoops([CLAMP_FIXTURE]);
+  const loops = fixtureLoops(fixtures);
   return body > cutRadius + 1e-9 ? offsetLoops(loops, body - cutRadius, 0.01) : loops;
 }
 
@@ -268,5 +268,58 @@ test('no operation drives the cutter axis over a clamp below its top', () => {
         `${type} on the ${name} rapids with its axis over the clamp, ${worstRapid.toFixed(1)}mm `
         + `below the jaw top at (${at?.map((v) => v.toFixed(1)).join(', ')})`);
     }
+  }
+});
+
+test('no milling op traverses below a clamp taller than its clearance', () => {
+  // A clamp is a keep-out for the whole column above its footprint, so a
+  // traverse plane below the tallest clamp rapids through it — and the cut moves
+  // route around the clamp perfectly, which is what hid it. The op asks for a
+  // clearance *below* the jaw here (a toe clamp standing proud of a thin part
+  // with the default stock+10 clearance); the dispatch floors the traverse to
+  // clear the jaw anyway (see toolpath.js clampSafeArgs).
+  const TALL = {
+    kind: 'box', name: 'toe', enabled: true, center: [20, 20], size: [8, 8], rotationDeg: 0,
+    baseZ: 0, height: 30,   // stands to Z30 — well above the part and the clearance
+  };
+  const part = { mesh: makeBox(40, 40, 8), stock: { min: [0, 0, 0], max: [40, 40, 8] }, top: 8 };
+  const overToe = (x, y) => x >= 16 && x <= 24 && y >= 16 && y <= 24;
+  for (const type of MILLING_OPS) {
+    if (type === 'drill' || type === 'bore') continue;
+    const tool = toolFor(type);
+    const params = {
+      ...defaultParamsFor(type, { stock: part.stock, tool }),
+      tolerance: 0.05, clearanceHeight: 18, retractHeight: 11, topZ: part.top, bottomZ: 0,
+    };
+    const avoid = clampAvoid(type, tool, params, [TALL]);
+    let cl;
+    try {
+      cl = generateToolpath({
+        type, name: type, tool, mesh: part.mesh, stock: part.stock, params,
+        fixtures: [TALL],
+        regions: { include: [], avoid, cleared: [], edgePaths: [] },
+      });
+    } catch { continue; }
+    if (cl.count === 0) continue;
+    const d = cl.moves;
+    let prev = null;
+    let worst = 0;
+    for (let n = 0; n < cl.count; n++) {
+      const o = n * MOVE_STRIDE;
+      if (d[o] === OP.DRILL) { prev = [d[o + 1], d[o + 2], d[o + 4]]; continue; }
+      const p = [d[o + 1], d[o + 2], d[o + 3]];
+      if (prev) {
+        const steps = Math.max(1, Math.ceil(Math.hypot(p[0] - prev[0], p[1] - prev[1]) / 0.5));
+        for (let s = 0; s <= steps; s++) {
+          const t = s / steps;
+          const x = prev[0] + (p[0] - prev[0]) * t;
+          const y = prev[1] + (p[1] - prev[1]) * t;
+          const z = prev[2] + (p[2] - prev[2]) * t;
+          if (overToe(x, y)) worst = Math.max(worst, TALL.height - z);
+        }
+      }
+      prev = p;
+    }
+    assert.ok(worst <= 0.1, `${type} passes ${worst.toFixed(1)}mm below the Z${TALL.height} toe clamp`);
   }
 });

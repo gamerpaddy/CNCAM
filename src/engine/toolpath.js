@@ -4,6 +4,7 @@
 import {
   MOVE_STRIDE, OP, FEED, eachMove, syncTrack, rapidRates, rapidSeconds, feedRate, descentOf,
 } from './cl.js';
+import { fixtureTop } from './fixtures.js';
 import { generateFace } from './strategies/face.js';
 import { generateContour } from './strategies/contour.js';
 import { generateClear } from './strategies/clear2d.js';
@@ -94,13 +95,38 @@ export const OP_LABELS = {
 };
 
 /**
- * @param args { type, params, tool, stock, mesh? }
+ * The clearance a milling op may traverse at, never below a clamp.
+ *
+ * A clamp is a keep-out for the whole column above its footprint, so a traverse
+ * plane below the tallest clamp rapids straight through it — and the cut moves
+ * route around the clamp perfectly, which is exactly what makes it invisible.
+ * The panel already warns when `clearanceHeight` sits under a clamp (see
+ * doc/machines.js and app/actions/program.js), but a warning is not a guard: the
+ * G-code still crashes if it is run. So the height every strategy homes and
+ * links at is floored here to clear the tallest clamp with a 3mm gap, whatever
+ * the operation asked for. The *stated* clearance on the operation is untouched,
+ * so the warning still fires — this only stops the program driving through the
+ * jaw. Turning has no overhead traverse plane (a chuck is a Z limit; see
+ * engine/fixtures.js), so it is left alone.
+ */
+function clampSafeArgs(args) {
+  if (TURNING_OPS.includes(args.type)) return args;
+  const clamp = fixtureTop(args.fixtures);
+  if (!clamp) return args;
+  const floor = clamp.z + 3;
+  const asked = args.params?.clearanceHeight;
+  if (Number.isFinite(asked) && asked >= floor) return args;
+  return { ...args, params: { ...args.params, clearanceHeight: floor } };
+}
+
+/**
+ * @param args { type, params, tool, stock, mesh?, fixtures? }
  * @returns finished CL program { version, moves, count, events }
  */
 export function generateToolpath(args) {
   const generate = strategies[args.type];
   if (!generate) throw new Error(`operation type not implemented: ${args.type}`);
-  return generate(args);
+  return generate(clampSafeArgs(args));
 }
 
 /**

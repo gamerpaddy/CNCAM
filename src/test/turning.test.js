@@ -494,6 +494,31 @@ test('a thread is cut as a form repeated once per pitch', () => {
   assert.ok(grooves >= 6 && grooves <= 9, `${grooves} grooves in 11mm at a 1.5mm pitch`);
 });
 
+test('a thread run-out does not carry the tool into the chuck', () => {
+  // `limitToChuck` pulls the thread's end clear of the jaws, but the run-out
+  // carries a pitch and a half past that end — toward the chuck on a right-hand
+  // thread. It was crossing in: with the jaws to Z10 and Bottom Z set into them,
+  // the thread cut to Z8.5. The run-in and run-out are motion the chuck stops
+  // too, so nothing on a synchronised pass may go behind the jaws now.
+  const chuck = {
+    kind: 'chuck', name: '3-jaw', enabled: true, faceZ: 0, jawLength: 10,
+    chuckMode: 'outside', clampDiameter: 40, bodyDiameter: 120,
+  };
+  const cl = generateToolpath({
+    type: 'turnThread', name: 'thread', tool: THREADER, mesh: shaft.mesh, stock: BAR,
+    params: {
+      ...base, topZ: 60, bottomZ: 0, threadPitch: 1.5, threadPasses: 6, threadStartRadius: 12,
+    },
+    fixtures: [chuck],
+  });
+  let deepest = Infinity;
+  eachMove(cl, (op, x, y, z) => {
+    if (op !== OP.DRILL) deepest = Math.min(deepest, z);
+  });
+  // the jaws end at Z10; nothing, run-out included, may go behind them
+  assert.ok(deepest >= 10 - 1e-6, `a move reaches Z${deepest.toFixed(2)}, behind the jaws at Z10`);
+});
+
 test('doubling the pitch halves the number of grooves', () => {
   const count = (threadPitch) => grooveCount(threadProfile(machine([{
     type: 'turnThread', tool: THREADER,

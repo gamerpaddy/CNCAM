@@ -919,8 +919,19 @@ export function generateTurnThread({ mesh, tool, params, stock, fixtures }) {
   const runOut = clearOfWork(ctx.profile, major, {
     at: wantTo, from: leftHand ? zHi : zLo, internal, bore, slack: 0.001,
   });
-  const from = runIn.z;
-  const to = runOut.z;
+  // A chuck stops the run-in and the run-out too, not just the thread between
+  // them. `limitToChuck` pulls the thread's *end* clear of the jaws, but a
+  // run-out carries a pitch and a half past that end — toward the chuck on a
+  // right-hand thread, and it was crossing into the jaws (measured 1.5mm past a
+  // Z10 limit, cutting to Z8.5). The chuck blocks everything below its face, so
+  // neither end of a synchronised pass may go there. The thread simply loses its
+  // run-out room when the jaws are that close, which is the operator's to fix by
+  // gripping less of the bar — but the tool no longer runs into the jaws.
+  const chuckFloor = ctx.chuck
+    && (internal ? ctx.chuck.mode === 'inside' : ctx.chuck.mode !== 'inside')
+    ? ctx.chuck.z : -Infinity;
+  const from = Math.max(runIn.z, chuckFloor);
+  const to = Math.max(runOut.z, chuckFloor);
 
   // "The first plunge is way too deep — a real insert would break."
   //
