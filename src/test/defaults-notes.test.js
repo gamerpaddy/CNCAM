@@ -64,11 +64,25 @@ test('a new facing pass skims the stock margin instead of the whole part', () =>
   assert.ok(bottomZ > s.modelBounds.min[2] + 5, 'does not descend to the part bottom');
 });
 
-test('every other strategy still reaches the bottom of the part', () => {
-  const s = scene();
-  for (const type of ['contour2d', 'clear2d', 'adaptive', 'pocket', 'parallel3d', 'waterline']) {
+test('bulk removal and profiling span the whole billet; finishing stays on the part', () => {
+  // A billet with 3mm under the part, so "stock bottom" and "part bottom" are
+  // genuinely different planes and the default cannot pass by landing on the one
+  // that happens to coincide.
+  const mesh = makeBox(40, 40, 10);
+  const stock = computeStock([mesh], { kind: 'box-margin', margin: [1, 1, 1], marginBottom: 3 });
+  const s = { mesh, stock, modelBounds: computeBounds(mesh.positions) };
+  assert.ok(s.stock.min[2] < s.modelBounds.min[2] - 2, 'the billet really does sit below the part');
+
+  // The bulk-removal and profiling strategies take the whole block down.
+  for (const type of ['contour2d', 'clear2d', 'adaptive', 'pocket', 'slot']) {
+    const { topZ, bottomZ } = depthRangeFor(type, s);
+    assert.close(topZ, s.stock.max[2], 1e-9, `${type} starts at the stock top`);
+    assert.close(bottomZ, s.stock.min[2], 1e-9, `${type} goes to the stock bottom`);
+  }
+  // Finishing shapes the part's own surface, so it stops at the part.
+  for (const type of ['parallel3d', 'waterline']) {
     const { bottomZ } = depthRangeFor(type, s);
-    assert.close(bottomZ, s.modelBounds.min[2], 1e-9, `${type} goes to the part bottom`);
+    assert.close(bottomZ, s.modelBounds.min[2], 1e-9, `${type} stays on the part bottom`);
   }
 });
 

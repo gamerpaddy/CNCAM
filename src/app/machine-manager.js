@@ -12,6 +12,7 @@
 import { el } from './layout.js';
 import {
   MACHINE_PRESETS, createMachine, describeMachine, machinesFor,
+  ROTARY_KINDS, rotaryKindOf, rotaryPreset,
 } from '../doc/machines.js';
 import { POSTS, postsFor } from '../post/index.js';
 import { numberInput, parseNumber, formatNumber } from './number-input.js';
@@ -72,6 +73,16 @@ const FIELDS = [
     key: 'spindleMax', label: 'Fastest spindle (rpm)', type: 'number', min: 1,
     hint: 'A cutter that wants 24000 rpm in a 8000 rpm spindle is a cutter '
       + 'running at a third of the surface speed it was chosen for.',
+  },
+  {
+    // Milling only: how many rotary axes the machine has for indexed 3+1 / 3+2
+    // work. A lathe's turning axis is not this.
+    key: 'rotary', kind: 'mill', type: 'rotaryKind', label: 'Rotary axes',
+    hint: 'Indexed multi-axis. A rotary table swings a tilted face under the '
+      + 'spindle and locks, so you machine it without re-fixturing — 3+1 tilts '
+      + 'about one axis, 3+2 adds a turntable and reaches any face. Then set a '
+      + 'setup to "Indexed" and rotate it to the face. LinuxCNC drives this with '
+      + 'a G68.2 tilted work plane.',
   },
   {
     key: 'toolChanger', label: 'Tool change', type: 'select',
@@ -201,6 +212,16 @@ export function openMachineManager(doc, { onDone } = {}) {
     const value = read(machine, field.key);
     let input;
 
+    if (field.type === 'rotaryKind') {
+      const kinds = Object.keys(ROTARY_KINDS);
+      input = el('select', {}, kinds.map((k) => el('option', { value: k }, [ROTARY_KINDS[k].label])));
+      input.value = rotaryKindOf(machine);
+      input.addEventListener('change', () => {
+        doc.updateItem(machine, { rotary: rotaryPreset(input.value) }, 'machine rotary');
+        build();
+      });
+      return propRow(label, input);
+    }
     if (field.type === 'select') {
       const options = field.key === 'post' ? postsFor(machine.kind) : field.options;
       const labels = field.key === 'post'

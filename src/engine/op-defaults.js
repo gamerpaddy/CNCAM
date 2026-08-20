@@ -40,12 +40,14 @@ export const STRATEGY_DEFAULTS = {
     rampAngle: 3,
     leadType: 'arc',
     leadRadius: 2,
+    depth: 'stock',         // profile the whole billet, top to bottom
   },
   pocket: {
     stepdownD: 0.5,
     stepover: 0.4,
     rampAngle: 3,
     leadType: 'arc',
+    depth: 'stock',
   },
   slot: {
     // A slot is a full-width cut on every side of the cutter at once, which is
@@ -57,12 +59,14 @@ export const STRATEGY_DEFAULTS = {
     rampAngle: 3,
     direction: 'climb',
     stockToLeave: 0,
+    depth: 'stock',
   },
   clear2d: {
     stepdownD: 0.5,
     stepover: 0.5,
     stockToLeave: 0.3,      // roughing leaves something for the finish pass
     rampAngle: 3,
+    depth: 'stock',
   },
   adaptive: {
     // the trade the strategy exists to make: a narrow radial bite, taken deep
@@ -70,6 +74,7 @@ export const STRATEGY_DEFAULTS = {
     engagement: 0.15,
     stockToLeave: 0.3,
     rampAngle: 2,
+    depth: 'stock',
   },
   drill: {
     depthMode: 'hole',      // each hole to its own floor
@@ -199,6 +204,12 @@ export const STRATEGY_DEFAULTS = {
  * How deep a new operation of this type should reach, given where the stock and
  * the part are.
  *
+ *   stock   — the whole billet, its top down to its bottom. The bulk-removal
+ *             and profiling strategies (contour, pocket, slot, Z-level rough,
+ *             adaptive) start here: a contour parts the shape out of the block
+ *             and a clearing pass takes the block down, so both want the stock,
+ *             not the part. Finishing (parallel3d, waterline) does not — it is
+ *             shaping the part's own surface — and stays on the part below.
  *   skim    — the margin on top of the part and no further (facing)
  *   edge    — Top Z is the *edge being broken*, so it sits on the part, not on
  *             the billet above it; Bottom Z is only a floor the pass may not
@@ -222,6 +233,13 @@ export function depthRangeFor(type, { stock, modelBounds, boreBottomZ = null }) 
   const partTop = modelBounds ? modelBounds.max[2] : top;
   const partBottom = modelBounds ? modelBounds.min[2] : stock.min[2];
 
+  // Bulk removal and profiling span the whole billet: the top of the stock down
+  // to the bottom of it, not the bottom of the part. Defaulting to the part
+  // bottom leaves the ring of material between the part and the billet wall
+  // standing, so a profile that should have parted the shape out, or a clearing
+  // pass that should have taken the block down, stops short with nothing on
+  // screen to say why.
+  if (spec.depth === 'stock') return { topZ: top, bottomZ: stock.min[2] };
   if (spec.depth === 'skim') {
     // stop at the top of the part; if the stock has no margin there is nothing
     // to face, so leave a token pass rather than a zero-height one the user

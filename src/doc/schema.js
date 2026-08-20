@@ -204,6 +204,11 @@ export function createSetup(name = 'Setup 1', mode = 'mill') {
     stock: createStock(mode === 'turn' ? 'cylinder' : 'box-margin'),
     // how the part is fixtured, and where the controller's zero sits
     orientation: { rotationDeg: [0, 0, 0], origin: 'stock-top-center' },
+    // Indexed multi-axis: when enabled, the machine's rotary axes swing the
+    // part to `orientation.rotationDeg` and lock, and the operations below cut
+    // in that tilted frame — 3+1 or 3+2 rather than a re-fixturing. Null (the
+    // default) is an ordinary setup reached by hand. See engine/indexing.js.
+    index: null,
     // clamps and jaws holding the part down: keep-outs every operation in this
     // setup respects. See engine/fixtures.js
     fixtures: [],
@@ -466,6 +471,9 @@ export function deserializeProject(json) {
   for (const setup of p.setups ?? []) {
     setup.mode ??= 'mill';
     setup.orientation ??= { rotationDeg: [0, 0, 0], origin: 'model' };
+    // Indexed setups arrived after 3+2 support; a project written before it has
+    // none, which reads as an ordinary re-fixtured setup.
+    setup.index ??= null;
     setup.fixtures ??= [];
     setup.stock = { ...createStock(), ...(setup.stock ?? {}) };
     for (const op of setup.operations ?? []) {

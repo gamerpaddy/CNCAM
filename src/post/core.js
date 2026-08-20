@@ -21,6 +21,7 @@
 //            arcTolerance (mm, default 0.01) }
 
 import { MOVE_STRIDE, OP, FEED, feedRate, descentOf } from '../engine/cl.js';
+import { orientationKey } from '../engine/indexing.js';
 import { Modal, LineWriter, num } from './format.js';
 import { planArcs } from './arcs.js';
 
@@ -50,6 +51,22 @@ export function buildProgram(dialect, ops, options = {}) {
   // means the part has to come out and go back in a different way round, which
   // is not something a program can do on its own. See the boundary below.
   let activeSetup = null;
+  // Whether the setup in force is reached by rotary indexing rather than by
+  // hand. Crossing from one indexed setup to another is a rotary swing the
+  // machine does on its own, so it must *not* stop for the operator the way a
+  // re-fixturing does — see the boundary below.
+  let activeIndexed = false;
+  // The tilted work plane in force, as a key, and whether one is actually
+  // declared on the controller. An indexed operation swings the part to its
+  // orientation and locks; the next in the same orientation restates nothing,
+  // and leaving it (or the program ending) cancels the plane. See
+  // engine/indexing.js and the dialect's `tiltedPlane` hook.
+  let activeOrientation = null;
+  let planeActive = false;
+  // Where to lift to before the rotaries swing. The highest Z any operation
+  // reaches is clear of the part in every frame, which is what a reorientation
+  // needs — the table is about to move the work under a stationary tool.
+  const reorientZ = safeZ(ops);
   // What is in the spindle. Every operation states the tool it wants, because
   // an operation cannot know what ran before it — but the *program* can, and a
   // second M6 for the tool already fitted is not a no-op: on a machine with a
@@ -171,7 +188,21 @@ export function buildProgram(dialect, ops, options = {}) {
     // so. So the transition is written as what it is: the spindle stopped, the
     // coolant off, and a program stop with the reason next to it.
     if (!silent && op.setup != null) {
-      if (activeSetup != null && op.setup !== activeSetup) {
+      const thisIndexed = !!op.orientation;
+      // An indexed setup is reached by the machine swinging its rotary axes to a
+      // fixed angle and locking, not by the operator turning the part over — so
+      // crossing from one indexed setup to another reorients on its own and must
+      // not stop. Every other crossing is a genuine re-fixturing. See the
+      // reorientation just below, and engine/indexing.js.
+      const reFixture = activeSetup != null && op.setup !== activeSetup
+        && !(activeIndexed && thisIndexed);
+      if (reFixture) {
+        // A re-fixturing puts the part back on the table square, so a tilted
+        // plane no longer describes anything — cancel it first, while the
+        // controller is still ours, so the coordinate frame the operator sees at
+        // the stop is the machine's own and not a tilted one.
+        if (planeActive) { dialect.tiltedPlane?.cancel(w, modal); planeActive = false; }
+        activeOrientation = null;
         if (coolant !== 'off') {
           (dialect.coolant ?? defaultCoolant)(w, { mode: 'off' }, options);
           coolant = 'off';
@@ -185,6 +216,7 @@ export function buildProgram(dialect, ops, options = {}) {
         modal.reset();
       }
       activeSetup = op.setup;
+      activeIndexed = thisIndexed;
     }
     // the work offset ties our coordinates to what the operator touched off,
     // so it is stated once and restated whenever a setup change moves it
@@ -199,6 +231,51 @@ export function buildProgram(dialect, ops, options = {}) {
       // block plunges there. Restating every word is the only safe reading of a
       // datum change; a tool change already does exactly this (see the dialects).
       modal.reset();
+      // A tilted work plane is declared *relative to the active work offset* —
+      // G68.2 X0 Y0 Z0 is the datum's own origin — so a plane set under G54 is
+      // anchored to the wrong place once G55 is in force. Two indexed faces that
+      // happen to share an angle but sit on different offsets would otherwise
+      // keep the first plane and cut the second in the wrong spot. Invalidating
+      // the orientation here makes the reorientation below re-establish it under
+      // the new datum, retract and all.
+      if (planeActive) activeOrientation = null;
+    }
+    // Swing the part to this operation's orientation, when it has one and it is
+    // not the one already in force.
+    //
+    // Only when it changes: a 3+2 job cuts a whole face — several operations —
+    // at one angle, and restating the plane before each would swing rotaries
+    // that are already there. The tool is lifted clear first, because the table
+    // is about to move the work under it; the previous plane is cancelled before
+    // the new one is declared; and a post that cannot tilt says so rather than
+    // writing the moves as though the part were flat. See engine/indexing.js.
+    if (!silent) {
+      const key = orientationKey(op.orientation ?? null);
+      if (key !== activeOrientation) {
+        activeOrientation = key;
+        const wantsPlane = op.orientation && !op.orientation.identity;
+        if (planeActive || wantsPlane) {
+          const z = modal.word('Z', reorientZ, 3);
+          if (z) w.line('G0', z);          // clear the part before the swing
+        }
+        if (planeActive) { dialect.tiltedPlane?.cancel(w, modal); planeActive = false; }
+        if (wantsPlane) {
+          if (dialect.tiltedPlane) {
+            if (op.orientation.reachable === false) {
+              w.comment(`WARNING: ${op.orientation.reason ?? 'this machine cannot reach '
+                + 'this orientation'} — the swing will alarm or gouge`);
+            }
+            dialect.tiltedPlane.set(w, modal, op.orientation);
+            planeActive = true;
+          } else {
+            // No tilted-plane support (a hobby controller): the moves would run
+            // in the flat frame and cut the wrong thing, so say so loudly rather
+            // than post a file that looks finished.
+            w.comment('WARNING: this post cannot orient a tilted work plane, so '
+              + `the ${op.orientation.kind} operations below are NOT indexed — do not run this`);
+          }
+        }
+      }
     }
     // Where the tool is, for the one question a move cannot answer on its own:
     // how steeply it descends. Null at the start of an operation and after
@@ -308,6 +385,10 @@ export function buildProgram(dialect, ops, options = {}) {
     modal.force('F');
   });
 
+  // A tilted work plane must not outlive the program: the closing retract and
+  // every later job read their coordinates flat, so the plane is cancelled and
+  // the rotaries are free to return before the footer lifts the tool.
+  if (planeActive) { dialect.tiltedPlane?.cancel(w, modal); planeActive = false; }
   // Coolant off before the spindle stops and the tool retracts, always. A file
   // that ends with the pump still running leaves it running.
   if (coolant !== 'off') (dialect.coolant ?? defaultCoolant)(w, { mode: 'off' }, options);

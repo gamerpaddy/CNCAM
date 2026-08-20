@@ -1,0 +1,12 @@
+#!/bin/sh
+# Stamp the build time into src/version.js on every commit, so the revision in
+# the corner of the app changes each time you push. Enable once with:
+#
+#     git config core.hooksPath .githooks
+#
+# The service worker (sw.js) is what actually keeps the deployed code fresh; this
+# just makes the current build visible.
+set -e
+stamp=$(date -u +"%Y-%m-%d %H:%M UTC")
+printf 'export const BUILD = { revision: %s };\n' "'$stamp'" > src/version.js
+git add src/version.js

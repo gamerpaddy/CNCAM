@@ -26,6 +26,30 @@ export const linuxcnc = {
     w.line(`${spindleWord(dir)} S${Math.round(rpm)}`);
   },
 
+  // Indexed 3+1 / 3+2: a tilted work plane. G68.2 declares the plane by the
+  // same XYZ Euler angles the CAM turned the mesh through (see engine/indexing.js),
+  // and G53.1 swings the rotary axes so the spindle stands normal to it. From
+  // there the operation's own X/Y/Z are read in the tilted frame — which is why
+  // the strategies need no idea any of this happened. G69 cancels it.
+  tiltedPlane: {
+    set(w, modal, orientation) {
+      const [i, j, k] = orientation.euler;
+      const ang = orientation.angles ?? {};
+      const swing = Object.keys(ang).length
+        ? Object.entries(ang).map(([letter, deg]) => `${letter}${num(deg)}`).join(' ')
+        : 'the rotary axes';
+      w.comment(`index ${orientation.kind}: tool axis `
+        + `${orientation.toolAxis.map((v) => num(v, 3)).join(' ')} — ${swing}`);
+      w.line(`G68.2 X0 Y0 Z0 I${num(i)} J${num(j)} K${num(k)}`);
+      w.line('G53.1');   // orient the tool normal to the plane
+      modal.reset();     // coordinates are in the tilted frame now
+    },
+    cancel(w, modal) {
+      w.line('G69');
+      modal.reset();
+    },
+  },
+
   drill: {
     // rs274ngc's G83 takes Q and no P — there is nowhere to put a dwell — so a
     // hole given both gets the peck and the core writes the reason the dwell is

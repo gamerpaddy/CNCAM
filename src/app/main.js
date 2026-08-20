@@ -23,6 +23,7 @@ import { bindShortcuts } from './shortcuts.js';
 import { getSetting } from './settings.js';
 import { paramApplies, OP_PARAM_GROUPS } from './op-params.js';
 import { setupModelIds } from './actions/setup-space.js';
+import { BUILD } from '../version.js';
 
 /**
  * The meshes a setup machines, as one question asked in one place.
@@ -505,10 +506,45 @@ function boot() {
   ctx.actions = actions;
   window.cncam = ctx; // debug/testing handle (live reference)
 
+  registerServiceWorker();
+  showBuildBadge();
+
   // Compile the engine in the workers now, while the user is opening a model
   // and picking cutters. Left until Generate, this is most of the wait: a
   // trivial job on a cold worker takes two seconds. See workers/pool.js.
   ctx.pool.warm();
+}
+
+/**
+ * Register the cache-busting service worker (see sw.js).
+ *
+ * It fetches every module fresh from the network, so a push is visible on the
+ * next reload without a Ctrl-F5. `updateViaCache: 'none'` keeps the worker
+ * script itself out of the HTTP cache; the path is resolved from this module's
+ * URL so it works both at the site root and under a GitHub Pages project path.
+ * It is a progressive enhancement — a browser without service workers, or the
+ * file: protocol, simply loads as before.
+ */
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+  const url = new URL('../../sw.js', import.meta.url);
+  navigator.serviceWorker.register(url, { updateViaCache: 'none' }).catch(() => {});
+}
+
+/**
+ * The build stamp, in the bottom-right corner — so "am I looking at the version
+ * I just pushed?" has an answer on screen. A link to the repository, because the
+ * next question after "which build" is usually "what changed in it".
+ */
+function showBuildBadge() {
+  const badge = document.createElement('a');
+  badge.id = 'build-badge';
+  badge.textContent = `build ${BUILD.revision}`;
+  badge.href = 'https://github.com/gamerpaddy/CNCAM';
+  badge.target = '_blank';
+  badge.rel = 'noopener';
+  badge.title = `CNCAM build ${BUILD.revision} — click for the repository`;
+  document.body.append(badge);
 }
 
 /**

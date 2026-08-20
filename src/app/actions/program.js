@@ -10,6 +10,7 @@ import { plural, verb, allOf } from '../../engine/text.js';
 import { transformMesh } from '../../engine/setup.js';
 import { turningProfile, barFromStock } from '../../engine/lathe.js';
 import { estimateSeconds } from '../../engine/toolpath.js';
+import { orientationFor, indexingWarnings } from '../../engine/indexing.js';
 import { buildGcode, postsFor, defaultPostFor } from '../../post/index.js';
 import { renderGcodePanel } from '../gcode-panel.js';
 import { opStatus, formatTime, opFingerprint, toolNumberClashes } from '../op-status.js';
@@ -158,6 +159,10 @@ export function makeProgramActions(ctx, space) {
       // of you — and the clamp belongs to the setup, so one operation being
       // wrong about it means all of them are.
       limits.unshift(...clearanceWarnings());
+      // An indexed setup on a machine without the rotary axes to reach it, or a
+      // face past an axis's travel, alarms the moment it swings. The whole
+      // program is in front of you here, so it is the moment to say so.
+      limits.unshift(...indexingWarnings(doc.machineRecord(), doc.setups()));
       // Two cutters on one T number is a wrong-tool crash and it is invisible
       // in the file — the second change is dropped as a restatement of the
       // first. The operation panel says so too, but this is the moment the
@@ -477,12 +482,18 @@ export function makeProgramActions(ctx, space) {
    */
   function postableOps() {
     const ops = [];
+    const machine = doc.machineRecord();
     for (const setup of doc.setups()) {
+      // An indexed setup carries the rotary swing that reaches its face; the
+      // post applies it before the setup's operations and cancels it after.
+      // Plain setups get null and post exactly as they always have.
+      const orientation = orientationFor(setup, machine);
       for (const op of setup.operations) {
         const cl = doc.toolpaths.get(op.id);
         if (op.enabled && cl) {
           ops.push({
             name: op.name, cl, wcs: setup.wcs, setup: setup.id, setupName: setup.name,
+            orientation,
           });
         }
       }
@@ -646,7 +657,10 @@ export function makeProgramActions(ctx, space) {
     if (!cl) return ctx.ui.setStatus('Generate this operation before exporting it', true);
     const setup = doc.findSetupOf(op.id);
     const { text } = buildGcode(doc.postId(),
-      [{ name: op.name, cl, wcs: setup?.wcs }], postSettings());
+      [{
+        name: op.name, cl, wcs: setup?.wcs,
+        orientation: setup ? orientationFor(setup, doc.machineRecord()) : null,
+      }], postSettings());
     await saveFile(`${safeFileName(op.name)}.ngc`, text, ACCEPT.gcode);
     ctx.ui.setStatus(`Exported ${op.name} — ${doc.postId()} post`);
   }

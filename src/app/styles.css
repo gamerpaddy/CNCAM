@@ -1635,3 +1635,25 @@ kbd {
 
 .field-art .art-note { fill: #767b85; font: 7.5px system-ui, sans-serif; }
 .field-art .art-label { fill: #8a8e98; font: 8px system-ui, sans-serif; }
+
+/* Build stamp, bottom-right — which build is deployed, out of the way until you
+   look for it. Sits above the viewport but below dialogs; the pointer passes
+   through the gap around it so it never eats a click on the canvas. */
+#build-badge {
+  position: fixed;
+  right: 8px;
+  bottom: 6px;
+  z-index: 5;
+  padding: 2px 7px;
+  font: 11px "Segoe UI", system-ui, sans-serif;
+  color: var(--fg-dim);
+  background: color-mix(in srgb, var(--bg-panel) 82%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  text-decoration: none;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+  pointer-events: auto;
+  user-select: none;
+}
+#build-badge:hover { opacity: 1; color: var(--fg); border-color: var(--accent); }

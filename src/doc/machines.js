@@ -79,6 +79,49 @@ export const MACHINE_PRESETS = [
       + 'tool change that means walking over to it.',
   },
   {
+    // A 4th axis bolted to a 3-axis mill: one rotary, so 3+1 indexing. It can
+    // tilt a face up about X but cannot turn one sideways — see engine/indexing.js.
+    name: '4-axis mill (A rotary)',
+    kind: 'mill',
+    post: 'linuxcnc',
+    travel: [400, 250, 180],
+    rapidFeed: 6000,
+    rapidFeedZ: 4000,
+    maxFeed: 5000,
+    spindleMin: 100,
+    spindleMax: 10000,
+    toolChanger: 'auto',
+    toolChangeSeconds: 8,
+    coolant: true,
+    // The list runs base → part: the A cradle carries the work directly here.
+    rotary: [{ letter: 'A', axis: [1, 0, 0], min: -120, max: 120 }],
+    notes: 'A 3-axis mill with a 4th-axis rotary table on X: 3+1 indexed work, '
+      + 'and simple wrap-round engraving on the A axis.',
+  },
+  {
+    // A trunnion cradle: A tilts, C turns the plate on it. Two rotaries, so any
+    // face is reachable — 3+2 indexed machining.
+    name: '5-axis trunnion mill (A/C)',
+    kind: 'mill',
+    post: 'linuxcnc',
+    travel: [500, 400, 400],
+    rapidFeed: 12000,
+    rapidFeedZ: 10000,
+    maxFeed: 8000,
+    spindleMin: 60,
+    spindleMax: 18000,
+    toolChanger: 'auto',
+    toolChangeSeconds: 6,
+    coolant: true,
+    // base → part: the A cradle carries the C turntable, which carries the work.
+    rotary: [
+      { letter: 'A', axis: [1, 0, 0], min: -120, max: 120 },
+      { letter: 'C', axis: [0, 0, 1], min: -360, max: 360 },
+    ],
+    notes: 'A trunnion-table mill: A tilts the cradle, C turns the plate on it. '
+      + '3+2 indexed machining reaches every face without re-fixturing.',
+  },
+  {
     name: 'LinuxCNC lathe',
     kind: 'turn',
     post: 'lathe',
@@ -132,6 +175,10 @@ export function createMachine(preset = {}) {
     toolChanger: merged.toolChanger === 'manual' ? 'manual' : 'auto',
     toolChangeSeconds: num(merged.toolChangeSeconds, base.toolChangeSeconds),
     coolant: merged.coolant !== false,
+    // Rotary axes for indexed 3+1 / 3+2 work, base → part. A plain 3-axis
+    // machine has none; a machine that lists them can hold a tilted face under
+    // the spindle without the operator re-fixturing. See engine/indexing.js.
+    rotary: normalizeRotary(merged.rotary ?? base.rotary),
     // How a feed is written. A lathe's natural unit is mm per *revolution* —
     // that is what makes the chip the same thickness at every diameter, and it
     // is the figure quoted on an insert box. A mill has no such thing.
@@ -144,6 +191,59 @@ export function createMachine(preset = {}) {
 
 function num(value, fallback) {
   return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+/**
+ * A machine's rotary axis list, cleaned up: a unit axis vector, an uppercase
+ * letter, and optional soft limits. Missing or malformed becomes an empty list
+ * — a 3-axis machine, which is the safe reading of "no rotary stated".
+ */
+function normalizeRotary(rotary) {
+  if (!Array.isArray(rotary)) return [];
+  return rotary
+    .filter((a) => a && Array.isArray(a.axis) && a.axis.length === 3)
+    .map((a) => {
+      const n = Math.hypot(a.axis[0], a.axis[1], a.axis[2]) || 1;
+      return {
+        letter: String(a.letter ?? 'A').toUpperCase().slice(0, 1),
+        axis: [a.axis[0] / n, a.axis[1] / n, a.axis[2] / n],
+        ...(Number.isFinite(a.min) ? { min: a.min } : {}),
+        ...(Number.isFinite(a.max) ? { max: a.max } : {}),
+      };
+    });
+}
+
+/**
+ * Rotary configurations offered as a single choice, because "how many rotary
+ * axes and which way do they point" is a fact about a machine, not five numbers
+ * to type. Editing axis vectors by hand is how you configure a B axis that turns
+ * about X by mistake; a named list is how you don't. See engine/indexing.js for
+ * what each buys — 3+1 tilts about one axis, 3+2 adds a turntable and reaches
+ * any face.
+ */
+export const ROTARY_KINDS = {
+  none: { label: '3-axis — no rotary', rotary: [] },
+  A: { label: '3+1 — A rotary (tilts about X)', rotary: [{ letter: 'A', axis: [1, 0, 0], min: -120, max: 120 }] },
+  B: { label: '3+1 — B rotary (tilts about Y)', rotary: [{ letter: 'B', axis: [0, 1, 0], min: -120, max: 120 }] },
+  AC: {
+    label: '3+2 — A/C trunnion (tilt + turntable)',
+    rotary: [{ letter: 'A', axis: [1, 0, 0], min: -120, max: 120 }, { letter: 'C', axis: [0, 0, 1], min: -360, max: 360 }],
+  },
+  BC: {
+    label: '3+2 — B/C trunnion (tilt + turntable)',
+    rotary: [{ letter: 'B', axis: [0, 1, 0], min: -120, max: 120 }, { letter: 'C', axis: [0, 0, 1], min: -360, max: 360 }],
+  },
+};
+
+/** Which rotary configuration a machine's axes match, for the picker. */
+export function rotaryKindOf(machine) {
+  const letters = (machine?.rotary ?? []).map((a) => a.letter).join('');
+  return { '': 'none', A: 'A', B: 'B', AC: 'AC', CA: 'AC', BC: 'BC', CB: 'BC' }[letters] ?? 'none';
+}
+
+/** A fresh, normalised copy of a rotary configuration by name. */
+export function rotaryPreset(kind) {
+  return (ROTARY_KINDS[kind] ?? ROTARY_KINDS.none).rotary.map((a) => ({ ...a, axis: [...a.axis] }));
 }
 
 /** The starting rack: one machine per preset, so there is always one to pick. */
@@ -252,6 +352,11 @@ export function describeMachine(machine) {
   const travel = machine.kind === 'turn'
     ? `⌀${(machine.travel[0] * 2).toFixed(0)} × ${machine.travel[2].toFixed(0)}mm`
     : machine.travel.map((v) => v.toFixed(0)).join(' × ');
+  // the rotary axes, when there are any, because "can this machine do the 3+2
+  // job I set up" is answered here in the list before it is at the machine
+  const rotary = (machine.rotary ?? []).length
+    ? ` · ${machine.rotary.map((a) => a.letter).join('')} rotary`
+    : '';
   return `${travel} · ${machine.spindleMin}–${machine.spindleMax} rpm · `
-    + `G0 ${machine.rapidFeed} mm/min · ${machine.post}`;
+    + `G0 ${machine.rapidFeed} mm/min · ${machine.post}${rotary}`;
 }

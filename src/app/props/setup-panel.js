@@ -13,6 +13,7 @@ import {
 import {
   ORIGIN_MODES, ORIGIN_LABELS, ORIENTATION_PRESETS, resolveSetup,
 } from '../../engine/setup.js';
+import { orientationFor, indexKind } from '../../engine/indexing.js';
 import { setupModelIds } from '../actions/setup-space.js';
 import { boreProfile } from '../../engine/lathe.js';
 import { computeBounds, mergeMeshes } from '../../geom/mesh.js';
@@ -254,6 +255,7 @@ export function setupSections(doc, setup, app) {
   rows.push(...jobSummarySection(doc, setup), el('h2', {}, ['Orientation']));
   rows.push(orientationPresetRow(doc, setup));
   for (const f of ORIENTATION_FIELDS) rows.push(fieldRow(doc, setup, f, null, null, app));
+  if (milling(setup)) rows.push(...indexRows(doc, setup));
 
   rows.push(el('h2', {}, ['Raw stock']));
   const seed = () => ensureStockShape(doc, setup);
@@ -453,6 +455,70 @@ function setZeroPoint(app, setup, mode) {
       + `${plural(fixtures.length, 'clamp')} moved with it, so they still hold the same place`);
   }
 }
+
+/**
+ * Indexed multi-axis: reach this orientation with the machine's rotary axes
+ * instead of by hand.
+ *
+ * The orientation fields above already turn the part — the same rotation
+ * whether the operator does it or the table does. What this adds is the promise
+ * that the *machine* will: an indexed setup posts a tilted work plane and swings
+ * the rotaries to it (3+1 or 3+2), and two indexed faces in a row cut without a
+ * re-fixturing stop. So the toggle is only meaningful where there are rotary
+ * axes to swing, and the note underneath says whether this machine can reach the
+ * face the orientation asks for. See engine/indexing.js.
+ */
+function indexRows(doc, setup) {
+  const machine = doc.machineRecord();
+  const kind = indexKind(machine);
+  const enabled = !!setup.index?.enabled;
+
+  const box = el('input', { type: 'checkbox' });
+  box.checked = enabled;
+  box.addEventListener('change', () => {
+    doc.updateItem(setup, { index: box.checked ? { enabled: true } : null }, 'indexed setup');
+  });
+  const rows = [propRow('Indexed (rotary)', box)];
+
+  if (kind === '3-axis') {
+    rows.push(el('div', { class: `prop-note${enabled ? ' warn' : ''}` }, [
+      enabled
+        ? `${machine?.name ?? 'This machine'} has no rotary axes, so it cannot index — `
+          + 'this setup will not post. Give the machine rotary axes in Machines → '
+          + 'Rotary axes, or turn indexing off.'
+        : 'This machine has no rotary axes. Add them in Machines → Rotary axes '
+          + '(or pick the 4-/5-axis preset) to index a tilted face.',
+    ]));
+    return rows;
+  }
+
+  if (!enabled) {
+    rows.push(el('div', { class: 'prop-note' }, [
+      `${machine.name} can index (${kind}). Turn this on to reach the orientation above `
+      + 'by swinging the rotary axes rather than re-fixturing.',
+    ]));
+    return rows;
+  }
+
+  const o = orientationFor(setup, machine);
+  if (o.identity) {
+    rows.push(el('div', { class: 'prop-note' }, [
+      'This is the face that already points up — no swing needed, and it posts '
+      + 'exactly as a plain setup does.',
+    ]));
+    return rows;
+  }
+  const swing = Object.entries(o.angles).map(([letter, deg]) => `${letter}${round3(deg)}°`).join(' ');
+  rows.push(el('div', { class: `prop-note${o.reachable ? '' : ' warn'}` }, [
+    o.reachable
+      ? `${kind}: swing ${swing} to tilt ${round3(o.tilt)}° onto the face. Posts as a `
+        + 'G68.2 tilted work plane.'
+      : `${machine.name} cannot reach this: ${o.reason ?? 'the orientation is out of range'}.`,
+  ]));
+  return rows;
+}
+
+function round3(v) { return Math.round(v * 1000) / 1000; }
 
 function orientationPresetRow(doc, setup) {
   const current = (setup.orientation?.rotationDeg ?? [0, 0, 0]).join(',');

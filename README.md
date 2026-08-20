@@ -119,6 +119,13 @@ time, and a program that will not fit in the envelope, or that asks for more rpm
 than the spindle has, tells you in the setup panel instead of as an alarm
 halfway through the job.
 
+A milling machine can also carry **rotary axes** for indexed 3+1 / 3+2 work —
+pick a configuration under *Machines → Rotary axes* (a 4-axis A, or a 5-axis A/C
+or B/C trunnion). Then set a setup to **Indexed** and rotate it to the face you
+want: the machine swings the rotary axes to that orientation, locks, and cuts it
+three-axis, without you re-fixturing. LinuxCNC drives this with a G68.2 tilted
+work plane; the setup panel tells you whether the machine can reach the face.
+
 Posts included: LinuxCNC, GRBL, and a lathe post.
 
 ### Everything else
@@ -137,12 +144,12 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
 
 ## What it does not do
 
-Be clear about this before you start: **the output is 3-axis milling and 2-axis
-turning.** Nothing else is built.
+Be clear about this before you start: **the output is 3-axis milling — with
+indexed 3+1 / 3+2 positioning — and 2-axis turning.** Nothing else is built.
 
-* No indexed 3+2 and no simultaneous 5-axis. Multiple setups let you machine
-  another side of the part, but you re-fixture it yourself. Nothing writes a
-  rotary axis.
+* No *simultaneous* 5-axis. The rotary axes index a face under the spindle and
+  lock; the cutting is still three-axis in that tilted frame (a G68.2 tilted
+  work plane on LinuxCNC). Nothing moves all five at once.
 * No probing, no tool length measurement cycles, no canned cycle library beyond
   what the strategies emit themselves.
 * No sender. It writes a file. Getting the file to the machine is your problem.
@@ -181,6 +188,15 @@ npx serve
 Open the address the server prints, for example `http://localhost:8500`. That is
 the whole install.
 
+The build stamp in the bottom-right corner tells you which build you are looking
+at. On the deployed site a service worker (`sw.js`) fetches every module fresh
+from the network, so a push shows up on the next reload without a Ctrl-F5. If you
+develop against this repo, enable the hook that stamps the build on each commit:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 > If the page does not load and the port looks fine, check that the port is not
 > reserved by your OS. On Windows, Hyper-V takes large ranges of them, and a
 > server that appears to start can be unreachable. `netsh interface ipv4 show
@@ -188,7 +204,7 @@ the whole install.
 
 ### Tests
 
-There are around 550 of them.
+There are around 580 of them.
 
 ```bash
 node src/test/node-run.js
