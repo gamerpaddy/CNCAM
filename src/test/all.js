@@ -30,6 +30,7 @@ import './engagement.test.js';
 import './rest.test.js';
 import './post.test.js';
 import './indexing.test.js';
+import './collision.test.js';
 import './arcs.test.js';
 import './defaults-notes.test.js';
 import './ui.test.js';

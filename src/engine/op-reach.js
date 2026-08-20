@@ -37,5 +37,17 @@ export function regionReachFor(op, tool) {
     const { cutRadius, includeGrow } = chamferRegionReach(tool, op.params ?? {});
     return { cutRadius, includeGrow };
   }
+  // Engrave marking *on* the line does not offset its path — it clips its lines
+  // against a keep-out with radius zero (see strategies/engrave.js `clip`), so
+  // it is the one milling strategy that does not grow a keep-out by the cutter
+  // radius itself. A clamp offset by `body − cutRadius` and then clipped by zero
+  // left the whole cutter running over the jaw: the mark stopped where its
+  // *axis* met the clamp, with half the tool still on top of it. So here the
+  // keep-out has to carry the full clearance — `cutRadius` is what the strategy
+  // grows by, which for `on` is nothing and for a side offset is the radius.
+  if (op?.type === 'engrave') {
+    const cutRadius = (op.params?.side ?? 'on') === 'on' ? 0 : radius;
+    return { cutRadius, includeGrow: -cutRadius };
+  }
   return { cutRadius: radius, includeGrow: -radius };
 }
