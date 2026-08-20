@@ -10,7 +10,7 @@
 import { test, assert } from './runner.js';
 import {
   insertOutline, parseInsertCode, latheToolOutline, isLatheTool, insertIcOf,
-  INSERT_SHAPES, INSERT_LETTERS,
+  INSERT_SHAPES, INSERT_LETTERS, toolPose, effectiveLead, cornerAngleOf,
 } from '../engine/insert.js';
 import { toolSections, latheReachOf } from '../engine/tool-geometry.js';
 import { toolFromPreset, allPresets, machineCanHold } from '../doc/tool-library.js';
@@ -150,6 +150,67 @@ test('a lathe tool is drawn as an insert and a holder that trails the cut', () =
   const leftHolder = left.find((s) => s.kind === 'holder');
   const leftZ = leftHolder.points.reduce((sum, [z]) => sum + z, 0) / leftHolder.points.length;
   assert.ok(leftZ < 0, 'and a left-hand tool trails the other way');
+});
+
+test('the lead angle lays the major cutting edge where it says', () => {
+  // The major edge should sit (90 − lead)° off the bar axis: 0° for a 90° tool
+  // (pure OD turning, edge along the bar), swinging up as the lead falls toward
+  // a facing tool. A sharp corner (no nose fillet) so the tip's two neighbours
+  // are the straight edges themselves.
+  for (const lead of [45, 62.5, 90, 95]) {
+    const t = {
+      type: 'turning', insert: 'C', insertIc: 12, noseRadius: 0, hand: 'R', leadAngle: lead, mountAngle: 0,
+    };
+    const insert = latheToolOutline(t, { holderLength: 20 }).find((s) => s.kind === 'insert').points;
+    let ti = 0;
+    let td = Infinity;
+    insert.forEach((p, i) => { const d = Math.hypot(p[0], p[1]); if (d < td) { td = d; ti = i; } });
+    const tip = insert[ti];
+    const edgeAngle = (p) => Math.atan2(p[1] - tip[1], p[0] - tip[0]) * 180 / Math.PI;
+    const want = 90 - lead;
+    const edges = [insert[(ti - 1 + insert.length) % insert.length], insert[(ti + 1) % insert.length]]
+      .map(edgeAngle);
+    const major = edges.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a));
+    assert.close(major, want, 1.5, `lead ${lead}: major edge at ${major.toFixed(1)}° off the bar`);
+  }
+});
+
+test('a mount angle clocks the whole tool and moves the effective lead with it', () => {
+  const base = {
+    type: 'turning', insert: 'C', insertIc: 12, noseRadius: 0.4, hand: 'R', leadAngle: 95,
+  };
+  const rot = (t) => toolPose(t).rotationDeg;
+  // mounting 5° clocks the pose by 5° and takes 5° off the lead the cut sees
+  assert.close(rot({ ...base, mountAngle: 5 }) - rot(base), 5, 1e-9, 'the pose turns with the block');
+  assert.close(effectiveLead({ ...base, mountAngle: 5 }), 90, 1e-9, 'a 95° tool mounted +5 cuts at 90');
+  assert.close(effectiveLead({ ...base, mountAngle: -5 }), 100, 1e-9, 'and −5 the other way');
+  // a bigger ground lead sweeps a C-insert tool further back
+  assert.ok(rot({ ...base, leadAngle: 95 }) < rot({ ...base, leadAngle: 45 }), 'more lead, more sweep');
+});
+
+test('a custom insert takes its corner angle from the tool, not from a letter', () => {
+  assert.eq(cornerAngleOf({ insert: 'X', insertAngle: 47 }), 47);
+  assert.eq(cornerAngleOf({ insert: 'C' }), 80, 'a lettered insert keeps its own angle');
+  // and it draws as a rhombus of that angle: a sharper corner reaches further
+  // out of the same inscribed circle, exactly as the lettered shapes do
+  const reach = (angle) => {
+    const o = insertOutline('X', 12, 0, 6, angle);
+    return Math.max(...o.points.map(([x, y]) => Math.hypot(x, y)));
+  };
+  assert.ok(reach(35) > reach(100), 'a 35° custom corner reaches further than a 100° one');
+});
+
+test('two tools of a different lead angle are drawn as different tools', () => {
+  // The complaint this answers: every turning tool came out the same wedge. The
+  // insert orientation now follows the lead, so a 62° profiler and a 95° turner
+  // are not the same drawing.
+  const outline = (lead) => latheToolOutline({
+    type: 'turning', insert: 'C', insertIc: 12, noseRadius: 0.8, leadAngle: lead,
+  }).find((s) => s.kind === 'insert').points;
+  const a = outline(62.5);
+  const b = outline(95);
+  const moved = a.some((p, i) => Math.hypot(p[0] - b[i][0], p[1] - b[i][1]) > 0.5);
+  assert.ok(moved, 'the two inserts no longer draw on top of each other');
 });
 
 test('a boring bar reaches into a hole, and says how far', () => {

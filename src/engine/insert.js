@@ -34,6 +34,10 @@ export const INSERT_SHAPES = {
   T: { label: 'Triangle 60°', cornerAngle: 60, kind: 'regular', sides: 3 },
   D: { label: 'Rhombic 55°', cornerAngle: 55, kind: 'rhombic' },
   V: { label: 'Rhombic 35°', cornerAngle: 35, kind: 'rhombic' },
+  // A custom grind: a rhombus of whatever corner angle the tool carries in
+  // `insertAngle`, so an off-catalogue or hand-ground insert can be described
+  // rather than forced into the nearest letter. See insertOutline.
+  X: { label: 'Custom', cornerAngle: 60, kind: 'custom' },
 };
 
 export const INSERT_LETTERS = Object.keys(INSERT_SHAPES);
@@ -77,7 +81,7 @@ export const INSERT_HAND_LABELS = {
  * @param noseRadius corner radius, mm
  * @returns { points: [[x, y], …], cornerAt: [x, y], ic }
  */
-export function insertOutline(shape, ic = 12, noseRadius = 0.8, segments = ARC_SEGMENTS) {
+export function insertOutline(shape, ic = 12, noseRadius = 0.8, segments = ARC_SEGMENTS, cornerAngle = null) {
   const spec = INSERT_SHAPES[shape] ?? INSERT_SHAPES.C;
   const r = Math.max(0.5, ic) / 2;
 
@@ -91,9 +95,14 @@ export function insertOutline(shape, ic = 12, noseRadius = 0.8, segments = ARC_S
     return { points, cornerAt: [0, -r], ic };
   }
 
+  // A custom insert is a rhombus of whatever angle it was given — the one shape
+  // that takes its corner angle from the tool rather than from the letter.
+  const custom = spec.kind === 'custom'
+    ? Math.max(20, Math.min(160, cornerAngle ?? spec.cornerAngle))
+    : null;
   const raw = spec.kind === 'regular' ? regularPolygon(spec.sides)
     : spec.kind === 'trigon' ? trigon()
-      : rhombus(spec.cornerAngle);
+      : rhombus(custom ?? spec.cornerAngle);
 
   // Built at an arbitrary scale, then scaled so the inscribed circle is right.
   // Solving each shape's vertex radius in closed form is three different pieces
@@ -237,53 +246,88 @@ export function isLatheTool(type) {
 }
 
 /**
+ * The corner angle of the insert on a tool — the letter's, or the tool's own
+ * `insertAngle` when it is the custom shape.
+ */
+export function cornerAngleOf(tool) {
+  const shape = INSERT_SHAPES[tool?.insert] ?? INSERT_SHAPES.C;
+  if (shape.kind === 'custom') return Math.max(20, Math.min(160, tool?.insertAngle ?? 60));
+  return shape.cornerAngle;
+}
+
+/**
+ * The lead (approach) angle a tool actually cuts at, once its holder is clocked.
+ *
+ * The insert has a lead angle ground into it; a Multifix or quick-change block
+ * then holds the whole tool at `mountAngle`, and the cut sees the sum. A tool
+ * ground at 95° and mounted 5° nose-down turns as an 90° tool — which is the
+ * whole reason the mount angle is worth having, and the thing to keep in mind
+ * before trusting the angle written on the holder.
+ */
+export function effectiveLead(tool) {
+  const type = tool?.type;
+  if (type === 'parting' || type === 'threading') return 0;
+  const lead = Number.isFinite(tool?.leadAngle) ? tool.leadAngle
+    : (type === 'boring' ? 92 : 95);
+  return lead - (tool?.mountAngle ?? 0);
+}
+
+/** The unit direction the holder body runs in, for an insert rotated by `deg`. */
+function bodyDir(deg) {
+  const a = (deg * Math.PI) / 180;
+  return [-Math.sin(a), Math.cos(a)];
+}
+
+/**
  * Where the insert sits and which way the shank runs, for a tool.
  *
- * The rotation and the shank direction are two statements about the same fact —
- * which side of the cutting corner the *body* of the tool is on — and they have
- * to agree. They did not: a right-hand tool was drawn with its shank running
- * toward the tailstock (+Z) and its insert leaning the other way, toward the
- * chuck, so the insert appeared to hang off the wrong end of its own holder.
- * That is the "rotated 180°" the tools looked like, and it was also wrong in
- * the one way that matters: the insert sat in the metal the pass had not
- * reached yet, on the side the holder is supposed to trail through.
+ * The insert's major cutting edge is set to the tool's lead angle: `insertOutline`
+ * hands back a shape whose cutting corner points at −Y with the two edges ε apart
+ * about the +Y bisector (ε the corner angle), and rotating it by `ε/2 − κ` lays
+ * the major edge at κ off the face — 0° a facing edge, 90° pure OD turning, a
+ * little over 90° a tool that back-faces a shoulder. So a 93° and a 62° tool are
+ * posed, and drawn, as the different tools they are rather than one fixed wedge.
+ * The holder then trails along the insert's bisector, away from the cut. A
+ * left-hand tool is the mirror of the right about the radial axis (`flipZ`); the
+ * mount angle clocks the whole thing. The rotation and the shank are one
+ * statement of which side of the cut the body is on, so they are computed from
+ * one angle and cannot disagree.
  *
- * `insertOutline` hands back a shape whose cutting corner points at −Y and
- * whose body is therefore at +Y; seated on the origin, rotating it by `d` puts
- * the body along (−sin d, cos d) in the (Z, radius) frame. So a body that has
- * to end up at +Z needs a *negative* rotation, which is the sign that was
- * inverted.
- *
- * @returns {{ rotationDeg, shank: [dz, dx], approach }} `shank` is the unit
- *   direction the holder body extends in, away from the cut.
+ * @returns {{ rotationDeg, shank: [dz, dx], approach, flipZ }}
  */
 export function toolPose(tool) {
   const hand = tool?.hand ?? 'R';
-  if (tool?.type === 'boring') {
-    // Inside the bore: the edge faces the wall (up, +X) and the bar runs back
-    // out of the hole toward the tailstock. The body sits *below* the cut, in
-    // the space the pilot hole already made — so the insert leans to +Z and −X,
-    // which is the third quadrant of the rotation above.
-    return { rotationDeg: 215, shank: [1, -1], approach: 'internal' };
-  }
+  const mount = Number.isFinite(tool?.mountAngle) ? tool.mountAngle : 0;
+  const eps = cornerAngleOf(tool);
+  // The lead ground into the insert, before the block clocks the whole tool. The
+  // mount is then *added to the rotation* below, which is the same swing the
+  // effective lead loses — the tool turns, and the cut sees the difference.
+  const ground = Number.isFinite(tool?.leadAngle) ? tool.leadAngle
+    : (tool?.type === 'boring' ? 92 : 95);
+
   if (tool?.type === 'parting') {
-    // A blade goes straight in: no lead angle, body directly outboard.
-    return { rotationDeg: 0, shank: [0, 1], approach: 'radial' };
+    // A blade goes straight in: no lead angle, body directly outboard, but the
+    // holder still clocks with the block.
+    const rot = mount;
+    return { rotationDeg: rot, shank: bodyDir(rot), approach: 'radial', flipZ: false };
   }
   if (tool?.type === 'threading') {
-    // A threading tool is not a parting blade, which is what it used to be
-    // drawn as. It is a pointed insert on an ordinary square shank, fed
-    // straight in — so it is placed the way a turning tool is, body trailing
-    // back and outboard, but with *no* lead angle: the form has to sit square
-    // to the axis or the two flank angles come out unequal.
-    return { rotationDeg: 0, shank: [1, 1], approach: 'radial' };
+    // A pointed insert on a square shank, fed straight in — square to the axis
+    // so the two flank angles stay equal — plus whatever the block is clocked to.
+    const rot = mount;
+    return { rotationDeg: rot, shank: bodyDir(rot), approach: 'radial', flipZ: false };
   }
-  // OD turning. A right-hand tool cuts travelling toward the chuck, so its body
-  // trails toward the tailstock, through metal it has already removed. Left-hand
-  // tools are the mirror image about the X axis.
-  return hand === 'L'
-    ? { rotationDeg: 35, shank: [-1, 1], approach: 'external' }
-    : { rotationDeg: -35, shank: [1, 1], approach: 'external' };
+  if (tool?.type === 'boring') {
+    // Inside the bore the insert cuts *up* into the wall (+X) and the bar runs
+    // back out of the hole toward the tailstock (+Z, −X). It is the OD pose
+    // turned to face the wall, and the lead still leans the major edge.
+    const rot = 180 - (eps / 2 - ground) + mount;
+    return { rotationDeg: rot, shank: bodyDir(rot), approach: 'internal', flipZ: hand === 'L' };
+  }
+  // OD turning: lay the major edge at the lead angle, body trailing to +Z/+X,
+  // then clock the whole tool by the mount angle.
+  const rot = eps / 2 - ground + mount;
+  return { rotationDeg: rot, shank: bodyDir(rot), approach: 'external', flipZ: hand === 'L' };
 }
 
 /**
@@ -305,9 +349,11 @@ export function latheToolOutline(tool, { holderLength = null, bladeDepth = null 
 
   if (type === 'parting') return partingOutline(tool, holderLength, bladeDepth, nose);
 
+  const shape = tool?.insert ?? defaultShapeFor(type);
   const points = type === 'threading'
     ? threadingInsert(tool, ic)
-    : insertOutline(tool?.insert ?? defaultShapeFor(type), ic, nose).points;
+    : insertOutline(shape, ic, nose, ARC_SEGMENTS,
+      shape === 'X' ? cornerAngleOf(tool) : null).points;
   // the outline's cutting corner points at −Y; bring it to the origin, then
   // rotate the whole insert to the tool's lead angle
   const lowest = points.reduce((lo, p) => (p[1] < lo ? p[1] : lo), Infinity);
@@ -334,10 +380,17 @@ export function latheToolOutline(tool, { holderLength = null, bladeDepth = null 
     [dz * (seat + back) - nz * shankWidth * 0.5, dx * (seat + back) - nx * shankWidth * 0.5],
     [dz * seat - nz * shankWidth * 0.5, dx * seat - nx * shankWidth * 0.5],
   ];
-  return [
+  const sections = [
     { kind: 'holder', points: holder },
     { kind: 'insert', points: insert },
   ];
+  // A left-hand tool is the mirror of the right about the radial axis — the same
+  // insert and holder, reflected in Z. Built once as a right-hand tool and
+  // flipped, so the two hands cannot drift apart.
+  if (pose.flipZ) {
+    for (const s of sections) s.points = s.points.map(([z, x]) => [-z, x]);
+  }
+  return sections;
 }
 
 /**

@@ -274,6 +274,23 @@ test('the tool wizard shows all of itself, for every family', () => {
   assert.eq(problems.join('; '), '', 'every family fits');
 });
 
+test('the wizard draws the tool it opens on, before a family is clicked', () => {
+  if (!inBrowser) return;
+  // It used to open on an empty Sizes column and a blank preview: the initial
+  // setup called setFamily on the family the draft already was, which returns
+  // early, so the first render never ran until a card was clicked. A new tool
+  // has to look like a tool the moment the dialog appears.
+  const dialog = openToolWizard({ machine: 'turn', number: 1, onCreate: () => {} });
+  assert.ok(dialog.querySelector('.wiz-family.active'), 'a family is highlighted on open');
+  assert.ok(dialog.querySelector('.wiz-fields [data-key]'), 'the Sizes column is populated on open');
+  assert.ok(dialog.querySelector('.wiz-preview svg'), 'and the tool is drawn on open');
+  const keys = [...dialog.querySelectorAll('.wiz-field[data-key]')].map((f) => f.dataset.key);
+  assert.ok(keys.includes('leadAngle') && keys.includes('mountAngle'),
+    'a turning tool offers its lead and mount angle');
+  dialog.close();
+  dialog.remove();
+});
+
 test('the wizard opened on an existing tool keeps what was decided about it', () => {
   if (!inBrowser) return;
   // Everything on an existing tool has been decided, and a dialog that

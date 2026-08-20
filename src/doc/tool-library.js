@@ -128,6 +128,9 @@ const BASE = {
   insertIc: 0,
   insertCode: '',
   hand: 'R',
+  leadAngle: null,
+  mountAngle: 0,
+  insertAngle: 60,
   minBore: 0,
   maxDepth: 0,
   fluteLength: 20,
@@ -164,6 +167,12 @@ export function toolFromPreset(preset, number = 1) {
     insertIc: fromCode?.insertIc ?? (merged.insertIc || merged.diameter || 9.525),
     insertCode: merged.insertCode ?? '',
     hand: merged.hand ?? 'R',
+    // the ground lead: default per family when a preset does not name one, so
+    // the catalogue tools get a sensible approach rather than a flat zero
+    leadAngle: Number.isFinite(merged.leadAngle) ? merged.leadAngle
+      : (type === 'turning' ? 95 : type === 'boring' ? 92 : 0),
+    mountAngle: Number.isFinite(merged.mountAngle) ? merged.mountAngle : 0,
+    insertAngle: merged.insertAngle ?? 60,
     minBore: merged.minBore ?? 0,
     maxDepth: merged.maxDepth ?? 0,
     cornerRadius: merged.cornerRadius ?? 0,

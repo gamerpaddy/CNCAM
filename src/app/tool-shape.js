@@ -25,6 +25,7 @@ import {
 } from '../engine/tool-geometry.js';
 import {
   isLatheTool, latheToolOutline, latheToolBounds, insertIcOf, INSERT_SHAPES,
+  effectiveLead, cornerAngleOf,
 } from '../engine/insert.js';
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -514,10 +515,18 @@ function describeLatheTool(tool) {
     bits.push(`${tool.tipAngle > 0 ? tool.tipAngle : 60}° form`);
     if (tool.bladeWidth > 0) bits.push(`${tool.bladeWidth}mm wide`);
   } else {
-    const shape = INSERT_SHAPES[tool.insert]?.label ?? 'insert';
+    const shape = tool.insert === 'X'
+      ? `${round(cornerAngleOf(tool))}° custom`
+      : INSERT_SHAPES[tool.insert]?.label ?? 'insert';
     bits.push(tool.insertCode ? String(tool.insertCode).toUpperCase() : shape);
     bits.push(`IC ${round(insertIcOf(tool))}`);
     if (tool.noseRadius > 0) bits.push(`r${tool.noseRadius} nose`);
+    // The lead the tool actually cuts at, and the ground lead when a mount has
+    // moved it — the one number the mount angle exists to change.
+    const eff = round(effectiveLead(tool));
+    const mount = round(tool.mountAngle ?? 0);
+    bits.push(mount ? `${eff}° lead (${round(tool.leadAngle ?? 95)}° ground, ${mount > 0 ? '+' : ''}${mount}° mount)`
+      : `${eff}° lead`);
   }
   if (tool.type === 'boring') {
     bits.push(`⌀${tool.diameter} bar`);

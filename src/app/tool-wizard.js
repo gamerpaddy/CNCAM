@@ -63,12 +63,33 @@ const SIZE_FIELDS = [
     key: 'insert', label: 'Insert shape', type: 'select',
     options: INSERT_LETTERS, labels: INSERT_SHAPE_LABELS,
     when: isInsert,
-    hint: 'The first letter of the code, and the corner angle it stands for.',
+    hint: 'The first letter of the code, and the corner angle it stands for. '
+      + 'X is a custom grind you set the angle of.',
+  },
+  {
+    key: 'insertAngle', label: 'Custom corner angle (°)', step: 1, min: 20, max: 160,
+    when: (t) => isInsert(t) && t.insert === 'X',
+    hint: 'The included angle at the cutting corner of an off-catalogue or '
+      + 'hand-ground insert. Small reaches into corners and is fragile; big is strong.',
   },
   {
     key: 'insertIc', label: 'Inscribed circle (mm)', step: 0.1, min: 1,
     when: isInsert,
     hint: 'The circle that fits inside the insert touching every edge — how big it is.',
+  },
+  {
+    key: 'leadAngle', label: 'Lead / approach angle (°)', step: 1, min: 0, max: 120,
+    when: isInsert,
+    hint: 'The approach angle κ of the major edge, from the face: 0° faces, 90° '
+      + 'turns the OD, a little over 90° turns and back-faces a square shoulder. '
+      + 'This is what makes a 93° and a 62° tool different tools.',
+  },
+  {
+    key: 'mountAngle', label: 'Mount angle (°)', step: 1, min: -45, max: 45,
+    when: isLathe,
+    hint: 'How the holder is clocked in the block — a Multifix or quick-change '
+      + 'indexes in steps. It rotates the whole tool and changes the effective '
+      + 'lead by the same amount, which the readout keeps track of.',
   },
   {
     key: 'diameter', label: 'Diameter (mm)', step: 0.1, min: 0.05,
@@ -187,6 +208,9 @@ export function openToolWizard({
     insertIc: 12.7,
     insertCode: '',
     hand: 'R',
+    leadAngle: machine === 'turn' ? 95 : 0,
+    mountAngle: 0,
+    insertAngle: 60,
     minBore: 0,
     maxDepth: 0,
     fluteLength: 20,
@@ -219,6 +243,9 @@ export function openToolWizard({
       insertIc: editing.insertIc ?? draft.insertIc,
       insertCode: editing.insertCode ?? '',
       hand: editing.hand ?? 'R',
+      leadAngle: editing.leadAngle ?? draft.leadAngle,
+      mountAngle: editing.mountAngle ?? 0,
+      insertAngle: editing.insertAngle ?? draft.insertAngle,
       minBore: editing.minBore ?? 0,
       maxDepth: editing.maxDepth ?? 0,
       fluteLength: fluteLengthOf(editing) || draft.fluteLength,
@@ -332,6 +359,9 @@ export function openToolWizard({
       insertIc: draft.insertIc,
       insertCode: draft.insertCode,
       hand: draft.hand,
+      leadAngle: draft.leadAngle,
+      mountAngle: draft.mountAngle,
+      insertAngle: draft.insertAngle,
       minBore: draft.minBore,
       maxDepth: draft.maxDepth,
       fluteLength: draft.fluteLength,
@@ -578,9 +608,14 @@ export function openToolWizard({
   );
   dialog.addEventListener('close', () => dialog.remove());
 
-  // `setFamily` returns early when the family is already what it says, so an
-  // edit renders from the draft as it stands rather than being reset by it.
-  if (editing) { rederive(); render(); } else setFamily(draft.type);
+  // Draw the tool the dialog opens on — for a new tool as much as for an edit.
+  // This used to call `setFamily(draft.type)`, which returns early because the
+  // draft already *is* that family, so the very first render never ran and the
+  // dialog opened on an empty Sizes column and a blank preview until you clicked
+  // a family card. The draft is already seeded with the family's defaults, so
+  // deriving and drawing it is all the open needs.
+  rederive();
+  render();
   document.body.append(dialog);
   dialog.showModal();
   nameInput.focus();

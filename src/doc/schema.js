@@ -161,6 +161,20 @@ export function createTool(type = 'flat') {
     insertIc: 9.525,
     insertCode: '',
     hand: 'R',
+    // The approach (lead) angle κ of the major cutting edge, measured from the
+    // face — 0° is a pure facing edge, 90° a pure OD-turning edge, and a little
+    // over 90° a tool that turns and back-faces a square shoulder. It is what
+    // makes an SDJCR (93°) and an SDNCN (62.5°) different tools rather than the
+    // same grey wedge. Zero on a parting blade and a threading tool, which go
+    // straight in. See engine/insert.js.
+    leadAngle: type === 'turning' ? 95 : type === 'boring' ? 92 : 0,
+    // How the holder itself is clocked in the post — a Multifix or a quick-change
+    // block indexes in steps, and every step rotates the whole insert and so its
+    // effective lead and clearance. Composes with leadAngle. See toolPose.
+    mountAngle: 0,
+    // A custom insert corner angle, used when `insert` is 'X' (custom) so any
+    // grind or off-catalogue shape can be described. Ignored otherwise.
+    insertAngle: 60,
     // boring bars: how far into a hole the bar reaches, and the smallest hole
     // it will fit down. Both are the reason a bore is or is not machinable.
     minBore: 0,
