@@ -311,6 +311,7 @@ function faceInserts(tool) {
  */
 const SPLAT_VERTEX = `
   attribute vec3 color;
+  attribute vec2 aWall;        // which way, and how steeply, the surface falls away here
   varying vec3 vColor;
   varying vec3 vWorldNormal;
   varying vec3 vWorldPos;
@@ -333,7 +334,16 @@ const SPLAT_VERTEX = `
     // perspective and not when there is not.
     float denom = mix(1.0, -mv.z, uPerspective);
     float size = uRadius * projectionMatrix[1][1] * uViewportH * 0.5 / max(denom, 1e-3);
-    gl_PointSize = clamp(size, 1.0, uMaxSize);
+    // A fat disc is right in the middle of a floor or a gentle curve — that is
+    // what swallows the facets — but at the edge of a cut it overhangs the drop
+    // and hangs out over whatever is below (the pocket the tool is working in, or
+    // the tool itself). aWall is zero on floors and gentle slopes and climbs
+    // toward 1 at a wall, so shrink the splat there: no overhang means the cut
+    // stays a clean opening the tool shows through, and the mesh (crisp at an
+    // edge anyway) draws it. Squared so only real edges shrink, curves keep size.
+    float edge = clamp(length(aWall), 0.0, 1.0);
+    size *= 1.0 - edge * edge;
+    gl_PointSize = clamp(size, 0.0, uMaxSize);
     // The splats sit exactly on the mesh they overlay, so nudge them a hair
     // toward the camera — otherwise they z-fight the solid top and flicker.
     gl_Position.z -= 0.0002 * gl_Position.w;
@@ -489,13 +499,14 @@ export class SimulationView {
       },
       vertexShader: SPLAT_VERTEX,
       fragmentShader: SPLAT_FRAGMENT,
-      // The splat is a re-skin of the surface the mesh already drew, so it must
-      // add colour without adding occlusion: it tests against the mesh's depth
-      // (so it is hidden behind anything nearer) but writes none of its own.
-      // Otherwise a splat overhanging a cut writes depth in front of the cutter
-      // sitting in that cut and the tool vanishes into the metal. See the render
-      // orders above — the cutter draws after the splats and beats them.
-      depthWrite: false,
+      // Opaque and depth-writing, like the mesh it re-skins: the splats must
+      // occlude each other and the cutter honestly. They can, because they no
+      // longer overhang a cut edge — the vertex shader shrinks them to nothing at
+      // a wall (see aWall there). That is what stops a rim splat from writing
+      // depth in front of the tool working in the cut; making the splats
+      // depth-transparent instead only traded the vanishing tool for a stipple of
+      // overhanging discs veiling the cut. The cutter still renders after them
+      // (CUTTER_RENDER_ORDER) so it wins any tie on a coincident floor.
     });
   }
 
