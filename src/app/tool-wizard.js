@@ -25,9 +25,10 @@ import {
 } from '../doc/tool-library.js';
 import { toolLength, reachCheck, latheReachOf, fluteLengthOf } from '../engine/tool-geometry.js';
 import {
-  isLatheTool, parseInsertCode,
+  isLatheTool, parseInsertCode, isPolygon,
   INSERT_LETTERS, INSERT_SHAPE_LABELS, INSERT_HANDS, INSERT_HAND_LABELS, INSERT_NOTES,
 } from '../engine/insert.js';
+import { openShapeEditor } from './shape-editor.js';
 
 /**
  * The families, in the order a machinist would think of them, with the one
@@ -211,6 +212,7 @@ export function openToolWizard({
     leadAngle: machine === 'turn' ? 95 : 0,
     mountAngle: 0,
     insertAngle: 60,
+    customPoints: null,
     minBore: 0,
     maxDepth: 0,
     fluteLength: 20,
@@ -246,6 +248,7 @@ export function openToolWizard({
       leadAngle: editing.leadAngle ?? draft.leadAngle,
       mountAngle: editing.mountAngle ?? 0,
       insertAngle: editing.insertAngle ?? draft.insertAngle,
+      customPoints: isPolygon(editing.customPoints) ? editing.customPoints : null,
       minBore: editing.minBore ?? 0,
       maxDepth: editing.maxDepth ?? 0,
       fluteLength: fluteLengthOf(editing) || draft.fluteLength,
@@ -362,6 +365,9 @@ export function openToolWizard({
       leadAngle: draft.leadAngle,
       mountAngle: draft.mountAngle,
       insertAngle: draft.insertAngle,
+      // only a custom insert on a lathe tool carries a hand-drawn outline; a mill
+      // family, or any lettered shape, ignores it
+      customPoints: isInsert(draft) && draft.insert === 'X' ? draft.customPoints : null,
       minBore: draft.minBore,
       maxDepth: draft.maxDepth,
       fluteLength: draft.fluteLength,
@@ -385,6 +391,31 @@ export function openToolWizard({
     if (spec.type === 'select') return selectRow(spec);
     if (spec.type === 'text') return textRow(spec);
     return numberRow(spec);
+  }
+
+  /**
+   * The row that opens the custom-shape editor. A drawn outline overrides the
+   * corner-angle field, so the button says which is in force and clearing it
+   * hands the shape back to the rhombus the angle describes.
+   */
+  function shapeEditorRow() {
+    const drawn = isPolygon(draft.customPoints);
+    const edit = el('button', { type: 'button', class: 'wiz-shape-edit' }, [
+      drawn ? `Edit drawn shape (${draft.customPoints.length} corners)` : 'Draw a custom shape…',
+    ]);
+    edit.addEventListener('click', () => openShapeEditor({
+      points: draft.customPoints,
+      angle: draft.insertAngle,
+      noseRadius: draft.noseRadius,
+      onApply: (points) => { draft.customPoints = points; render(); },
+    }));
+    const children = [el('span', {}, ['Custom outline']), edit];
+    if (drawn) {
+      const clear = el('button', { type: 'button', class: 'wiz-shape-clear' }, ['Clear']);
+      clear.addEventListener('click', () => { draft.customPoints = null; render(); });
+      children.push(clear);
+    }
+    return el('div', { class: 'wiz-field wiz-shape-row' }, children);
   }
 
   function labelOf(spec) { return spec.labelFor?.(draft) || spec.label; }
@@ -460,6 +491,10 @@ export function openToolWizard({
     sizeRows.replaceChildren(
       ...SIZE_FIELDS.filter((f) => !f.when || f.when(draft)).map(fieldRow),
     );
+    // A custom insert can be more than a rhombus of one angle: the shape editor
+    // draws an arbitrary outline. Offered only for the 'X' shape, where it is the
+    // one thing the flat list of number fields cannot express.
+    if (isInsert(draft) && draft.insert === 'X') sizeRows.append(shapeEditorRow());
     speedRows.replaceChildren(...SPEED_FIELDS.map(numberRow));
     nameInput.value = draft.name;
 

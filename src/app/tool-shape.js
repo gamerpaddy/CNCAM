@@ -25,7 +25,7 @@ import {
 } from '../engine/tool-geometry.js';
 import {
   isLatheTool, latheToolOutline, latheToolBounds, insertIcOf, INSERT_SHAPES,
-  effectiveLead, cornerAngleOf,
+  effectiveLead, cornerAngleOf, insertEngagement, recommendedDepthOfCut,
 } from '../engine/insert.js';
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -208,7 +208,10 @@ export function toolIcon(tool, {
  * Drawn from `engine/insert.js`, which is also what the simulation extrudes, so
  * the icon in the list and the tool cutting the bar cannot disagree.
  */
-function latheIcon(tool, { width, height, scaleTo, color, orientation, full = false }) {
+function latheIcon(tool, {
+  width, height, scaleTo, color, orientation, full = false,
+  showEngagement = false, engageDepth = null,
+}) {
   const horizontal = orientation === 'horizontal';
   const ic = insertIcOf(tool);
   // one scale across a list, banded the same way the milling icons are: a small
@@ -232,7 +235,26 @@ function latheIcon(tool, { width, height, scaleTo, color, orientation, full = fa
       holderLength: Math.max(ic * 2.2, 10),
       bladeDepth: Math.max(ic, (tool?.bladeWidth || tool?.diameter || 3) * 2.5),
     });
+  // Where the insert meets the work, at the deepest cut it should take. Drawn so
+  // the panel answers the two questions a machinist asks of a lathe tool — which
+  // edge cuts, and how deep before it breaks — rather than leaving both to be
+  // read off the numbers. Only turning and boring inserts cut on a nose like
+  // this; a blade goes straight in and has no such geometry.
+  const engaging = showEngagement && (tool?.type === 'turning' || tool?.type === 'boring');
+  const engagement = engaging
+    ? insertEngagement(tool, engageDepth != null ? engageDepth : recommendedDepthOfCut(tool))
+    : null;
+
   const b = latheToolBounds(sections);
+  if (engagement) {
+    // the removed band can stand outside the insert; keep it in frame
+    for (const [z, x] of engagement.band) {
+      if (z < b.minZ) b.minZ = z;
+      if (z > b.maxZ) b.maxZ = z;
+      if (x < b.minX) b.minX = x;
+      if (x > b.maxX) b.maxX = x;
+    }
+  }
   const spanZ = Math.max(0.001, b.maxZ - b.minZ);
   const spanX = Math.max(0.001, b.maxX - b.minX);
   const pad = Math.max(spanZ, spanX) * 0.08;
@@ -276,6 +298,10 @@ function latheIcon(tool, { width, height, scaleTo, color, orientation, full = fa
   const insertColor = color ?? TYPE_COLORS[tool.type] ?? TYPE_COLORS.turning;
   const stroke = Math.max(vbW, vbH) * 0.012;
 
+  // The bite goes on *under* the tool, so the insert paints over it and the
+  // engaged edge (drawn last) sits on top of the insert's own edge.
+  if (engagement) group.append(engagementBite(engagement, stroke, 'under'));
+
   sections.forEach((section, i) => {
     const base = section.kind === 'insert' ? insertColor : HOLDER_COLOR;
     const gradient = cylinderGradient(`${id}-${i}`, base);
@@ -290,8 +316,65 @@ function latheIcon(tool, { width, height, scaleTo, color, orientation, full = fa
     group.append(path);
   });
 
+  if (engagement) group.append(engagementBite(engagement, stroke, 'over'));
+
   svg.append(defs, group);
   return svg;
+}
+
+/**
+ * The engagement overlay: the band of stock the cut removes, and the length of
+ * cutting edge in the metal.
+ *
+ * Two passes over the same geometry so the layering reads right — the `under`
+ * pass is the translucent bite the insert then paints over, the `over` pass is
+ * the bright engaged edge and the uncut surface line, on top of everything. The
+ * edge turns red when the depth is past what the insert should take, which is
+ * the "and may break it" the drawing exists to show.
+ */
+function engagementBite(engagement, stroke, layer) {
+  const g = document.createElementNS(NS, 'g');
+  g.setAttribute('class', 'tool-engagement');
+  const [nose, end] = engagement.edge;
+  const hot = engagement.overloaded ? '#ff5a52' : '#39d98a';
+
+  if (layer === 'under') {
+    // the removed material, as the wedge between the finished surface and the
+    // uncut one — a translucent chip so the insert reads through it
+    const band = document.createElementNS(NS, 'path');
+    band.setAttribute('d', `${closedPath(engagement.band)}`);
+    band.setAttribute('fill', engagement.overloaded ? 'rgba(255,90,82,0.22)' : 'rgba(57,217,138,0.2)');
+    band.setAttribute('stroke', 'none');
+    g.append(band);
+    return g;
+  }
+
+  // the uncut stock surface, a dashed line the cut is working down from
+  const surface = document.createElementNS(NS, 'path');
+  surface.setAttribute('d', `M ${round(end[0])} ${round(-end[1])} L ${round(end[0] - (end[0] - nose[0]) - stroke * 60)} ${round(-end[1])}`);
+  surface.setAttribute('stroke', 'rgba(255,255,255,0.35)');
+  surface.setAttribute('stroke-width', String(stroke * 1.1));
+  surface.setAttribute('stroke-dasharray', `${stroke * 4} ${stroke * 3}`);
+  surface.setAttribute('fill', 'none');
+  g.append(surface);
+
+  // the engaged cutting edge itself
+  const edge = document.createElementNS(NS, 'path');
+  edge.setAttribute('d', `M ${round(nose[0])} ${round(-nose[1])} L ${round(end[0])} ${round(-end[1])}`);
+  edge.setAttribute('stroke', hot);
+  edge.setAttribute('stroke-width', String(stroke * 3.2));
+  edge.setAttribute('stroke-linecap', 'round');
+  edge.setAttribute('fill', 'none');
+  g.append(edge);
+
+  // a dot at the nose contact point, where the cut actually starts
+  const dot = document.createElementNS(NS, 'circle');
+  dot.setAttribute('cx', String(round(nose[0])));
+  dot.setAttribute('cy', String(round(-nose[1])));
+  dot.setAttribute('r', String(stroke * 2.4));
+  dot.setAttribute('fill', hot);
+  g.append(dot);
+  return g;
 }
 
 /** A closed SVG path from [z, radius] points, with radius drawn upward. */
@@ -315,6 +398,7 @@ export function toolAssembly(tool, { width = 150, height = 190 } = {}) {
   if (isLatheTool(tool?.type)) {
     const svg = latheIcon(tool, {
       width, height, scaleTo: null, color: null, orientation: 'horizontal', full: true,
+      showEngagement: true,
     });
     svg.setAttribute('class', 'tool-assembly tool-assembly-lathe');
     return svg;
@@ -527,6 +611,9 @@ function describeLatheTool(tool) {
     const mount = round(tool.mountAngle ?? 0);
     bits.push(mount ? `${eff}° lead (${round(tool.leadAngle ?? 95)}° ground, ${mount > 0 ? '+' : ''}${mount}° mount)`
       : `${eff}° lead`);
+    // The deepest cut the insert should take in one pass — the number the
+    // engagement drawing above is showing, in words.
+    bits.push(`max cut ~${(Math.round(recommendedDepthOfCut(tool) * 10) / 10).toFixed(1)}mm ap`);
   }
   if (tool.type === 'boring') {
     bits.push(`⌀${tool.diameter} bar`);

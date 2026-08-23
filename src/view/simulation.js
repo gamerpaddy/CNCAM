@@ -286,6 +286,100 @@ function faceInserts(tool) {
   return meshes;
 }
 
+/**
+ * The cut surface as a field of soft round splats rather than a triangle mesh.
+ *
+ * This is the answer to "the stock is pixelated and rough, and turning the
+ * detail up just makes it slow". Roughness on a height grid is the grid itself:
+ * a wall or a curve lands between two samples and is drawn one cell thick, so a
+ * dome terraces and a slope staircases. More cells cure it and cost time — but
+ * the *drawing* can cure it for free, because a splat is round and overlaps its
+ * neighbours. A ring of square facets becomes a wash of overlapping discs, and
+ * the staircase reads as the curve it stands for.
+ *
+ * It draws the very same buffers the mesh does — the shared position, colour and
+ * normal attributes the playback path already writes — so a splat surface costs
+ * nothing per frame that the mesh did not, and scrubbing updates it by the same
+ * writes. Only the *representation* changes; the simulation does not.
+ *
+ * Two looks come out of one shader: `splat` is a tight disc a little larger than
+ * a cell, which reads as a point cloud and shows where the samples are; `smooth`
+ * is a broad soft disc that swallows its neighbours whole, which reconstructs a
+ * continuous surface. Both are lit in world space against the same bright-room-
+ * over-two-key-lights the scene has (view/lighting.js), approximated rather than
+ * shared because a point cannot carry the standard material's fragment.
+ */
+const SPLAT_VERTEX = `
+  attribute vec3 color;
+  varying vec3 vColor;
+  varying vec3 vWorldNormal;
+  varying vec3 vWorldPos;
+  uniform float uRadius;       // splat radius in world units
+  uniform float uViewportH;    // drawing-buffer height in pixels
+  uniform float uPerspective;  // 1 for a perspective camera, 0 for orthographic
+  uniform float uMinZ;         // hide any vertex at or below this height (holes, skirt feet)
+  uniform float uMaxSize;      // clamp, so a splat seen up close cannot fill the screen
+  void main() {
+    vColor = color;
+    vWorldNormal = normalize(mat3(modelMatrix) * normal);
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWorldPos = wp.xyz;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mv;
+    if (position.z <= uMinZ) { gl_PointSize = 0.0; gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+    // projectionMatrix[1][1] is 1/tan(fov/2) on a perspective camera and
+    // 2/(top-bottom) on an orthographic one; the pixel size of a world radius is
+    // that, times half the viewport, divided by the view depth when there is
+    // perspective and not when there is not.
+    float denom = mix(1.0, -mv.z, uPerspective);
+    float size = uRadius * projectionMatrix[1][1] * uViewportH * 0.5 / max(denom, 1e-3);
+    gl_PointSize = clamp(size, 1.0, uMaxSize);
+    // The splats sit exactly on the mesh they overlay, so nudge them a hair
+    // toward the camera — otherwise they z-fight the solid top and flicker.
+    gl_Position.z -= 0.0002 * gl_Position.w;
+  }
+`;
+
+const SPLAT_FRAGMENT = `
+  precision mediump float;
+  varying vec3 vColor;
+  varying vec3 vWorldNormal;
+  varying vec3 vWorldPos;
+  uniform float uHardness;   // how quickly the disc fades to its rim
+  void main() {
+    vec2 d = gl_PointCoord * 2.0 - 1.0;
+    float r2 = dot(d, d);
+    if (r2 > 1.0) discard;             // round, not square
+    vec3 N = normalize(vWorldNormal);
+    if (!gl_FrontFacing) N = -N;
+    // The scene is a bright grey room with two overhead keys and a headlight
+    // (view/lighting.js). Approximated here: a strong ambient for the room, one
+    // key from above and toward the viewer, and a fill from the camera so a wall
+    // is never black.
+    vec3 key = normalize(vec3(0.35, -0.35, 1.0));
+    vec3 toEye = normalize(cameraPosition - vWorldPos);
+    float lambert = max(dot(N, key), 0.0);
+    float head = max(dot(N, toEye), 0.0);
+    // tuned to sit near the standard material's brightness: a generous room
+    // ambient, a key from above, and a headlight fill so no face is black
+    float shade = 0.72 + 0.5 * lambert + 0.25 * head;
+    // a soft specular sharpens the highlight the metal would carry
+    vec3 h = normalize(key + toEye);
+    float spec = pow(max(dot(N, h), 0.0), 24.0) * 0.28;
+    vec3 color = vColor * shade + spec;
+    // a gentle darkening toward the rim gives each splat a little roundness of
+    // its own, so an oblique surface does not read as flat tiles
+    color *= 1.0 - uHardness * r2 * 0.22;
+    gl_FragColor = vec4(color, 1.0);
+  }
+`;
+
+/** How much larger than a cell each style draws its splats, and how soft. */
+const SPLAT_LOOKS = {
+  splat: { scale: 1.35, hardness: 0.7 },
+  smooth: { scale: 2.4, hardness: 1.0 },
+};
+
 /** A lid on the top of the assembly, so it is a tool and not a length of pipe. */
 function capOfAssembly(tool, withHolder) {
   const sections = toolSections(tool);
@@ -306,6 +400,18 @@ export class SimulationView {
     this.group = new THREE.Group();
     scene.add(this.group);
     this.surface = null;
+    // The splat overlay: a THREE.Points drawn from the surface's own buffers.
+    // Which of it and the mesh is shown is `surfaceStyle`; both read the same
+    // geometry, so a scrub updates whichever is on the screen for free.
+    this.splat = null;
+    this.surfaceStyle = 'solid';
+    // How wide a cell is in world units, for sizing the splats — the mill's cell
+    // pitch or the bar's Z spacing, whichever this simulation is.
+    this.splatPitch = 1;
+    // Below this height a surface vertex is metal that is gone (a through hole)
+    // or the foot of the side wall; the splat of it is hidden so a hole does not
+    // read as floored. −∞ on the lathe, which has no such plane.
+    this.splatFloor = -Infinity;
     this.base = null;
     this.cutter = null;
     this.cutterKey = null;   // what the drawn cutter is, so a seek can reuse it
@@ -343,6 +449,83 @@ export class SimulationView {
       this.surface.material.needsUpdate = true;
       this.refreshNormals();
     }
+  }
+
+  /**
+   * How the cut surface is drawn: as the triangle mesh, or with a splat overlay.
+   *
+   * `solid` is the mesh alone. `splat` and `smooth` keep the mesh — so the
+   * billet stays a solid with proper sides and a floor — and lay a field of
+   * round splats over the *top*, which is where the grid shows as terracing and
+   * staircasing. The mesh underneath fills between them and holds the silhouette;
+   * the splats hide the facets. See buildSplatMaterial and SPLAT_LOOKS.
+   *
+   * Nothing about the simulation changes — same cells, same event log, same
+   * speed. This is the answer to "raising the detail to smooth it just makes it
+   * slow": the smoothing is in the drawing, not in the grid.
+   */
+  setSurfaceStyle(style) {
+    this.surfaceStyle = SPLAT_LOOKS[style] ? style : 'solid';
+    this.applySurfaceStyle();
+  }
+
+  /** A ShaderMaterial that draws one surface vertex as a lit, round splat. */
+  buildSplatMaterial() {
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        uRadius: { value: this.splatPitch },
+        uViewportH: { value: 800 },
+        uPerspective: { value: 1 },
+        uMinZ: { value: this.splatFloor },
+        uMaxSize: { value: 128 },
+        uHardness: { value: 0.7 },
+      },
+      vertexShader: SPLAT_VERTEX,
+      fragmentShader: SPLAT_FRAGMENT,
+    });
+  }
+
+  /**
+   * Build or drop the splat overlay to match `surfaceStyle`, and size it.
+   *
+   * The overlay shares the surface's geometry, so it is one object with no
+   * buffers of its own — the playback path that moves the mesh moves it too. It
+   * lives in the same node the surface does (the spinning work group on a lathe),
+   * so it turns with the bar.
+   */
+  applySurfaceStyle() {
+    if (!this.surface) return;
+    const useSplat = this.surfaceStyle !== 'solid';
+    if (useSplat && !this.splat) {
+      this.splat = new THREE.Points(this.surface.geometry, this.buildSplatMaterial());
+      this.splat.frustumCulled = false;
+      (this.surface.parent ?? this.group).add(this.splat);
+    }
+    if (this.splat) {
+      const look = SPLAT_LOOKS[this.surfaceStyle] ?? SPLAT_LOOKS.splat;
+      const u = this.splat.material.uniforms;
+      u.uRadius.value = this.splatPitch * look.scale;
+      u.uHardness.value = look.hardness;
+      u.uMinZ.value = this.splatFloor;
+      this.splat.visible = useSplat;
+    }
+    // The mesh stays on under the splats: it is the solid the splats sit on, and
+    // without it a splat billet would be see-through at the sides and hollow.
+  }
+
+  /**
+   * Keep the splat point size right as the camera and canvas change.
+   *
+   * A splat is sized in pixels from a world radius, which depends on the view
+   * depth under perspective and on nothing under an orthographic camera, and on
+   * how tall the drawing buffer is. The viewport calls this before each render so
+   * a splat is the same size on the metal however the camera is set.
+   */
+  syncSplat(camera, viewportHeight) {
+    if (!this.splat || !this.splat.visible) return;
+    const u = this.splat.material.uniforms;
+    u.uViewportH.value = viewportHeight || u.uViewportH.value;
+    u.uPerspective.value = camera?.isPerspectiveCamera ? 1 : 0;
   }
 
   /** Draw the shank and holder above the flutes, or just the cutting end. */
@@ -789,6 +972,12 @@ export class SimulationView {
     this.refreshNormals();
     this.group.add(this.surface);
 
+    // sizing and the hole/skirt cutoff for the splat overlay: a cell is one grid
+    // pitch wide, and anything at the stock bottom is metal that is gone
+    this.splatPitch = cellSize;
+    this.splatFloor = stockBottom + THROUGH_EPS;
+    this.applySurfaceStyle();
+
     // a flat base so the billet is closed when seen from below
     this.base = buildBase(sim);
     if (this.base) this.group.add(this.base);
@@ -910,6 +1099,11 @@ export class SimulationView {
     this.workGroup = new THREE.Group();
     this.workGroup.add(this.surface);
     this.group.add(this.workGroup);
+    // the splat overlay spins with the bar because it lives in the work group,
+    // and a Z sample is one `dz` apart along the axis
+    this.splatPitch = dz;
+    this.splatFloor = -Infinity;
+    this.applySurfaceStyle();
     return undefined;
   }
 
@@ -1240,9 +1434,15 @@ export class SimulationView {
         ? (kind === 'insert' ? bladeThickness : bladeThickness * 2.2)
         : (kind === 'insert' ? insertThickness : insertThickness * 1.6);
       const geometry = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
-      // centred on the plane the tool works in, so it reads the same from the
-      // front, from the back and from an isometric
-      geometry.translate(0, 0, -depth / 2);
+      // The rake face sits ON the cutting plane (Y = 0) and the body extrudes
+      // away from it, rather than straddling it. Straddling put the front face
+      // half a thickness *ahead* of where the metal actually comes off — the
+      // simulation removes stock in the ZX plane and the contact marker sits
+      // there too — so the cut read as happening inside the tool's mid-thickness
+      // rather than on its edge. ExtrudeGeometry builds the shape at z = 0 and
+      // pushes it to +z, which `toScene` sends to +Y; the default view looks
+      // along −Y, so the rake face (the z = 0 cap, facing −Y) is the one you see,
+      // its cutting edge on the plane, and the body trails behind it out of shot.
       geometry.applyMatrix4(toScene);
       group.add(new THREE.Mesh(geometry, MATERIALS[kind] ?? MATERIALS.insert));
     }
@@ -1259,6 +1459,14 @@ export class SimulationView {
 
   clear() {
     this.setCutter(null);
+    // The splat overlay shares the surface's geometry, so only its material is
+    // its own to dispose; the geometry goes when the surface does, below. Nulled
+    // so the next simulation builds a fresh overlay on its own grid.
+    if (this.splat) {
+      this.splat.parent?.remove(this.splat);
+      this.splat.material.dispose();
+      this.splat = null;
+    }
     // rebuilt rather than reused: its size comes from the grid, and the next
     // simulation is a different grid
     for (const key of ['surface', 'base', 'cutMarker']) {

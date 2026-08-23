@@ -154,6 +154,26 @@ export const SETTINGS = [
       + 'step between two passes is still there, because it is real.',
   },
   {
+    key: 'simSurfaceStyle',
+    label: 'Surface style',
+    group: 'Simulation',
+    type: 'select',
+    options: ['solid', 'splat', 'smooth'],
+    labels: {
+      solid: 'Solid — the triangle mesh',
+      splat: 'Splat — soft round points',
+      smooth: 'Smooth — merged splats',
+    },
+    default: 'solid',
+    hint: 'How the cut stock is drawn, which is a different question from how '
+      + 'finely it is gridded. A height grid terraces a dome and staircases a '
+      + 'slope one cell at a time, and raising the detail to cure that just makes '
+      + 'the run slow. These draw the *same* grid with overlapping round splats '
+      + 'instead of square facets: Splat reads as a point cloud and shows where '
+      + 'the samples are, Smooth spreads them until they merge into a continuous '
+      + 'surface. Neither changes the simulation or its speed — only the picture.',
+  },
+  {
     key: 'showHolder',
     label: 'Draw the shank and holder',
     group: 'Simulation',

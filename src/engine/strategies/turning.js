@@ -45,6 +45,7 @@ import {
   turningProfile, radiusAtZ, barFromStock, offsetProfile, profilePoints, profileRange,
   boreProfile, hasBore,
 } from '../lathe.js';
+import { insertEngagement, recommendedDepthOfCut } from '../insert.js';
 
 /** Everything the strategies share: the profile, the bar, and where safety is. */
 function turningContext({ mesh, params, stock, tool, fixtures }) {
@@ -139,6 +140,27 @@ function approachRadially(cl, radius, z, internal) {
 function round(v) { return Math.round(v * 1000) / 1000; }
 
 function dia(radius) { return (radius * 2).toFixed(2); }
+
+/**
+ * Warn when a pass would cut deeper than the insert should take in one bite.
+ *
+ * A turning insert cuts on a corner, so a depth of cut past about two-thirds of
+ * its cutting edge overloads the corner and breaks it rather than wearing it —
+ * and unlike a milling overload there is no radial width to plead in mitigation.
+ * The limit is the insert's own geometry (see engine/insert.js), so the same
+ * number the tool's drawing shows is the one a pass is held to.
+ *
+ * Advisory: it says the cut is heavy, it does not refuse it — the operator may
+ * know the machine and the material better than a rule of thumb can.
+ */
+function warnIfOverDepth(cl, tool, ap, what = 'this depth of cut') {
+  const apMax = recommendedDepthOfCut(tool);
+  if (!(ap > apMax + 1e-6)) return;
+  const eng = insertEngagement(tool, ap);
+  cl.warn(`${what} is ${round(ap)}mm — more than the ~${round(apMax)}mm this insert `
+    + `should take in one pass (it engages ${(eng.fraction * 100).toFixed(0)}% of the `
+    + 'cutting edge). Reduce the stepdown, or the insert may break.');
+}
 
 /** A recess narrower than this along the bar is a tessellation artefact. */
 const RECESS_MIN_DEPTH = 0.3;
@@ -278,6 +300,7 @@ export function generateTurnRough({ mesh, tool, params, stock, fixtures }) {
   const ctx = turningContext({ mesh, params, stock, tool, fixtures });
   const { profile, bar, clearX, allowance, nose } = ctx;
   const step = Math.max(0.05, params.stepdown ?? 1);
+  warnIfOverDepth(cl, tool, step, 'the roughing stepdown');
   const zEnd = limitToChuck(cl, ctx);
 
   const zHi = Math.max(ctx.zStart, zEnd);
@@ -1160,6 +1183,7 @@ export function generateTurnBore({ mesh, tool, params, stock, fixtures }) {
   const { allowance, nose, bar } = ctx;
   const bore = boreProfile(mesh, { samples: 600 });
   const step = Math.max(0.05, params.stepdown ?? 0.8);
+  warnIfOverDepth(cl, tool, step, 'the boring stepdown');
   let zEnd = limitToChuck(cl, ctx, 'internal');
 
   const zHi = Math.max(ctx.zStart, zEnd);

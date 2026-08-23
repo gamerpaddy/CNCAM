@@ -1396,6 +1396,55 @@ kbd {
 .wiz-name-row { grid-template-columns: 1fr; gap: 4px; }
 .wiz-name-row input { width: 100%; }
 
+/* the custom-shape row: a button (and a Clear) rather than a number field */
+.wiz-shape-row { grid-template-columns: 1fr auto; align-items: center; }
+.wiz-shape-row button {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.wiz-shape-row button:hover { border-color: var(--accent); }
+.wiz-shape-row .wiz-shape-clear { color: var(--fg-dim); margin-left: 6px; }
+
+/* the custom-insert shape editor */
+.shape-dialog { width: min(620px, 94vw); }
+.shape-body { display: flex; gap: 16px; align-items: flex-start; }
+.shape-canvas-wrap {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  flex: 0 0 auto;
+}
+.shape-canvas { display: block; touch-action: none; }
+.shape-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.shape-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.shape-tools button {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.shape-tools button:hover { border-color: var(--accent); }
+.shape-preview { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
+
+.shape-grid { stroke: var(--border); stroke-width: 0.008; }
+.shape-axis { stroke: var(--fg-dim); stroke-width: 0.012; opacity: 0.6; }
+.shape-poly { fill: rgba(233, 196, 106, 0.25); stroke: var(--accent); stroke-width: 0.02; stroke-linejoin: round; }
+.shape-mid { fill: var(--fg-dim); opacity: 0.5; cursor: copy; }
+.shape-handle { fill: var(--bg-panel); stroke: var(--accent); stroke-width: 0.02; cursor: grab; }
+.shape-handle.selected { stroke-width: 0.035; }
+.shape-handle.cutting { fill: var(--accent); stroke: #fff; }
+
 .wiz-preview { display: flex; gap: 12px; align-items: flex-start; }
 /* a lathe tool is drawn lying down, so its description goes underneath it
    rather than into the sliver of column left beside it */

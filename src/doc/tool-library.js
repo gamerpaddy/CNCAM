@@ -131,6 +131,7 @@ const BASE = {
   leadAngle: null,
   mountAngle: 0,
   insertAngle: 60,
+  customPoints: null,
   minBore: 0,
   maxDepth: 0,
   fluteLength: 20,
@@ -173,6 +174,9 @@ export function toolFromPreset(preset, number = 1) {
       : (type === 'turning' ? 95 : type === 'boring' ? 92 : 0),
     mountAngle: Number.isFinite(merged.mountAngle) ? merged.mountAngle : 0,
     insertAngle: merged.insertAngle ?? 60,
+    // A hand-drawn custom insert outline, when the shape is 'X'. An array of
+    // [x, y] with the cutting corner first, or null for the rhombus fallback.
+    customPoints: Array.isArray(merged.customPoints) ? merged.customPoints : null,
     minBore: merged.minBore ?? 0,
     maxDepth: merged.maxDepth ?? 0,
     cornerRadius: merged.cornerRadius ?? 0,

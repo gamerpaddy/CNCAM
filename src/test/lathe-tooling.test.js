@@ -11,6 +11,7 @@ import { test, assert } from './runner.js';
 import {
   insertOutline, parseInsertCode, latheToolOutline, isLatheTool, insertIcOf,
   INSERT_SHAPES, INSERT_LETTERS, toolPose, effectiveLead, cornerAngleOf,
+  insertEngagement, recommendedDepthOfCut, cuttingEdgeLength, polygonCornerAngle,
 } from '../engine/insert.js';
 import { toolSections, latheReachOf } from '../engine/tool-geometry.js';
 import { toolFromPreset, allPresets, machineCanHold } from '../doc/tool-library.js';
@@ -198,6 +199,133 @@ test('a custom insert takes its corner angle from the tool, not from a letter', 
     return Math.max(...o.points.map(([x, y]) => Math.hypot(x, y)));
   };
   assert.ok(reach(35) > reach(100), 'a 35° custom corner reaches further than a 100° one');
+});
+
+// --- engagement: where the insert meets the work, and how much of it ---------
+
+test('a deeper cut engages more of the cutting edge, and past a limit is flagged', () => {
+  const t = { type: 'turning', insert: 'C', insertIc: 12.7, noseRadius: 0.8, hand: 'R', leadAngle: 95 };
+  const apMax = recommendedDepthOfCut(t);
+  assert.ok(apMax > 1 && apMax < cuttingEdgeLength(t),
+    `a sane max depth of cut, got ${apMax.toFixed(2)} on a ${cuttingEdgeLength(t).toFixed(1)}mm edge`);
+
+  const light = insertEngagement(t, 0.5);
+  const heavy = insertEngagement(t, apMax * 0.9);
+  assert.ok(heavy.engagedLength > light.engagedLength, 'more depth, more edge in the cut');
+  assert.ok(!light.overloaded && !heavy.overloaded, 'a cut inside the limit is not flagged');
+  assert.ok(insertEngagement(t, apMax * 1.3).overloaded, 'and one past it is');
+
+  // the engaged edge starts at the nose contact (the origin) and climbs to the
+  // depth of cut — that is what "where it engages" means
+  const e = insertEngagement(t, 2);
+  assert.close(Math.hypot(e.edge[0][0], e.edge[0][1]), 0, 1e-6, 'the cut starts at the nose');
+  assert.close(e.edge[1][1], 2, 0.05, 'and reaches the depth of cut');
+});
+
+test('a sharper insert is held to a shallower cut than a strong one', () => {
+  const ic = 12.7;
+  const strong = recommendedDepthOfCut({ type: 'turning', insert: 'S', insertIc: ic, noseRadius: 0.8, leadAngle: 75 });
+  const mid = recommendedDepthOfCut({ type: 'turning', insert: 'C', insertIc: ic, noseRadius: 0.8, leadAngle: 95 });
+  const sharp = recommendedDepthOfCut({ type: 'turning', insert: 'V', insertIc: ic, noseRadius: 0.4, leadAngle: 93 });
+  assert.ok(strong > mid && mid > sharp,
+    `a square should take more than a rhombus than a V: ${strong.toFixed(1)} ${mid.toFixed(1)} ${sharp.toFixed(1)}`);
+});
+
+test('a boring bar engages inward, an OD tool outward', () => {
+  // The removed stock sits above the nose for an OD tool (it cuts down to size)
+  // and below it for a boring bar (it opens a hole outward). The engaged edge
+  // has to follow, or the whole reading is inside-out.
+  const od = insertEngagement({ type: 'turning', insert: 'C', insertIc: 12, noseRadius: 0.4, leadAngle: 95 }, 2);
+  const bore = insertEngagement({ type: 'boring', insert: 'C', insertIc: 6.35, noseRadius: 0.4, leadAngle: 92 }, 1);
+  assert.ok(od.edge[1][1] > 0, 'the OD tool climbs into stock above its nose');
+  assert.ok(bore.edge[1][1] < 0, 'the boring bar into stock below it');
+});
+
+test('the roughing pass warns when the stepdown would break the insert', () => {
+  // A finishing insert asked to rough: the stepdown is far past what its edge
+  // can take, and the operation should say so rather than emit a program that
+  // snaps the corner off.
+  const heavy = generate('turnRough', {
+    topZ: SHAFT_STOCK.max[2], bottomZ: SHAFT_STOCK.min[2] + 2, stepdown: 6,
+  }, 'DCMT 070204 finishing');
+  assert.ok(heavy.notes.some((n) => n.level === 'warn' && /break/.test(n.text)),
+    'a 6mm stepdown on a small finishing insert must warn');
+
+  // and a sensible cut on a rougher says nothing about breaking
+  const ok = generate('turnRough', {
+    topZ: SHAFT_STOCK.max[2], bottomZ: SHAFT_STOCK.min[2] + 2, stepdown: 1.5,
+  }, 'CNMG 120408 rougher');
+  assert.ok(!ok.notes.some((n) => /break/.test(n.text)),
+    'a 1.5mm cut on a big rougher is fine');
+});
+
+// --- custom insert shapes ----------------------------------------------------
+
+test('a hand-drawn custom insert is measured from its own polygon', () => {
+  // vertex 0 is the cutting corner; a roughly-square outline has a ~90° corner
+  const square = [[0, -1], [1, -1], [1, 1], [-1, 1], [-1, -1]].slice();
+  const kite = [[0, -1.4], [0.6, -0.2], [0.4, 0.9], [-0.4, 0.9], [-0.6, -0.2]];
+  assert.close(polygonCornerAngle([[0, -1], [1, 0], [0, 1], [-1, 0]]), 90, 1,
+    'a square-cornered rhombus reads 90°');
+
+  const tool = { type: 'turning', insert: 'X', insertIc: 12, noseRadius: 0.4, hand: 'R', leadAngle: 95, customPoints: kite };
+  // the outline draws, the engagement works, and the corner angle comes from the
+  // drawing rather than from the tool's fallback insertAngle
+  assert.eq(cornerAngleOf(tool), polygonCornerAngle(kite));
+  assert.ok(cornerAngleOf(tool) !== 60, 'not the rhombus fallback angle');
+  const sections = latheToolOutline(tool);
+  assert.ok(sections.find((s) => s.kind === 'insert').points.length > 4, 'a real filleted outline');
+  assert.ok(recommendedDepthOfCut(tool) > 0 && insertEngagement(tool, 2).engagedLength > 0);
+
+  // with no polygon, 'X' still falls back to a rhombus of insertAngle
+  assert.eq(cornerAngleOf({ insert: 'X', insertAngle: 47 }), 47);
+});
+
+test('a custom insert keeps its cutting point at the origin, and the engagement agrees', () => {
+  // The drawing brings the tool's cutting point to the origin. A hand-drawn
+  // insert whose lowest point is not the corner the user marked used to float
+  // the whole tool off the axis — and the engagement, which assumed vertex 0,
+  // then measured from a point that was not even touching the work.
+  const odd = {
+    type: 'turning', insert: 'X', insertIc: 12, noseRadius: 0.3, hand: 'R', leadAngle: 95,
+    customPoints: [[0, -1], [0.6, -0.2], [0.5, 0.9], [-0.5, 0.9], [-0.9, -1.3]],
+  };
+  const insert = latheToolOutline(odd).find((s) => s.kind === 'insert').points;
+  let tip = insert[0];
+  for (const p of insert) if (Math.hypot(p[0], p[1]) < Math.hypot(tip[0], tip[1])) tip = p;
+  assert.close(Math.hypot(tip[0], tip[1]), 0, 1e-6, 'the drawn tip sits on the origin');
+
+  const e = insertEngagement(odd, 2);
+  assert.close(Math.hypot(e.edge[0][0], e.edge[0][1]), 0, 1e-6,
+    'and the engagement starts from that same point');
+  assert.ok(e.engagedLength > 0 && e.engagedLength < 10, 'with a sane engaged length');
+});
+
+test('a degenerate custom outline falls back rather than blowing up to metres', () => {
+  // Three points in a line have no inscribed circle; scaling that to the IC used
+  // to produce a 3600mm "tool". It must fall back to a real insert instead.
+  const line = {
+    type: 'turning', insert: 'X', insertIc: 12, noseRadius: 0.3, leadAngle: 95,
+    customPoints: [[0, -1], [0.01, 0], [0, 1]],
+  };
+  assert.ok(cuttingEdgeLength(line) < 20, `edge length ${cuttingEdgeLength(line).toFixed(1)}mm is sane`);
+  assert.ok(recommendedDepthOfCut(line) > 0 && recommendedDepthOfCut(line) < 12, 'and a sane max depth');
+  const insert = latheToolOutline(line).find((s) => s.kind === 'insert').points;
+  const span = Math.max(...insert.map((p) => Math.hypot(p[0], p[1])));
+  assert.ok(span < 30, `the drawn insert is ${span.toFixed(1)}mm, not metres`);
+});
+
+test('a custom insert survives the trip through the tool library', () => {
+  const pts = [[0, -1], [0.7, -0.1], [0.4, 0.9], [-0.4, 0.9], [-0.7, -0.1]];
+  const built = toolFromPreset({
+    name: 'custom form tool', type: 'turning', insert: 'X', insertIc: 10,
+    noseRadius: 0.4, customPoints: pts,
+  }, 3);
+  assert.ok(Array.isArray(built.customPoints) && built.customPoints.length === 5,
+    'the drawn outline is kept on the tool');
+  assert.eq(cornerAngleOf(built), polygonCornerAngle(pts));
+  // a tool that never had one keeps null rather than an invented shape
+  assert.eq(toolFromPreset({ type: 'turning', insert: 'C', insertIc: 12 }, 1).customPoints, null);
 });
 
 test('two tools of a different lead angle are drawn as different tools', () => {

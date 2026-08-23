@@ -81,7 +81,7 @@ export const INSERT_HAND_LABELS = {
  * @param noseRadius corner radius, mm
  * @returns { points: [[x, y], …], cornerAt: [x, y], ic }
  */
-export function insertOutline(shape, ic = 12, noseRadius = 0.8, segments = ARC_SEGMENTS, cornerAngle = null) {
+export function insertOutline(shape, ic = 12, noseRadius = 0.8, segments = ARC_SEGMENTS, cornerAngle = null, customPoints = null) {
   const spec = INSERT_SHAPES[shape] ?? INSERT_SHAPES.C;
   const r = Math.max(0.5, ic) / 2;
 
@@ -95,26 +95,96 @@ export function insertOutline(shape, ic = 12, noseRadius = 0.8, segments = ARC_S
     return { points, cornerAt: [0, -r], ic };
   }
 
-  // A custom insert is a rhombus of whatever angle it was given — the one shape
-  // that takes its corner angle from the tool rather than from the letter.
+  const scaled = scaledInsert(shape, ic, cornerAngle, customPoints);
+  // never a nose bigger than the insert can hold: a 1.2mm nose on a 6mm IC
+  // V insert is not a rounded corner, it is a different shape
+  const nose = Math.min(Math.max(0, noseRadius), r * 0.6);
+  const points = filletPolygon(scaled, nose, segments);
+  return { points, cornerAt: scaled[0], ic };
+}
+
+/**
+ * The insert's *sharp* polygon, scaled to the inscribed circle — the shape
+ * before the nose radius rounds the corner off.
+ *
+ * The cutting corner is vertex 0, pointing at −Y. Kept as its own function
+ * because two things need the sharp corners rather than the rounded outline: the
+ * fillet (which needs a corner to round), and the engagement geometry (which
+ * needs the straight cutting edges the arc would otherwise hide — see
+ * `insertEngagement`). Building it in one place is what stops the drawing and
+ * the engagement from disagreeing about where an edge is.
+ *
+ * @param customPoints for the custom shape 'X': an explicit polygon, cutting
+ *   corner first, in any consistent scale. Falls back to a rhombus of
+ *   `cornerAngle` when absent, so an 'X' tool with only an angle still draws.
+ */
+export function scaledInsert(shape, ic = 12, cornerAngle = null, customPoints = null) {
+  const spec = INSERT_SHAPES[shape] ?? INSERT_SHAPES.C;
+  const r = Math.max(0.5, ic) / 2;
+  // A custom insert is either an explicit polygon the user drew, or — with only
+  // an angle to go on — a rhombus of that angle. Both are the one shape that
+  // takes its geometry from the tool rather than from the letter.
   const custom = spec.kind === 'custom'
     ? Math.max(20, Math.min(160, cornerAngle ?? spec.cornerAngle))
     : null;
-  const raw = spec.kind === 'regular' ? regularPolygon(spec.sides)
+  let raw = spec.kind === 'regular' ? regularPolygon(spec.sides)
     : spec.kind === 'trigon' ? trigon()
-      : rhombus(custom ?? spec.cornerAngle);
+      : spec.kind === 'custom' && isPolygon(customPoints) ? seatCorner(customPoints)
+        : rhombus(custom ?? spec.cornerAngle);
+
+  // A degenerate custom polygon — three points in a line, or a sliver — has
+  // almost no inscribed circle, and scaling *that* up to the real IC blows the
+  // shape up to metres across. It is not an insert, so it falls back to the
+  // rhombus the corner angle describes rather than drawing nonsense.
+  if (spec.kind === 'custom' && isPolygon(customPoints)) {
+    const extent = Math.max(...raw.map(([x, y]) => Math.hypot(x, y)));
+    // a plain 80° rhombus, not one of the degenerate angle the sliver measured
+    if (!(inradius(raw) > extent * 0.05)) raw = rhombus(80);
+  }
 
   // Built at an arbitrary scale, then scaled so the inscribed circle is right.
   // Solving each shape's vertex radius in closed form is three different pieces
   // of trigonometry; measuring the incircle is one, and it cannot disagree with
   // the polygon it measured.
   const scale = r / inradius(raw);
-  const scaled = raw.map(([x, y]) => [x * scale, y * scale]);
-  // never a nose bigger than the insert can hold: a 1.2mm nose on a 6mm IC
-  // V insert is not a rounded corner, it is a different shape
-  const nose = Math.min(Math.max(0, noseRadius), r * 0.6);
-  const points = filletPolygon(scaled, nose, segments);
-  return { points, cornerAt: scaled[0], ic };
+  return raw.map(([x, y]) => [x * scale, y * scale]);
+}
+
+/** Is this a usable custom polygon — at least a triangle of finite points? */
+export function isPolygon(points) {
+  return Array.isArray(points) && points.length >= 3
+    && points.every((p) => Array.isArray(p) && p.length === 2
+      && Number.isFinite(p[0]) && Number.isFinite(p[1]));
+}
+
+/**
+ * Normalise a custom polygon to the same frame the lettered shapes are built
+ * in: centred on its centroid, with the cutting corner (vertex 0) pointing at
+ * −Y and the body above it.
+ *
+ * This is what lets a hand-drawn insert be placed, filleted, engaged and drawn
+ * by exactly the code the catalogue shapes use — the editor draws in whatever
+ * frame is convenient, and this is the one place that frame is made to match the
+ * `rhombus`/`regularPolygon` convention (corner at −Y, bisector up +Y). Every
+ * downstream reader — the seating in `latheToolOutline`, the walk in
+ * `insertEngagement`, and `cornerAngleOf` — treats vertex 0 as the cutting
+ * corner, so this is the one place that guarantees the user's marked corner *is*
+ * vertex 0.
+ */
+function seatCorner(points) {
+  let cx = 0;
+  let cy = 0;
+  for (const [x, y] of points) { cx += x; cy += y; }
+  cx /= points.length;
+  cy /= points.length;
+  const centred = points.map(([x, y]) => [x - cx, y - cy]);
+  // rotate so the cutting corner (vertex 0) points at −Y
+  const c0 = centred[0];
+  const have = Math.atan2(c0[1], c0[0]);
+  const rot = -Math.PI / 2 - have;
+  const cos = Math.cos(rot);
+  const sin = Math.sin(rot);
+  return centred.map(([x, y]) => [x * cos - y * sin, x * sin + y * cos]);
 }
 
 /** A regular n-gon with one vertex pointing at −Y, circumradius 1. */
@@ -226,6 +296,17 @@ function unit(x, y) {
   return [x / len, y / len];
 }
 
+/** The point of `points` closest to `to` — used to find a corner after filleting. */
+function nearestPoint(points, to) {
+  let best = points[0];
+  let bd = Infinity;
+  for (const p of points) {
+    const d = (p[0] - to[0]) ** 2 + (p[1] - to[1]) ** 2;
+    if (d < bd) { bd = d; best = p; }
+  }
+  return best;
+}
+
 // --- placing the insert on a tool ------------------------------------------
 //
 // Everything above is the insert on its own. A tool is that insert held at an
@@ -251,8 +332,25 @@ export function isLatheTool(type) {
  */
 export function cornerAngleOf(tool) {
   const shape = INSERT_SHAPES[tool?.insert] ?? INSERT_SHAPES.C;
-  if (shape.kind === 'custom') return Math.max(20, Math.min(160, tool?.insertAngle ?? 60));
-  return shape.cornerAngle;
+  if (shape.kind !== 'custom') return shape.cornerAngle;
+  // An explicit custom polygon carries its own corner angle in its geometry:
+  // the included angle at the cutting vertex is a fact about the drawing, not a
+  // second number to keep in step with it. Only when there is no polygon does
+  // the tool's `insertAngle` (the rhombus fallback) decide.
+  if (isPolygon(tool?.customPoints)) return polygonCornerAngle(tool.customPoints);
+  return Math.max(20, Math.min(160, tool?.insertAngle ?? 60));
+}
+
+/** The included angle (degrees) at the cutting corner — vertex 0 — of a polygon. */
+export function polygonCornerAngle(points) {
+  const seated = seatCorner(points);
+  const c = seated[0];
+  const p = seated[seated.length - 1];
+  const q = seated[1];
+  const u = unit(p[0] - c[0], p[1] - c[1]);
+  const v = unit(q[0] - c[0], q[1] - c[1]);
+  const cos = Math.max(-1, Math.min(1, u[0] * v[0] + u[1] * v[1]));
+  return (Math.acos(cos) * 180) / Math.PI;
 }
 
 /**
@@ -350,14 +448,23 @@ export function latheToolOutline(tool, { holderLength = null, bladeDepth = null 
   if (type === 'parting') return partingOutline(tool, holderLength, bladeDepth, nose);
 
   const shape = tool?.insert ?? defaultShapeFor(type);
-  const points = type === 'threading'
-    ? threadingInsert(tool, ic)
+  const outline = type === 'threading'
+    ? { points: threadingInsert(tool, ic), cornerAt: [0, 0] }
     : insertOutline(shape, ic, nose, ARC_SEGMENTS,
-      shape === 'X' ? cornerAngleOf(tool) : null).points;
-  // the outline's cutting corner points at −Y; bring it to the origin, then
-  // rotate the whole insert to the tool's lead angle
-  const lowest = points.reduce((lo, p) => (p[1] < lo ? p[1] : lo), Infinity);
-  const seated = points.map(([x, y]) => [x, y - lowest]);
+      shape === 'X' ? cornerAngleOf(tool) : null,
+      shape === 'X' ? tool?.customPoints : null);
+  const points = outline.points;
+  // Seat the *marked* cutting corner at the origin, then rotate to the lead
+  // angle. The cutting corner is a known vertex — `cornerAt`, the sharp corner
+  // the outline was built around, which `cornerAngleOf` also measures — not
+  // simply the lowest point: a hand-drawn custom insert can have another vertex
+  // dip lower, and seating on *that* would cut on a corner the user never marked
+  // and whose angle nothing reports (the two-descriptions bug this file fights).
+  // We seat on the filleted point nearest that sharp corner — the bottom of its
+  // nose arc — which for the symmetric catalogue shapes is exactly the lowest
+  // point, so their drawing is unchanged.
+  const tip = nearestPoint(points, outline.cornerAt);
+  const seated = points.map(([x, y]) => [x - tip[0], y - tip[1]]);
   const insert = seated.map(rotator(pose.rotationDeg));
 
   const shankWidth = Math.max(4, ic * 0.9);
@@ -495,6 +602,192 @@ export function latheToolBounds(sections) {
     }
   }
   return { minZ, maxZ, minX, maxX };
+}
+
+// --- engagement: where the insert meets the work, and whether it is too much --
+//
+// A turning insert cuts on a corner, not on a disc, so the number that says
+// whether a cut is heavy is the depth of cut — how much radius the tool takes
+// in one pass — and how much of the cutting edge that depth engages. Too much
+// engaged edge is how an insert is broken rather than worn, so this is worth
+// drawing (see app/tool-shape.js) and worth warning about (see the strategies).
+//
+// Everything here is measured off the same sharp insert the drawing is built
+// from, in the same (Z, radius) frame, so the picture and the numbers cannot
+// disagree — the recurring bug in this codebase is two descriptions of one
+// shape (see [one description, not two]).
+
+/**
+ * The insert, seated and posed exactly as `latheToolOutline` draws it, but as
+ * the *sharp* polygon — the nose is a true vertex with two straight cutting
+ * edges rather than an arc, which is what the engagement geometry has to walk.
+ *
+ * @returns {{ points: [[z, x], …], noseIndex }} the cutting corner at the
+ *   origin (radius up), and which vertex it is
+ */
+export function seatedInsert(tool, { sharp = true } = {}) {
+  const type = tool?.type ?? 'turning';
+  const pose = toolPose(tool);
+  const ic = insertIcOf(tool);
+  const nose = Math.max(0, tool?.noseRadius ?? 0);
+  const shape = tool?.insert ?? defaultShapeFor(type);
+  const custom = shape === 'X' ? cornerAngleOf(tool) : null;
+  const customPts = shape === 'X' ? tool?.customPoints : null;
+  const pts = sharp
+    ? scaledInsert(shape, ic, custom, customPts)
+    : insertOutline(shape, ic, nose, ARC_SEGMENTS, custom, customPts).points;
+  // The same seat-then-rotate the outline does, then the left-hand mirror it
+  // applies to the finished sections — kept in step so this frame is the frame
+  // the tool is drawn in. The cutting corner is vertex 0: every builder
+  // (`rhombus`, `regularPolygon`, `trigon`, `seatCorner`) puts the marked corner
+  // there, and `cornerAngleOf` measures it there. It is *not* re-derived as the
+  // lowest point — for a symmetric catalogue insert that is vertex 0 anyway, but
+  // a hand-drawn custom can have another vertex dip lower, and walking the
+  // engagement from that one would read a corner the user never marked.
+  const noseIndex = 0;
+  const tip = pts[noseIndex];
+  const seated = pts.map(([x, y]) => [x - tip[0], y - tip[1]]).map(rotator(pose.rotationDeg));
+  const points = pose.flipZ ? seated.map(([z, x]) => [-z, x]) : seated;
+  return { points, noseIndex };
+}
+
+/**
+ * The length of the insert's cutting edge, mm — the straight edge running back
+ * from the nose corner, which is what a depth of cut is spent against.
+ *
+ * A round insert has no straight edge; its whole periphery cuts, so the usable
+ * length is taken as the inscribed circle, which is the honest "how much edge is
+ * there" for it.
+ */
+export function cuttingEdgeLength(tool) {
+  const ic = insertIcOf(tool);
+  const shape = tool?.insert ?? 'C';
+  if ((INSERT_SHAPES[shape] ?? INSERT_SHAPES.C).kind === 'round') return ic;
+  const poly = scaledInsert(shape, ic,
+    shape === 'X' ? cornerAngleOf(tool) : null,
+    shape === 'X' ? tool?.customPoints : null);
+  // the two edges at the cutting corner — vertex 0, the marked corner the
+  // engagement also walks from (see seatedInsert) so the two agree on which
+  // corner is cutting. The cut is taken against the shorter of them, the one
+  // that runs out first.
+  const ci = 0;
+  const c = poly[ci];
+  const a = poly[(ci - 1 + poly.length) % poly.length];
+  const b = poly[(ci + 1) % poly.length];
+  const la = Math.hypot(a[0] - c[0], a[1] - c[1]);
+  const lb = Math.hypot(b[0] - c[0], b[1] - c[1]);
+  return Math.min(la, lb);
+}
+
+/**
+ * How much of the cutting edge a depth of cut engages, and whether that is more
+ * than the insert should be asked to take.
+ *
+ * The engaged edge is found by geometry rather than by a textbook formula,
+ * because the app's lead angle already orients the drawn insert and the honest
+ * question is "how much of *that* edge is in the metal": the tool is seated with
+ * its nose at the origin, the pass has taken a band of stock `ap` deep (a band
+ * of radius, from the nose out to `ap` above it), and the engaged edge is the
+ * leading cutting edge walked from the nose until it climbs out of that band.
+ *
+ * A low lead angle lays the edge nearly along the bar, so the same depth engages
+ * a long stretch of it — a thinner chip spread over more edge — and a near-90°
+ * edge engages barely more than the depth itself. Both fall straight out of the
+ * geometry, which is the point of measuring rather than reading.
+ *
+ * @returns {{ ap, engagedLength, edgeLength, fraction, apMax, overloaded,
+ *   edge:[[z,x],[z,x]], band:[[z,x],…] }}
+ */
+export function insertEngagement(tool, ap) {
+  const depth = Math.max(0, ap);
+  const edgeLength = cuttingEdgeLength(tool);
+  const apMax = recommendedDepthOfCut(tool);
+  const shape = tool?.insert ?? 'C';
+  const round = (INSERT_SHAPES[shape] ?? INSERT_SHAPES.C).kind === 'round';
+  // Which way the metal sits. An OD tool cuts down to its nose, so the stock it
+  // is removing is *above* the nose in radius (+x); a boring bar opens a hole
+  // outward, so the stock is *below* it (−x). Getting this backwards is the
+  // inside/outside sign error the whole lathe file warns about.
+  const into = tool?.type === 'boring' ? -1 : 1;
+  const result = (engagedLength, edge) => ({
+    ap: depth,
+    engagedLength,
+    edgeLength,
+    fraction: edgeLength > 0 ? engagedLength / edgeLength : 0,
+    apMax,
+    overloaded: depth > apMax + 1e-6,
+    edge,
+    band: [edge[0], edge[1], [edge[1][0], edge[0][1]]],
+  });
+
+  if (round) {
+    // No straight edge: the engaged length is the arc the nose rolls through to
+    // reach `ap` deep, on a circle of the nose radius.
+    const rN = Math.max(0.5, tool?.noseRadius || insertIcOf(tool) / 2);
+    const theta = Math.acos(Math.max(-1, 1 - Math.min(depth, 2 * rN) / rN));
+    const nose = [0, 0];
+    const end = [-Math.sin(theta) * rN, into * (1 - Math.cos(theta)) * rN];
+    return result(Math.min(edgeLength, rN * theta), [nose, end]);
+  }
+
+  const { points: poly, noseIndex } = seatedInsert(tool, { sharp: true });
+  const nose = poly[noseIndex];               // the tip that reaches the work
+  const neighbours = [poly[(noseIndex + 1) % poly.length],
+    poly[(noseIndex - 1 + poly.length) % poly.length]];
+  const cand = neighbours.map((p) => ({
+    dir: unit(p[0] - nose[0], p[1] - nose[1]),
+    span: Math.hypot(p[0] - nose[0], p[1] - nose[1]),
+  }));
+  // The leading cutting edge is the one that climbs into the metal — furthest in
+  // the `into` direction per unit length. The other neighbour runs along the
+  // finished surface and cuts nothing in a straight pass.
+  const lead = into * cand[0].dir[1] >= into * cand[1].dir[1] ? cand[0] : cand[1];
+  const rise = Math.max(1e-6, into * lead.dir[1]);   // radius climbed per unit edge
+  // length along the edge to reach `ap` deep, capped at the edge itself: past the
+  // vertex the cut is on the next edge, a different and usually catastrophic
+  // engagement the warning exists to forbid
+  const engagedLength = Math.min(lead.span, depth / rise);
+  const end = [nose[0] + lead.dir[0] * engagedLength, nose[1] + lead.dir[1] * engagedLength];
+  return result(engagedLength, [nose, end]);
+}
+
+/**
+ * The deepest cut this insert should take in one pass, mm.
+ *
+ * The rule of thumb is that a depth of cut past about two-thirds of the cutting
+ * edge is asking to break the insert, and a sharper corner is weaker still — a
+ * 35° V insert cannot take what an 80° C insert can out of the same inscribed
+ * circle. So the safe fraction of the edge scales with the corner angle, and the
+ * depth that fraction of edge corresponds to depends on how steeply the lead lays
+ * the edge into the cut: a shallow lead spends a long edge on a small depth.
+ *
+ * Advisory, and deliberately generous — without the material and the machine
+ * there is no exact number, only an obviously reckless one. What this catches is
+ * a 6mm depth of cut on a finishing insert.
+ */
+export function recommendedDepthOfCut(tool) {
+  const edgeLength = cuttingEdgeLength(tool);
+  const shape = tool?.insert ?? 'C';
+  if ((INSERT_SHAPES[shape] ?? INSERT_SHAPES.C).kind === 'round') {
+    // a round insert has no corner to break and is the strongest there is; the
+    // usual limit is a fraction of its radius before the cut wraps too far round
+    return Math.max(0.1, edgeLength * 0.25);
+  }
+  const eps = cornerAngleOf(tool);
+  // strength grows with the corner angle: 20°→0.15 of the edge, 90°+→0.66
+  const frac = Math.max(0.15, Math.min(0.66, (eps - 20) / (90 - 20) * (0.66 - 0.15) + 0.15));
+  // the steepest the leading edge is laid tells how much depth that edge buys —
+  // measured toward the metal, which is up for turning and down for a boring bar
+  const into = tool?.type === 'boring' ? -1 : 1;
+  const { points: poly, noseIndex } = seatedInsert(tool, { sharp: true });
+  const nose = poly[noseIndex];
+  const next = poly[(noseIndex + 1) % poly.length];
+  const prev = poly[(noseIndex - 1 + poly.length) % poly.length];
+  const rise = Math.max(0.05, Math.max(
+    into * unit(next[0] - nose[0], next[1] - nose[1])[1],
+    into * unit(prev[0] - nose[0], prev[1] - nose[1])[1],
+  ));
+  return Math.max(0.05, edgeLength * frac * rise);
 }
 
 /**

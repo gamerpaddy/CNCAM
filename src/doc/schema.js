@@ -175,6 +175,11 @@ export function createTool(type = 'flat') {
     // A custom insert corner angle, used when `insert` is 'X' (custom) so any
     // grind or off-catalogue shape can be described. Ignored otherwise.
     insertAngle: 60,
+    // A hand-drawn custom insert outline — an array of [x, y] with the cutting
+    // corner first — set by the shape editor when `insert` is 'X'. When present
+    // it is the authority on the shape and its corner angle; null falls back to
+    // a rhombus of `insertAngle`. See engine/insert.js and app/shape-editor.js.
+    customPoints: null,
     // boring bars: how far into a hole the bar reaches, and the smallest hole
     // it will fit down. Both are the reason a bore is or is not machinable.
     minBore: 0,
