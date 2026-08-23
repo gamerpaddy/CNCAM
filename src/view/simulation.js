@@ -390,12 +390,16 @@ const SPLAT_LOOKS = {
   smooth: { scale: 2.4, hardness: 1.0 },
 };
 
-// Render order: the surface mesh writes the real depth (0), the splats recolour
-// it on top (1) without writing depth of their own, and the cutter draws last
-// (below the cut marker's 10) so a splat that overhangs a cut cannot paint over
-// the tool sitting in it. See applySurfaceStyle and the cutter builders.
+// Render order. The surface mesh writes the real depth (0); the splats recolour
+// it (1) without writing depth of their own; the cutter draws just after them (2)
+// so it wins a colour tie on a coincident floor, while still being depth-tested
+// against the mesh so it is buried where it is inside solid stock. It must stay
+// *below* the toolpath overlay (3–4), which draws with the depth test off — the
+// cutter used to sit above that overlay, and because the overlay writes depth,
+// the current cut-move bar then ate the tool's base. See applySurfaceStyle and
+// the cutter builders.
 const SPLAT_RENDER_ORDER = 1;
-const CUTTER_RENDER_ORDER = 5;
+const CUTTER_RENDER_ORDER = 2;
 
 /** A lid on the top of the assembly, so it is a tool and not a length of pipe. */
 function capOfAssembly(tool, withHolder) {
