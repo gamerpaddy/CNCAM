@@ -380,6 +380,13 @@ const SPLAT_LOOKS = {
   smooth: { scale: 2.4, hardness: 1.0 },
 };
 
+// Render order: the surface mesh writes the real depth (0), the splats recolour
+// it on top (1) without writing depth of their own, and the cutter draws last
+// (below the cut marker's 10) so a splat that overhangs a cut cannot paint over
+// the tool sitting in it. See applySurfaceStyle and the cutter builders.
+const SPLAT_RENDER_ORDER = 1;
+const CUTTER_RENDER_ORDER = 5;
+
 /** A lid on the top of the assembly, so it is a tool and not a length of pipe. */
 function capOfAssembly(tool, withHolder) {
   const sections = toolSections(tool);
@@ -482,6 +489,13 @@ export class SimulationView {
       },
       vertexShader: SPLAT_VERTEX,
       fragmentShader: SPLAT_FRAGMENT,
+      // The splat is a re-skin of the surface the mesh already drew, so it must
+      // add colour without adding occlusion: it tests against the mesh's depth
+      // (so it is hidden behind anything nearer) but writes none of its own.
+      // Otherwise a splat overhanging a cut writes depth in front of the cutter
+      // sitting in that cut and the tool vanishes into the metal. See the render
+      // orders above — the cutter draws after the splats and beats them.
+      depthWrite: false,
     });
   }
 
@@ -499,6 +513,9 @@ export class SimulationView {
     if (useSplat && !this.splat) {
       this.splat = new THREE.Points(this.surface.geometry, this.buildSplatMaterial());
       this.splat.frustumCulled = false;
+      // over the mesh (which drew the real depth), under the cutter, so the tool
+      // in a cut is never painted over by a splat overhanging the cut's edge
+      this.splat.renderOrder = SPLAT_RENDER_ORDER;
       (this.surface.parent ?? this.group).add(this.splat);
     }
     if (this.splat) {
@@ -1351,6 +1368,10 @@ export class SimulationView {
     const cap = capOfAssembly(tool, this.showHolder);
     if (cap) group.add(cap);
     group.position.set(...position);
+    // Draw the tool after the splat overlay (it still depth-tests against the
+    // surface mesh, so it is hidden where it is buried in solid stock, but a
+    // splat that overhangs a cut can no longer paint over the tool sitting in it).
+    group.traverse((n) => { n.renderOrder = CUTTER_RENDER_ORDER; });
     this.cutter = group;
     this.group.add(group);
     return undefined;
@@ -1448,6 +1469,9 @@ export class SimulationView {
     }
 
     group.position.set(x, 0, z);
+    // after the splat overlay, so a splat overhanging the cut cannot hide the
+    // insert working in it (see setCutter and the render orders)
+    group.traverse((n) => { n.renderOrder = CUTTER_RENDER_ORDER; });
     this.cutter = group;
     this.group.add(group);
     return undefined;
