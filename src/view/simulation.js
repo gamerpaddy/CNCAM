@@ -499,14 +499,25 @@ export class SimulationView {
       },
       vertexShader: SPLAT_VERTEX,
       fragmentShader: SPLAT_FRAGMENT,
-      // Opaque and depth-writing, like the mesh it re-skins: the splats must
-      // occlude each other and the cutter honestly. They can, because they no
-      // longer overhang a cut edge — the vertex shader shrinks them to nothing at
-      // a wall (see aWall there). That is what stops a rim splat from writing
-      // depth in front of the tool working in the cut; making the splats
-      // depth-transparent instead only traded the vanishing tool for a stipple of
-      // overhanging discs veiling the cut. The cutter still renders after them
-      // (CUTTER_RENDER_ORDER) so it wins any tie on a coincident floor.
+      // Two things have to be true at once, and they need both switches below.
+      //
+      // depthWrite off: a splat is a re-skin of a surface the mesh already drew,
+      // so it must not write depth of its own. A splat sits a hair proud of the
+      // mesh (the z bias in the shader, to beat z-fighting) and grows on screen
+      // as you zoom in — so if it wrote depth it would write *in front of* the
+      // cutter wherever the two are near the same surface, and eat the tool, more
+      // the closer you zoom. Writing no depth, the cutter is tested only against
+      // the real mesh: it shows wherever it is genuinely out of the metal, at any
+      // zoom. (The mesh underneath still occludes both, so nothing leaks through
+      // a solid.)
+      //
+      // edge-shrink in the vertex shader (aWall): without depth of its own a
+      // splat that overhangs a cut edge would stipple over whatever is below and
+      // veil the cut. Shrinking splats to nothing at a wall means they never
+      // overhang, so there is nothing to veil with. Neither switch alone is
+      // enough — depthWrite off veils, edge-shrink alone lets a zoomed-in splat
+      // still bury the tool.
+      depthWrite: false,
     });
   }
 
