@@ -402,6 +402,16 @@ export function toolPose(tool) {
   // effective lead loses — the tool turns, and the cut sees the difference.
   const ground = Number.isFinite(tool?.leadAngle) ? tool.leadAngle
     : (tool?.type === 'boring' ? 92 : 95);
+  // Where the insert is *drawn* leaning. A real turning tool leads with its nose
+  // and relieves its end edge for clearance; past 90° it reaches into a shoulder
+  // rather than tilting the other way and driving the end edge below the cutting
+  // corner. So the drawing rotation folds back at 90: a 95° tool is posed like
+  // the 85° one (nose lowest, end edge clearing up) instead of 5° past square,
+  // which is what floated the insert off the work with its trailing edge dipping
+  // into the finished part. The reported effectiveLead is untouched — this is the
+  // pose the drawing and the engagement share, so they cannot disagree; only
+  // where the insert sits changes, not what lead the tool is said to cut at.
+  const lean = ground > 90 ? 180 - ground : ground;
 
   if (tool?.type === 'parting') {
     // A blade goes straight in: no lead angle, body directly outboard, but the
@@ -419,12 +429,12 @@ export function toolPose(tool) {
     // Inside the bore the insert cuts *up* into the wall (+X) and the bar runs
     // back out of the hole toward the tailstock (+Z, −X). It is the OD pose
     // turned to face the wall, and the lead still leans the major edge.
-    const rot = 180 - (eps / 2 - ground) + mount;
+    const rot = 180 - (eps / 2 - lean) + mount;
     return { rotationDeg: rot, shank: bodyDir(rot), approach: 'internal', flipZ: hand === 'L' };
   }
   // OD turning: lay the major edge at the lead angle, body trailing to +Z/+X,
   // then clock the whole tool by the mount angle.
-  const rot = eps / 2 - ground + mount;
+  const rot = eps / 2 - lean + mount;
   return { rotationDeg: rot, shank: bodyDir(rot), approach: 'external', flipZ: hand === 'L' };
 }
 

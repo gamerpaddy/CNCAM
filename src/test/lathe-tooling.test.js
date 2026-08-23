@@ -154,11 +154,15 @@ test('a lathe tool is drawn as an insert and a holder that trails the cut', () =
 });
 
 test('the lead angle lays the major cutting edge where it says', () => {
-  // The major edge should sit (90 − lead)° off the bar axis: 0° for a 90° tool
-  // (pure OD turning, edge along the bar), swinging up as the lead falls toward
-  // a facing tool. A sharp corner (no nose fillet) so the tip's two neighbours
-  // are the straight edges themselves.
-  for (const lead of [45, 62.5, 90, 95]) {
+  // The edge that lies along the bar sits (90 − lead)° off the axis: 0° for a 90°
+  // tool (pure OD turning, edge along the bar), swinging up as the lead falls
+  // toward a facing tool. Past 90° the tool leads with its nose and *relieves*
+  // its end edge for clearance rather than tilting the other way and driving that
+  // edge below the cutting corner — so the drawing folds back at 90 and a 95° tool
+  // is posed like the 85° one, its trailing edge 5° clear of the finished surface
+  // instead of 5° into it. A sharp corner (no nose fillet) so the tip's two
+  // neighbours are the straight edges themselves.
+  for (const lead of [45, 62.5, 90, 95, 107]) {
     const t = {
       type: 'turning', insert: 'C', insertIc: 12, noseRadius: 0, hand: 'R', leadAngle: lead, mountAngle: 0,
     };
@@ -168,11 +172,19 @@ test('the lead angle lays the major cutting edge where it says', () => {
     insert.forEach((p, i) => { const d = Math.hypot(p[0], p[1]); if (d < td) { td = d; ti = i; } });
     const tip = insert[ti];
     const edgeAngle = (p) => Math.atan2(p[1] - tip[1], p[0] - tip[0]) * 180 / Math.PI;
-    const want = 90 - lead;
+    const lean = lead > 90 ? 180 - lead : lead;
+    const want = 90 - lean;
     const edges = [insert[(ti - 1 + insert.length) % insert.length], insert[(ti + 1) % insert.length]]
       .map(edgeAngle);
     const major = edges.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a));
-    assert.close(major, want, 1.5, `lead ${lead}: major edge at ${major.toFixed(1)}° off the bar`);
+    assert.close(major, want, 1.5, `lead ${lead}: edge at ${major.toFixed(1)}° off the bar, want ${want}`);
+    // the invariant the whole pose exists to keep: the cutting corner is the
+    // innermost point of the insert, so nothing dips below it into the part. This
+    // is what a lead past 90° used to break — the trailing edge sank ~1.3mm past
+    // the nose toward the axis and the insert floated off the work.
+    const minRadius = insert.reduce((lo, p) => (p[1] < lo ? p[1] : lo), Infinity);
+    assert.ok(tip[1] <= minRadius + 1e-6,
+      `lead ${lead}: the nose (x=${tip[1].toFixed(3)}) must be the innermost point, not ${minRadius.toFixed(3)}`);
   }
 });
 
