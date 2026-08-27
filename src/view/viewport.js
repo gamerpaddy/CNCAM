@@ -1034,9 +1034,6 @@ export class Viewport {
       this.renderPending = false;
       const camera = this.activeCamera();
       this.aimHeadlight?.(camera);
-      // a splat surface sizes its points in pixels, so it needs the camera kind
-      // and the drawing-buffer height afresh each frame
-      this.simulation?.syncSplat?.(camera, this.renderer.domElement.height);
       this.renderer.clear();
       this.renderer.render(this.scene, camera);
       // over the top, in its own corner: the one thing on screen that always
