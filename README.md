@@ -185,8 +185,17 @@ indexed 3+1 / 3+2 positioning — and 2-axis turning.** Nothing else is built.
   work plane on LinuxCNC). Nothing moves all five at once.
 * No probing, no tool length measurement cycles, no canned cycle library beyond
   what the strategies emit themselves.
-* No sender. It writes a file. Getting the file to the machine is your problem.
 * No cloud, no account, no telemetry. Nothing leaves your browser.
+
+**And no sender — not now and not later.** This program writes a file. It does
+not open a serial port, it does not talk to a controller, it does not jog an
+axis, and it never will. That is a design rule rather than a missing feature,
+and it is the reason the warning at the top of this page is survivable: nothing
+here can move your machine, so every mistake it makes is a mistake you get to
+find by reading the file, backplotting it and dry-running it. A CAM program that
+could press cycle start would put its own bugs one click away from your
+spindle. Getting the file to the machine is your problem, and keeping it that
+way is the point.
 
 ## Running it locally
 

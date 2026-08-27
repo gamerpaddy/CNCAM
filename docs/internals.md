@@ -829,6 +829,13 @@ src/
 
 ## Conventions
 
+- **This program writes a file and never touches a machine.** No serial port, no
+  network to a controller, no jogging, no cycle start — not as a gap to be
+  filled in later, as a rule. It is what makes the safety story hold: every
+  mistake in here is one you can find by reading the file, backplotting it and
+  dry-running it, because nothing in here can move a spindle. Reading G-code
+  *in* is file I/O and stays that way. Anything that would move an axis belongs
+  in a sender somebody else wrote.
 - Internal units are **millimeters**, coordinates are **Z-up**; conversion only at UI/post boundaries.
 - **Mill and lathe are two machines, not two posts.** `doc.machine` scopes what
   the app is looking at and `doc.setups()` is the only way to reach the setups
