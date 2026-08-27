@@ -17,6 +17,7 @@ import { generateChamfer } from './strategies/chamfer.js';
 import { generateBore } from './strategies/bore.js';
 import { generateEngrave } from './strategies/engrave.js';
 import { generateSlot } from './strategies/slot.js';
+import { generateSpot, generateTap, generateThreadMill } from './strategies/holes.js';
 import {
   generateTurnFace, generateTurnRough, generateTurnFinish, generateTurnPart,
   generateTurnGroove, generateTurnThread, generateTurnDrill, generateTurnBore,
@@ -28,7 +29,10 @@ const strategies = {
   pocket: generatePocket,
   clear2d: generateClear,
   adaptive: generateAdaptive,
+  spot: generateSpot,
   drill: generateDrill,
+  tap: generateTap,
+  threadMill: generateThreadMill,
   bore: generateBore,
   slot: generateSlot,
   chamfer: generateChamfer,
@@ -74,7 +78,13 @@ export const OP_LABELS = {
   slot: 'Slot',
   clear2d: 'Z-level rough',
   adaptive: 'Adaptive rough',
+  spot: 'Spot drill',
   drill: 'Drill',
+  tap: 'Tap',
+  // "Thread mill" rather than "Thread": the lathe already has a Thread and the
+  // two are not the same operation — one runs a form tool along a turning bar,
+  // the other spirals an end mill up a hole.
+  threadMill: 'Thread mill',
   // Named apart from the lathe's 'Bore' on purpose: two strategies with the
   // same name in the same picker is a menu you have to guess at, and the two
   // are not the same operation — one spirals an end mill down a hole, the other

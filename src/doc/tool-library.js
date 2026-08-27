@@ -63,6 +63,34 @@ export const TOOL_PRESETS = [
     ],
   },
   {
+    // Taps, by the thread they cut. The pitch is not a detail of the tool, it
+    // *is* the tool: one turn advances it one pitch, and the control has to
+    // know the number to lock the axis to the spindle. Speeds are a fraction of
+    // what the same size of end mill takes, because a tap is cutting on every
+    // flute at full depth and cannot be backed off.
+    group: 'Taps',
+    tools: [
+      { name: 'M3×0.5 tap', type: 'tap', diameter: 3, pitch: 0.5, flutes: 3, fluteLength: 16, spindleRpm: 500, feedCut: 250, feedPlunge: 250 },
+      { name: 'M4×0.7 tap', type: 'tap', diameter: 4, pitch: 0.7, flutes: 3, fluteLength: 20, spindleRpm: 450, feedCut: 315, feedPlunge: 315 },
+      { name: 'M5×0.8 tap', type: 'tap', diameter: 5, pitch: 0.8, flutes: 3, fluteLength: 22, spindleRpm: 400, feedCut: 320, feedPlunge: 320 },
+      { name: 'M6×1.0 tap', type: 'tap', diameter: 6, pitch: 1, flutes: 3, fluteLength: 25, spindleRpm: 350, feedCut: 350, feedPlunge: 350 },
+      { name: 'M8×1.25 tap', type: 'tap', diameter: 8, pitch: 1.25, flutes: 3, fluteLength: 30, spindleRpm: 280, feedCut: 350, feedPlunge: 350 },
+      { name: 'M10×1.5 tap', type: 'tap', diameter: 10, pitch: 1.5, flutes: 3, fluteLength: 35, spindleRpm: 220, feedCut: 330, feedPlunge: 330 },
+    ],
+  },
+  {
+    // Thread mills. One cutter does every diameter of the same pitch, in either
+    // hand, inside or out — so they are listed by pitch and by how far down
+    // they reach, which is what actually decides whether one will do the job.
+    group: 'Thread mills',
+    tools: [
+      { name: '⌀3.5 thread mill 0.5mm', type: 'threadmill', diameter: 3.5, pitch: 0.5, flutes: 3, fluteLength: 10, spindleRpm: 6000, feedCut: 300, feedPlunge: 100 },
+      { name: '⌀4.8 thread mill 0.8mm', type: 'threadmill', diameter: 4.8, pitch: 0.8, flutes: 3, fluteLength: 14, spindleRpm: 5000, feedCut: 320, feedPlunge: 110 },
+      { name: '⌀6 thread mill 1.0mm', type: 'threadmill', diameter: 6, pitch: 1, flutes: 3, fluteLength: 18, spindleRpm: 4500, feedCut: 350, feedPlunge: 120 },
+      { name: '⌀8 thread mill 1.25mm', type: 'threadmill', diameter: 8, pitch: 1.25, flutes: 4, fluteLength: 24, spindleRpm: 4000, feedCut: 400, feedPlunge: 130 },
+    ],
+  },
+  {
     // Lathe tooling, by the ISO designation that is written on the box.
     //
     // The first letter is the shape and therefore the corner angle, which is
@@ -181,6 +209,12 @@ export function toolFromPreset(preset, number = 1) {
     maxDepth: merged.maxDepth ?? 0,
     cornerRadius: merged.cornerRadius ?? 0,
     tipAngle: merged.tipAngle ?? 0,
+    // The thread a tap cuts or a thread mill forms, in mm per turn. Zero on
+    // everything else, because nothing else is a screw.
+    pitch: merged.pitch ?? 0,
+    // How many threads of a tap's end are ground away as a lead. Those cut
+    // nothing at full depth, which is why a blind hole is tapped short.
+    leadThreads: merged.leadThreads ?? 2,
     tipDiameter: merged.tipDiameter ?? 0,
     noseRadius: fromCode?.noseRadius ?? merged.noseRadius ?? 0,
     bladeWidth: merged.bladeWidth ?? 0,
@@ -262,7 +296,38 @@ const CUTTING = {
   // Threading feed is the pitch, and the pitch is per pass — this is only the
   // spindle speed, kept low because the carriage has to keep up with it.
   threading: { vc: 55, fz: 0.10, maxRpm: 1200 },
+  // A tap's feed is not a feed. It is the pitch, times the speed, and any other
+  // number breaks the tap — so `fz` here is unused and only the surface speed
+  // means anything. Slow: a tap cuts on every flute at full depth and cannot be
+  // backed off, so it is run at a fraction of what an end mill of the same size
+  // takes. See suggestCutting, which overrides the feed outright.
+  tap: { vc: 8, fz: 0, maxRpm: 1200 },
+  // A thread mill is an end mill with a form on it, run gently because the
+  // whole cut is taken on the flank of one small tooth.
+  threadmill: { vc: 90, fz: 0.0035, maxRpm: 12000 },
 };
+
+/**
+ * The coarse pitch of a metric thread, from the table on every workshop wall.
+ *
+ * A tap's feed is its pitch times its speed, so a suggestion that does not know
+ * the pitch cannot suggest a feed at all — and the pitch is not a free choice:
+ * an M6 is 1.0 unless somebody has gone out of their way to buy a fine one. The
+ * coarse series is what "M6" means when nobody says otherwise, so it is what is
+ * filled in, and it is a starting point the field can be typed over.
+ */
+export function coarsePitch(diameter) {
+  const table = [
+    [1.6, 0.35], [2, 0.4], [2.5, 0.45], [3, 0.5], [3.5, 0.6], [4, 0.7], [5, 0.8],
+    [6, 1], [8, 1.25], [10, 1.5], [12, 1.75], [14, 2], [16, 2], [18, 2.5],
+    [20, 2.5], [22, 2.5], [24, 3],
+  ];
+  let best = table[0];
+  for (const row of table) {
+    if (Math.abs(row[0] - diameter) < Math.abs(best[0] - diameter)) best = row;
+  }
+  return best[1];
+}
 
 /**
  * Sensible speeds, feeds, flute length and shank for a cutter of this family
@@ -272,7 +337,7 @@ const CUTTING = {
  *   is what sets the surface speed. Ignored for milling.
  */
 export function suggestCutting({
-  type = 'flat', diameter = 6, flutes, tipAngle = 0, workDiameter = 30,
+  type = 'flat', diameter = 6, flutes, tipAngle = 0, workDiameter = 30, pitch = 0,
 }) {
   const family = type === 'drill' && tipAngle > 0 && tipAngle <= 100 ? 'spot' : type;
   const spec = CUTTING[family] ?? CUTTING.flat;
@@ -282,15 +347,23 @@ export function suggestCutting({
 
   const rpm = clampRound((1000 * spec.vc) / (Math.PI * spinning), 300, spec.maxRpm, 50);
   // a lathe's feed is per revolution, not per tooth
-  const feedCut = lathe
-    ? clampRound(rpm * spec.fz, 10, 600, 5)
-    : clampRound(rpm * teeth * spec.fz * diameter, 20, 6000, 10);
+  const feedCut = family === 'tap'
+    // A tap is a screw. One turn is one pitch, so the feed is arithmetic and
+    // not a preference — and a suggestion that offered anything else would be
+    // offering to break the tap.
+    ? Math.round(rpm * (pitch > 0 ? pitch : coarsePitch(diameter)))
+    : lathe
+      ? clampRound(rpm * spec.fz, 10, 600, 5)
+      : clampRound(rpm * teeth * spec.fz * diameter, 20, 6000, 10);
   return {
     flutes: teeth,
     fluteLength: Math.round(defaultFluteLength(type, diameter, tipAngle) * 10) / 10,
     spindleRpm: rpm,
     feedCut,
-    feedPlunge: Math.max(10, Math.round((feedCut * (lathe ? 0.8 : 0.35)) / 5) * 5),
+    // A tap goes in and comes out at the same rate, because both are the same
+    // screw turning the other way.
+    feedPlunge: family === 'tap' ? feedCut
+      : Math.max(10, Math.round((feedCut * (lathe ? 0.8 : 0.35)) / 5) * 5),
     shank: [{ diameter: shankFor(diameter), length: Math.max(25, diameter * 4) }],
     holder: [{ diameter: Math.max(25, diameter * 2.5), length: 50 }],
   };
@@ -350,6 +423,12 @@ export function defaultsForType(type, from = {}) {
       ? Math.max(0.05, from.noseRadius || 0.8) : 0,
     bladeWidth: type === 'parting' ? (from.bladeWidth || 3)
       : type === 'threading' ? (from.bladeWidth || 1.5) : 0,
+    // A pitch belongs to a screw and to nothing else, so it is cleared when the
+    // family changes to anything that is not one — a 6mm end mill with a 1mm
+    // pitch left on it from a tap would feed as a tap the moment it was used.
+    pitch: (type === 'tap' || type === 'threadmill')
+      ? (from.pitch || coarsePitch(from.diameter || 6)) : 0,
+    leadThreads: type === 'tap' ? (from.leadThreads || 2) : 0,
   };
   // A lathe tool arrives at a size a lathe tool comes in. Carrying a 6mm end
   // mill's diameter across into a boring bar gives a bar that fits down nothing.
@@ -461,8 +540,11 @@ export function toolWarnings(tool) {
   // The suggestion's own chip load is 0.0055×D for milling and a tenth of a
   // millimetre per revolution for turning; three or four times that is heavy
   // but real, and ten times it is a typo.
+  // A tap is exempt, and not as a special case: its feed is the pitch times the
+  // speed and there is no other number it could be, so "is the chip heavy" is
+  // not a question about it. Checked as a *thread* instead, below.
   const heavy = lathe ? 0.5 : Math.max(0.02, tool.diameter * 0.02);
-  if (load > heavy) {
+  if (tool.type !== 'tap' && load > heavy) {
     out.push(`${load.toFixed(3)}mm ${loadLabel} is a heavier chip than this size `
       + 'takes — check the feed, the flute count and the RPM.');
   }
@@ -524,6 +606,10 @@ export function suggestName(tool) {
         ? `${d}mm V bit ${trim(tool.tipAngle)}°`
         : `${d}mm chamfer ${trim(tool.tipAngle ?? 90)}°`;
     case 'face': return `${d}mm face mill`;
+    // A tap is named by the thread it cuts, which is the pair and not the
+    // diameter: an M6×1 and an M6×0.75 are different taps for different holes.
+    case 'tap': return `M${d}×${trim(tool.pitch ?? 0)} tap`;
+    case 'threadmill': return `⌀${d} thread mill ${trim(tool.pitch ?? 0)}mm`;
     // A lathe tool is named by its insert, because that is what is written on
     // the box and what you go to the drawer looking for.
     case 'turning': case 'boring': {

@@ -21,7 +21,7 @@ import { numberInput, parseNumber, formatNumber } from './number-input.js';
 import { toolIcon, toolAssembly, describeTool, TYPE_COLORS } from './tool-shape.js';
 import {
   toolFromPreset, suggestCutting, suggestName, machineForType,
-  toolWarnings, cuttingReadout, defaultsForType,
+  toolWarnings, cuttingReadout, defaultsForType, coarsePitch,
 } from '../doc/tool-library.js';
 import { toolLength, reachCheck, latheReachOf, fluteLengthOf } from '../engine/tool-geometry.js';
 import {
@@ -41,6 +41,8 @@ const FAMILIES = [
   { type: 'chamfer', label: 'Chamfer / V bit', hint: 'A cone. Breaks edges, cuts V grooves, engraves.' },
   { type: 'drill', label: 'Drill', hint: 'Makes holes on centre. Cannot cut sideways.' },
   { type: 'face', label: 'Face mill', hint: 'Wide and shallow, for taking the skin off a billet.' },
+  { type: 'tap', label: 'Tap', hint: 'Cuts a thread in a drilled hole. One turn advances it one pitch, and nothing else will do.' },
+  { type: 'threadmill', label: 'Thread mill', hint: 'Mills a thread on a helix. One cutter does every diameter of its pitch, in either hand.' },
   { type: 'turning', label: 'Turning insert', hint: 'Lathe. Turns and faces the outside of a spinning bar.' },
   { type: 'boring', label: 'Boring bar', hint: 'Lathe. An insert on a bar, for opening a hole out to size.' },
   { type: 'parting', label: 'Parting / grooving', hint: 'Lathe. A blade: parts off, and cuts grooves to width.' },
@@ -106,6 +108,19 @@ const SIZE_FIELDS = [
     key: 'cornerRadius', label: 'Corner radius (mm)', step: 0.1, min: 0,
     when: (t) => t.type === 'bull',
     hint: 'The radius ground on the corner. Bigger than half the diameter and it is a ball nose.',
+  },
+  {
+    key: 'pitch', label: 'Pitch (mm)', step: 0.05, min: 0,
+    when: (t) => t.type === 'tap' || t.type === 'threadmill',
+    hint: 'Millimetres per turn. On a tap this is the feed — one turn, one pitch — '
+      + 'and no other number will do. Filled in from the coarse table as you type a '
+      + 'diameter; type over it for a fine thread.',
+  },
+  {
+    key: 'leadThreads', label: 'Lead (threads)', step: 1, min: 0, max: 10,
+    when: (t) => t.type === 'tap',
+    hint: 'How many threads of the end are ground away as a taper. Those cut nothing '
+      + 'at full depth, which is why a blind hole is tapped that much short of its floor.',
   },
   {
     key: 'tipAngle', label: 'Point angle (°)', step: 1, min: 1, max: 179,
@@ -264,6 +279,10 @@ export function openToolWizard({
       shankEdited: true,
       stickoutEdited: true,
       speedsEdited: true,
+      // A pitch on an existing tap is the thread it cuts, which is a fact about
+      // the tool and not a suggestion to be recomputed the moment the dialog
+      // opens on it.
+      pitchEdited: (editing.pitch ?? 0) > 0,
     });
   }
 
@@ -308,6 +327,7 @@ export function openToolWizard({
     draft.shankEdited = false;
     draft.stickoutEdited = false;
     draft.speedsEdited = false;
+    draft.pitchEdited = false;
     rederive();
     render();
   }
@@ -326,9 +346,16 @@ export function openToolWizard({
     const parsed = draft.insertCode ? parseInsertCode(draft.insertCode) : null;
     if (parsed && isInsert(draft)) Object.assign(draft, parsed);
 
+    // A tap without a pitch is a tap nobody can quote a feed for, so the coarse
+    // table fills one in the moment a diameter is typed — the same way the
+    // speeds are filled in, and overwritable the same way.
+    if ((draft.type === 'tap' || draft.type === 'threadmill')
+      && !draft.pitchEdited && draft.diameter > 0) {
+      draft.pitch = coarsePitch(draft.diameter);
+    }
     const suggested = suggestCutting({
       type: draft.type, diameter: draft.diameter, flutes: draft.flutes,
-      tipAngle: draft.tipAngle,
+      tipAngle: draft.tipAngle, pitch: draft.pitch,
     });
     draft.flutes = suggested.flutes;
     if (!draft.speedsEdited) {

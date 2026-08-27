@@ -834,6 +834,39 @@ export const OP_PARAM_GROUPS = [
         hint: '0 drills in one go (G81); above 0 pecks and clears chips (G83)',
       },
       {
+        key: 'spotDiameter', label: 'Spot across (mm)', min: 0, step: 0.1, ops: ['spot'],
+        hint: 'How wide the cone is at the surface. 0 takes it out to the hole\'s '
+          + 'own diameter, which breaks the edge as well as guiding the drill. The '
+          + 'depth is worked out from the cutter\'s point angle.',
+      },
+      {
+        key: 'threadPitch', label: 'Pitch (mm)', min: 0, step: 0.05,
+        ops: ['tap', 'threadMill'],
+        hint: 'Millimetres per turn. Left at 0 it is the cutter\'s own pitch — a tap '
+          + 'has one thread and only one, and a thread mill is sold by the pitch it '
+          + 'forms.',
+      },
+      {
+        key: 'threadHand', label: 'Hand', type: 'select', ops: ['tap', 'threadMill'],
+        options: ['right', 'left'],
+        labels: { right: 'Right hand', left: 'Left hand' },
+        hint: 'Which way the thread turns. On a tap it decides which way the spindle '
+          + 'runs; on a thread mill, which way round the helix goes.',
+      },
+      {
+        key: 'threadInternal', label: 'Thread', type: 'select', ops: ['threadMill'],
+        options: [true, false],
+        labels: { true: 'Inside a hole', false: 'Outside a boss' },
+        hint: 'Which side of the cutter forms the thread — and so whether it orbits '
+          + 'inside the diameter or outside it.',
+      },
+      {
+        key: 'diameterTol', label: 'Diameter match (±mm)', step: 0.1, min: 0, max: 10,
+        ops: ['tap'],
+        hint: 'How far a hole may be from the tapping drill and still be tapped — an '
+          + 'M6 goes in a ⌀5 hole, not a ⌀6 one',
+      },
+      {
         key: 'dwell', label: 'Dwell (s)', min: 0, max: 60, ops: ['drill'],
         hint: 'Pause at depth to clean up the bottom of the hole (G82)',
         when: (op) => !((op.params.peck ?? 0) > 0),

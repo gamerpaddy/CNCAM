@@ -92,6 +92,12 @@ export function buildProgram(dialect, ops, options = {}) {
   // threading pass is not a G1 at a cleverly chosen feed: the carriage is
   // locked to the spindle encoder, and only the control can do that.
   let threadPitch = 0;
+  // And whether the holes going by are being tapped. A tapped hole is a DRILL
+  // move like any other — down to depth and back to the retract — so the shape
+  // of it stays where it was; what changes is that the axis is locked to the
+  // spindle rather than fed. See CLBuilder.tapping.
+  let tapPitch = 0;
+  let tapHand = 'right';
 
   const endCycle = () => {
     if (!cycle) return;
@@ -161,6 +167,24 @@ export function buildProgram(dialect, ops, options = {}) {
       if (e.type === 'coolant' && e.mode !== coolant) {
         (dialect.coolant ?? defaultCoolant)(w, e, options);
         coolant = e.mode;
+      }
+      if (e.type === 'tapping') {
+        // A post that cannot synchronise cannot tap, and the one thing it must
+        // not do is write a G1 down the hole and let the file look finished.
+        // The long-hand fallback below is the reversing-spindle idiom, which
+        // works with a tension-compression holder and nothing else — so it says
+        // so, once, where the operator will read it.
+        if (e.pitch > 0 && !dialect.tap && !dialect.synchronised) {
+          w.comment('WARNING: this control has no rigid tapping. These holes are '
+            + 'fed at pitch × rpm with the spindle reversed to come out, which '
+            + 'needs a tension-compression tapping holder — a solid holder will '
+            + 'break the tap');
+        }
+        tapPitch = e.pitch > 0 ? e.pitch : 0;
+        tapHand = e.hand ?? 'right';
+        endCycle();
+        modal.force('G');
+        modal.force('F');
       }
       if (e.type === 'thread') {
         // A post with no synchronised motion cannot cut a thread, and the one
@@ -323,7 +347,15 @@ export function buildProgram(dialect, ops, options = {}) {
           x: d[o + 1], y: d[o + 2], z: d[o + 3],
           retractZ: d[o + 4], peck: d[o + 5], dwell: d[o + 6],
         };
-        if (dialect.drill) {
+        if (tapPitch > 0) {
+          // A tapped hole never joins a drilling cycle: the modal state a
+          // canned cycle leaves behind is not what a tapping block expects, and
+          // the two must not be interleaved.
+          endCycle();
+          const tap = { ...move, pitch: tapPitch, hand: tapHand };
+          if (dialect.tap) dialect.tap(w, modal, tap, feeds);
+          else expandTap(w, modal, tap, motion, { rpm: spindleRpm, feedMode: options.feedMode });
+        } else if (dialect.drill) {
           // A setting that cannot be honoured has to say so.
           //
           // A canned cycle carries either a peck or a dwell on most controls,
@@ -380,8 +412,10 @@ export function buildProgram(dialect, ops, options = {}) {
     }
     while (events.length) flush(events.shift());
     endCycle();
-    // a synchronised run never survives the end of the operation that opened it
+    // neither a synchronised run nor a tapping mode survives the end of the
+    // operation that opened it
     threadPitch = 0;
+    tapPitch = 0;
     modal.force('F');
   });
 
@@ -533,6 +567,41 @@ function expandDrill(w, modal, move, feeds, motion, spindle = {}) {
     }
   }
   go(true, move.retractZ);
+}
+
+/**
+ * Tapping long-hand, for a control with no rigid tapping cycle.
+ *
+ * The reversing-spindle idiom: feed in at pitch × rpm, stop, reverse, feed out
+ * at the same rate, and put the spindle back the way it was. It is not rigid
+ * tapping and cannot be — nothing here is watching the encoder — so it works
+ * with a tension-compression holder to take up the error and breaks taps in a
+ * solid one. The warning is written once, when the mode starts.
+ *
+ * A left-hand tap is the same sequence with the two spindle directions swapped,
+ * which is the whole of the difference and is why the hand travels with the
+ * move rather than being assumed.
+ */
+function expandTap(w, modal, move, motion, spindle = {}) {
+  const rpm = spindle.rpm > 0 ? spindle.rpm : 0;
+  // The feed is arithmetic, not a preference: one turn, one pitch.
+  const feed = rpm > 0 ? rpm * move.pitch : 0;
+  const forward = move.hand === 'left' ? 'M4' : 'M3';
+  const reverse = move.hand === 'left' ? 'M3' : 'M4';
+  const go = (rapid, z, f) => motion(w, modal, {
+    rapid, x: move.x, y: move.y, z, feed: f, ...spindle,
+  });
+  go(true, move.retractZ);
+  go(false, move.z, feed);
+  // stopped before reversing: a spindle told to turn the other way while it is
+  // still running the first is a spindle that decides for itself how long the
+  // tap spends at the bottom of the hole
+  w.line('M5');
+  w.line(rpm > 0 ? `${reverse} S${Math.round(rpm)}` : reverse);
+  go(false, move.retractZ, feed);
+  w.line('M5');
+  w.line(rpm > 0 ? `${forward} S${Math.round(rpm)}` : forward);
+  modal.force('F');
 }
 
 /** Highest Z seen across all programs — used for the final retract. */

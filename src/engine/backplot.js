@@ -100,7 +100,10 @@ export function clFromGcode(parsed) {
     if (m.kind === 'cycle') {
       grow(m.x, m.y, m.z);
       grow(m.x, m.y, m.retract);
-      cl.drill(m.x, m.y, m.z, { retractZ: m.retract, peck: m.q ?? 0, dwell: m.p ?? 0 });
+      // `r` is where the feed starts, which is what a CL cycle carries; the
+      // *return* is where the control leaves the tool, which is what the next
+      // move has to start from.
+      cl.drill(m.x, m.y, m.z, { retractZ: m.r ?? m.retract, peck: m.q ?? 0, dwell: m.p ?? 0 });
       prev = [m.x, m.y, m.retract];
       continue;
     }
@@ -294,9 +297,16 @@ function pathPoints(cl) {
   if (Array.isArray(cl)) return cl;
   const out = [];
   eachMove(cl, (opcode, x, y, z, a, _b, _c, feedClass) => {
-    if (opcode === OP.DRILL) {
-      out.push([x, y, a, true], [x, y, z, false], [x, y, a, true]);
-    } else out.push([x, y, z, opcode === OP.RAPID || feedClass === FEED.RAPID]);
+    // A hole is where the cycle feeds from and how deep it goes, and that is
+    // *all* the CL data says about it. Where the tool ends up afterwards is the
+    // control's business: G98 returns to whatever height the run started at and
+    // G99 to the R plane, and neither of those is a number this program wrote
+    // down. Adding the return here would be comparing the file against an
+    // assumption rather than against the path — which reported a drilling
+    // operation as thirty-nine millimetres of post bug, all of it the retract
+    // plane being exactly what it was asked to be.
+    if (opcode === OP.DRILL) out.push([x, y, a, true], [x, y, z, false]);
+    else out.push([x, y, z, opcode === OP.RAPID || feedClass === FEED.RAPID]);
   });
   return out;
 }
@@ -358,11 +368,21 @@ function alongPath(path, target) {
  * not one number: the arc fitter is allowed to stray by the post's own arc
  * tolerance, and never works tighter than the path was written at, so an
  * adaptive pass planned at a tenth of a millimetre is legitimately a tenth of a
- * millimetre off its polyline and a finishing pass is not. Doubled, because
- * reading the arc back approximates it a second time, plus a rounding allowance
- * for the three decimals a coordinate is printed to. A check with one fixed
- * threshold either cries wolf on roughing or sleeps through a real fault on
- * finishing — `over` is the number that means something.
+ * millimetre off its polyline and a finishing pass is not. A check with one
+ * fixed threshold either cries wolf on roughing or sleeps through a real fault
+ * on finishing — `over` is the number that means something.
+ *
+ * Three approximations stand between the two paths and each is allowed its
+ * tolerance: the strategy's own chords, the fitter's arcs, and the chords this
+ * reader expands those arcs back into. They do not cancel. On a helix they
+ * compound in a way worth naming — chords are *shorter* than the arc they
+ * stand for, so a refitted spiral comes back a third of a millimetre longer
+ * over fifteen turns, and a comparison walked in step drifts by that much.
+ *
+ * Hence the floor. A tenth of a millimetre is far above any of that and far
+ * below every fault this check exists to find: a flipped arc is out by a
+ * diameter, a lost modal word by the width of the part, a units slip by a
+ * factor of twenty-five.
  *
  * @param ops [{ name, cl }] as they were posted
  * @param text the posted program
@@ -385,13 +405,14 @@ export function checkPost({
   for (const m of parsed.motion) {
     const op = opAtLine(marks, m.line);
     if (op < 0 || op >= buckets.length) continue;
-    if (m.kind === 'cycle') {
-      buckets[op].push([m.x, m.y, m.retract, true], [m.x, m.y, m.z, false], [m.x, m.y, m.retract, true]);
-    } else buckets[op].push([m.x, m.y, m.z, !!m.rapid]);
+    // the R plane and the bottom, matching what a CL cycle states — see pathPoints
+    if (m.kind === 'cycle') buckets[op].push([m.x, m.y, m.r, true], [m.x, m.y, m.z, false]);
+    else buckets[op].push([m.x, m.y, m.z, !!m.rapid]);
   }
 
   const each = ops.map((op, i) => {
-    const allowed = 2 * Math.max(fitTolerance, op.cl?.resolution ?? 0) + ROUNDING;
+    const allowed = Math.max(ARC_REFIT_FLOOR,
+      3 * Math.max(fitTolerance, op.cl?.resolution ?? 0) + ROUNDING);
     const result = comparePaths(op.cl, buckets[i]);
     return { name: op.name, allowed, over: result.worst - allowed, ...result };
   });
@@ -407,6 +428,9 @@ export function checkPost({
 
 /** What printing a coordinate to three decimals can cost, twice over. */
 const ROUNDING = 0.005;
+
+/** And what refitting a path into arcs and back costs, whatever the tolerance. */
+const ARC_REFIT_FLOOR = 0.1;
 
 /**
  * A rapid that took metal, as the simulation counted them.

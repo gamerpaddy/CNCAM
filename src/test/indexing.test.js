@@ -376,6 +376,10 @@ const SWEEP_TOOLS = {
   ball: { number: 2, type: 'ball', diameter: 4, flutes: 2, fluteLength: 30, spindleRpm: 12000, feedCut: 800, feedPlunge: 250 },
   drill: { number: 3, type: 'drill', diameter: 5, tipAngle: 118, flutes: 2, fluteLength: 30, spindleRpm: 3000, feedCut: 200, feedPlunge: 150 },
   vee: { number: 4, type: 'chamfer', diameter: 6, tipAngle: 90, tipDiameter: 0, flutes: 1, fluteLength: 10, spindleRpm: 10000, feedCut: 600, feedPlunge: 200 },
+  // an M6 tap goes in the tube's ⌀5 bore, which is what its tapping drill leaves
+  tap: { number: 5, type: 'tap', diameter: 6, pitch: 1, flutes: 3, fluteLength: 25, spindleRpm: 350, feedCut: 350, feedPlunge: 350 },
+  // and a thread mill has to orbit inside the ⌀10 one
+  threadMill: { number: 6, type: 'threadmill', diameter: 4, pitch: 1, flutes: 3, fluteLength: 20, spindleRpm: 5000, feedCut: 350, feedPlunge: 120 },
 };
 const SWEEP_BLOCK = makePocketBlock({ size: 40, pocketSize: 20, height: 20, depth: 12 });
 const SWEEP_STOCK = { kind: 'box', min: [0, 0, 0], max: [40, 40, 20] };
@@ -384,11 +388,14 @@ const SWEEP_STOCK = { kind: 'box', min: [0, 0, 0], max: [40, 40, 20] };
  *  with a matching drilled/bored hole for the two ops that need one. */
 function sweepInputs(type) {
   const tool = type === 'drill' ? SWEEP_TOOLS.drill
-    : (type === 'chamfer' || type === 'engrave') ? SWEEP_TOOLS.vee
+    : (type === 'chamfer' || type === 'engrave' || type === 'spot') ? SWEEP_TOOLS.vee
       : (type === 'parallel3d' || type === 'waterline') ? SWEEP_TOOLS.ball
-        : SWEEP_TOOLS.flat;
-  const mesh = type === 'drill' ? makeTube(20, 20, 15, 2.5, 20)   // ⌀5 hole for the ⌀5 drill
-    : type === 'bore' ? makeTube(20, 20, 15, 5, 20)               // ⌀10 hole for the ⌀6 borer
+        : type === 'tap' ? SWEEP_TOOLS.tap
+          : type === 'threadMill' ? SWEEP_TOOLS.threadMill
+            : SWEEP_TOOLS.flat;
+  const mesh = (type === 'drill' || type === 'tap' || type === 'spot')
+    ? makeTube(20, 20, 15, 2.5, 20)   // ⌀5 hole: the ⌀5 drill, and the M6 tap's drill
+    : (type === 'bore' || type === 'threadMill') ? makeTube(20, 20, 15, 5, 20)
       : SWEEP_BLOCK.mesh;
   const params = {
     ...defaultParamsFor(type, { stock: SWEEP_STOCK, tool }),

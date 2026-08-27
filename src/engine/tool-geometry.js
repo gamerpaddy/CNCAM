@@ -69,6 +69,17 @@ export function cuttingPoints(tool, segments = DEFAULT_ARC_SEGMENTS) {
       points.push([nose * Math.sin(a), nose - nose * Math.cos(a)]);
     }
     points.push([half, nose]);
+  } else if (type === 'tap') {
+    // A tap is a cylinder of the thread's own size with the first few threads
+    // ground away as a taper — the lead, which is what starts it in the hole
+    // and what stops it reaching the bottom of a blind one. Drawn from the
+    // pitch rather than from a guess: the lead is a count of threads, and a
+    // coarse tap has a longer one than a fine tap of the same diameter.
+    const pitch = Math.max(0, tool.pitch ?? 0);
+    const lead = pitch * (tool.leadThreads ?? 2);
+    const start = Math.max(0.05, r - pitch * 0.65);
+    points.push([0, 0], [start, 0]);
+    if (lead > 0) points.push([r, lead]); else points.push([r, 0]);
   } else if (type === 'face') {
     // insert corners are chamfered; that is what a face mill's edge looks like
     const c = Math.min(r * 0.15, 2);

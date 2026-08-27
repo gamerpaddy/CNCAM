@@ -50,6 +50,29 @@ export const linuxcnc = {
     },
   },
 
+  /**
+   * Rigid tapping, which rs274ngc spells G33.1.
+   *
+   * One block does the whole hole: the axis is locked to the spindle at K per
+   * revolution, driven to Z, and brought back to where it started with the
+   * spindle reversed — all of it by the interpreter, none of it by the program.
+   * So there is no feed word (there cannot be one; the pitch is the feed) and
+   * no retract move (the cycle's own return is what a G33.1 *is*).
+   *
+   * The tool has to be *at* the height it should return to before the block
+   * runs, which is why the rapid to the retract plane is written here rather
+   * than left to the caller: the return height is the start height, and a G33.1
+   * begun at clearance taps the air above the hole and then the hole.
+   */
+  tap(w, modal, m) {
+    w.line(`G0 X${num(m.x)} Y${num(m.y)}`);
+    w.line(`G0 Z${num(m.retractZ)}`);
+    w.line(`G33.1 Z${num(m.z)} K${num(m.pitch, 3)}`);
+    // the interpreter drove Z and the spindle itself; nothing this post tracked
+    // is still true
+    modal.reset();
+  },
+
   drill: {
     // rs274ngc's G83 takes Q and no P — there is nowhere to put a dwell — so a
     // hole given both gets the peck and the core writes the reason the dwell is

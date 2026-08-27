@@ -31,6 +31,7 @@ import './rest.test.js';
 import './workpiece.test.js';
 import './verify.test.js';
 import './backplot.test.js';
+import './holes.test.js';
 import './post.test.js';
 import './indexing.test.js';
 import './collision.test.js';

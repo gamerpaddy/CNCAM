@@ -259,3 +259,36 @@ test('a file the parser only half understood says so first', () => {
   const found = review(program('G21 G90', 'G12.1 X5', 'G0 X0 Y0 Z12', 'M30'));
   assert.ok(/went unread/.test(found[0].text), `${JSON.stringify(found)}`);
 });
+
+test('a run of holes keeps the cycle depth the first block stated', () => {
+  // The whole reason a drilling run is two lines and then four: every block
+  // after the first says X and Y and means the same Z, R and Q.
+  const r = readGcode(program(
+    'G21 G90 G17', 'G0 X0 Y0 Z10',
+    'G98 G81 X5 Y5 Z-3 R1 F100', 'X15 Y5', 'X15 Y15', 'G80',
+  ));
+  assert.eq(r.parsed.cycles.length, 3, 'three holes');
+  for (const hole of r.parsed.cycles) {
+    assert.close(hole.z, -3, 1e-9, 'each to the same depth');
+    assert.close(hole.r, 1, 1e-9, 'from the same R plane');
+  }
+  assert.close(r.parsed.cycles[2].x, 15, 1e-9, 'and at their own positions');
+  assert.close(r.parsed.cycles[2].y, 15, 1e-9, 'and at their own positions');
+});
+
+test('and forgets them when the cycle is cancelled', () => {
+  const r = readGcode(program(
+    'G21 G90 G17', 'G0 X0 Y0 Z10',
+    'G98 G81 X5 Y5 Z-3 R1 F100', 'G80',
+    'G81 X15 Y15 Z-8 R2', 'G80',
+  ));
+  assert.close(r.parsed.cycles[1].z, -8, 1e-9, 'the second run has its own depth');
+});
+
+test('a peck depth is modal too', () => {
+  const r = readGcode(program(
+    'G21 G90 G17', 'G0 X0 Y0 Z10',
+    'G98 G83 X5 Y5 Z-9 R1 Q3 F100', 'X15 Y5', 'G80',
+  ));
+  assert.close(r.parsed.cycles[1].q, 3, 1e-9, 'the second hole pecks the same way');
+});

@@ -67,6 +67,16 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
   let absolute = true;               // G90 / G91
   let arcAbsolute = false;           // G90.1 / G91.1 — incremental by default
   let retractMode = 98;              // G98 initial plane / G99 R plane
+  // A canned cycle's own words are modal, and this is the whole reason a run of
+  // holes is two lines and then four: the second hole says X and Y and nothing
+  // else, and means the same depth, the same R plane and the same peck. Read as
+  // "whatever Z is now" instead, every hole after the first came back at the
+  // height the tool had just retracted to — a four-hole drilling operation that
+  // drilled one hole and then hovered over three more.
+  let cycleZ = null;
+  let cycleR = null;
+  let cycleQ = null;
+  let cycleP = null;
   let feed = null;
   let tool = null;
   let spindle = null;
@@ -95,7 +105,17 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
     for (const [letter, n] of words) {
       if (letter === 'G') {
         if (n === 0 || n === 1 || n === 2 || n === 3) { move = n; cycle = null; }
-        else if (n === 80) { cycle = null; move = null; endsCycle = true; }
+        // Spindle-synchronised motion. G33 is a feed move whose rate comes from
+        // the spindle rather than from F — read as a cut, which is what it is —
+        // and G33.1 is a whole tapped hole in one block: down to Z at K per
+        // revolution and back to where it started, the return being what makes
+        // it a cycle rather than a move.
+        else if (n === 33) { move = 1; cycle = null; }
+        else if (n === 33.1) { cycle = 33.1; move = null; }
+        else if (n === 80) {
+          cycle = null; move = null; endsCycle = true;
+          cycleZ = null; cycleR = null; cycleQ = null; cycleP = null;
+        }
         else if (n >= 73 && n <= 89 && n !== 80) { cycle = n; move = null; }
         else if (n === 17 || n === 18 || n === 19) plane = n;
         else if (n === 20) { scale = INCH; units = 'inch'; }
@@ -137,13 +157,41 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
     const y = axis('Y', at.y);
     const z = axis('Z', at.z);
 
+    if (cycle === 33.1) {
+      // Rigid tapping: the block says how deep and at what pitch, and the
+      // position is wherever the tool already is. It returns to the height it
+      // started at, which is why nothing after it has to be told to retract.
+      if (z != null) {
+        motion.push({
+          kind: 'cycle',
+          code: 'G33.1',
+          line,
+          x: at.x,
+          y: at.y,
+          z,
+          r: at.z,
+          q: null,
+          p: null,
+          pitch: value('K') != null ? value('K') * scale : null,
+          retract: at.z,
+          feed,
+          tool,
+        });
+      }
+      return;
+    }
+
     if (cycle) {
       // A canned cycle is one hole per block that names a position. R is the
       // height it feeds from and Z the bottom; G98 comes back to wherever the
       // tool was when the run started, G99 to R.
-      if (x != null || y != null || value('R') != null) {
-        const r = axis('R', at.z) ?? at.z;
-        const bottom = z ?? at.z;
+      if (value('R') != null) cycleR = axis('R', at.z);
+      if (z != null) cycleZ = z;
+      if (value('Q') != null) cycleQ = value('Q') * scale;
+      if (value('P') != null) cycleP = value('P');
+      if (x != null || y != null || value('R') != null || z != null) {
+        const r = cycleR ?? at.z;
+        const bottom = cycleZ ?? at.z;
         if (motion.length && motion[motion.length - 1].kind !== 'cycle') initialZ = at.z;
         motion.push({
           kind: 'cycle',
@@ -153,8 +201,8 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
           y: y ?? at.y,
           z: bottom,
           r,
-          q: value('Q') != null ? value('Q') * scale : null,
-          p: value('P'),
+          q: cycleQ,
+          p: cycleP,
           retract: retractMode === 99 ? r : Math.max(initialZ, r),
           feed,
           tool,

@@ -238,7 +238,7 @@ export function createSetup(name = 'Setup 1', mode = 'mill') {
 
 export const OP_TYPES = [
   'face', 'contour2d', 'pocket', 'slot', 'clear2d', 'adaptive',
-  'drill', 'bore', 'chamfer', 'engrave',
+  'spot', 'drill', 'tap', 'threadMill', 'bore', 'chamfer', 'engrave',
   'parallel3d', 'waterline',
   'turnFace', 'turnRough', 'turnFinish', 'turnGroove', 'turnThread',
   'turnDrill', 'turnBore', 'turnPart',
@@ -315,6 +315,10 @@ export function createOperation(type = 'contour2d') {
       dwell: 0,           // seconds paused at depth; > 0 with no peck = G82
       // how close a hole's diameter must be to the drill's to count as a match
       diameterTol: 0.5,
+      // Spotting: how wide the cone is at the surface. 0 means "as wide as the
+      // hole", which is the chamfer case. The depth is worked out from the
+      // cutter's own point angle rather than typed — see strategies/holes.js.
+      spotDiameter: 0,
       // 'bottomZ' takes every hole to the operation's Bottom Z; 'hole' takes
       // each one to its own measured floor
       depthMode: 'hole',

@@ -64,6 +64,22 @@ const ICONS = {
   drill:
     '<path d="M12 3v9l-3 4v0h6l-3-4z"/>'
     + '<path d="M4 20h16" class="stroke"/><circle cx="12" cy="20" r="1.6"/>',
+  // a shallow cone in the top face, and the plate it is sunk into
+  spot:
+    '<path d="M2 12h20v8H2z"/>'
+    + '<path d="M8 12l4 5 4-5z" class="stroke accent wide"/>'
+    + '<path d="M12 2v8" class="stroke"/>',
+  // a screw thread down a hole: the flanks, drawn as the vee they are
+  tap:
+    '<path d="M2 4h20v16H2z"/>'
+    + '<path d="M8 6v12M16 6v12" class="stroke"/>'
+    + '<path d="M8 8l8 2M8 12l8 2M8 16l8 2" class="stroke accent"/>',
+  // a cutter orbiting inside the hole it is threading
+  threadMill:
+    '<path d="M2 4h20v16H2z"/>'
+    + '<circle cx="12" cy="12" r="7" class="stroke dashed"/>'
+    + '<circle cx="16.5" cy="12" r="2.5"/>'
+    + '<path d="M12 12h4.5" class="stroke"/>',
   bore:
     '<circle cx="12" cy="12" r="9" class="stroke dashed"/>'
     + '<path d="M12 5a7 7 0 1 1-6.9 8.2A5.5 5.5 0 1 0 12 8" class="stroke wide"/>',
@@ -163,11 +179,35 @@ export const OP_CATALOG = {
       + 'taken down the middle first and then out to each wall.',
     cutter: 'Flat or bull nose no wider than the slot',
   },
+  spot: {
+    group: 'Holes',
+    summary: 'Sinks a shallow cone at every hole centre before the drill goes in.',
+    when: 'Before drilling, on anything but a faced flat surface — a twist drill '
+      + 'wanders as it enters. Spot to the hole diameter instead and the same '
+      + 'cut breaks the edge as well.',
+    cutter: 'Spot drill, centre drill or chamfer mill',
+  },
   drill: {
     group: 'Holes',
     summary: 'Finds the round holes on the part and drills them with canned cycles.',
     when: 'Any hole a drill of that size can make. Pecks and dwells are here.',
     cutter: 'Drill of the hole\'s diameter',
+  },
+  tap: {
+    group: 'Holes',
+    summary: 'Cuts the thread with a tap, spindle locked to the feed.',
+    when: 'Threads in a machine that can rigid tap, or one with a tapping head. '
+      + 'It looks for the *tapping drill* — an M6 goes in a ⌀5 hole — so drill '
+      + 'them first.',
+    cutter: 'Tap of the thread size',
+  },
+  threadMill: {
+    group: 'Holes',
+    summary: 'Spirals a small cutter up the hole on the thread\'s own helix.',
+    when: 'Threads on a machine that cannot rigid tap, which is most of them. '
+      + 'One cutter does every diameter of the same pitch, and a broken one '
+      + 'comes back out of the hole. Slower than tapping.',
+    cutter: 'Thread mill about two thirds of the hole',
   },
   bore: {
     group: 'Holes',

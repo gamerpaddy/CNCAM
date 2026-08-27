@@ -87,12 +87,20 @@ are features of the part.
 | Prepare the stock | Face |
 | Roughing | Adaptive rough, Z-level rough |
 | Profiles | Contour, Pocket, Slot |
-| Holes | Drill, Helical bore |
+| Holes | Spot drill, Drill, Tap, Thread mill, Helical bore |
 | Edges and marking | Chamfer, Engrave |
 | 3D finishing | Parallel finish, Waterline finish |
 
 Roughing is stock aware and can rest machine against what an earlier operation
 already took off, so the finisher is not cutting air for an hour.
+
+A hole is finished, not just made: spot the centres so the drill starts where it
+was told, drill them, and then either **tap** them — rigid tapping, spindle
+locked to the feed, and it looks for the *tapping drill* because an M6 goes in a
+⌀5 hole — or **thread mill** them, which needs no rigid tapping and no tapping
+head, does every diameter of one pitch with one cutter, and comes back out of
+the hole when it breaks. The spot depth is not typed: it is a cone of the
+cutter's own point angle, sunk until it is as wide as you asked.
 
 ### Turning operations
 

@@ -613,6 +613,51 @@ place. And the spindle can hold a **surface speed** (`G96`) rather than an rpm,
 with the maximum-rpm clamp that is not optional — as a facing cut reaches the
 centre the commanded speed goes to infinity.
 
+### Threads, and the hole they go in
+
+Drilling was the whole of the hole story, and a drilled hole is a hole nobody
+asked for — it is the hole a *fastener* goes in, and getting there takes three
+more operations. All three find their holes the same way drilling does, because
+a hole is a hole and there is no second opinion to be had about where they are.
+
+**Spotting** works out its own depth. A cone of the cutter's point angle, sunk
+until it is as wide at the surface as was asked — typing a depth for that is
+asking somebody to do trigonometry with a different answer for every tool in the
+drawer. Asked for nothing, it takes the cone out to the hole's own diameter,
+which chamfers the mouth as well as starting the drill.
+
+**Tapping** is not drilling with a different tool, and the difference is not the
+feed rate. A tap is a screw: one turn advances it one pitch, and if the axis and
+the spindle disagree by a thousandth it either pushes itself out of the hole or
+snaps off in it. That is a *mode*, so it is stated as one — `cl.tapping(pitch)`
+— and the hole itself stays an ordinary DRILL move. Nothing downstream had to
+learn a second kind of hole: the simulator carves it, the timeline times it, the
+viewport draws it, all unchanged. Only the post reads the mode, and writes
+LinuxCNC's G33.1 Z K block or says plainly that this control cannot rigid tap and
+falls back to the reversing-spindle idiom, which needs a tension-compression
+holder and breaks taps in a solid one.
+
+Two things a tapping pass knows that a drilling pass does not. It looks for the
+*tapping drill* — an M6 goes in a ⌀5 hole, and searching for ⌀6 finds every
+clearance hole on the part and none of the ones to be tapped. And it stops a
+blind hole short by the tap's lead, because the first few threads are ground
+away and cut nothing at depth; driving a tap into the floor of a hole is the
+commonest way to lose one.
+
+**Thread milling** is the one a machine without rigid tapping can do, which on a
+hobby machine is most of them. The path is a helix and it is emitted as one:
+fine chords that the post's arc fitter refits into helical G2/G3 — a seven-hole
+threading program comes out as 283 blocks from 3,092 moves. Which way round the
+helix goes is all four combinations of inside/outside, right/left hand and
+climb/conventional, so it is computed rather than assumed. The cutter has to fit
+down the hole *and* reach the wall, which is about two thirds of the diameter,
+and a cutter that cannot orbit is refused with that sentence rather than with an
+empty toolpath.
+
+The thread size is not typed either. A hole takes the thread that is its own
+diameter plus one pitch, which is the tapping-drill rule read backwards, so the
+operation threads whatever it finds and names the sizes it cut.
+
 ### Reading G-code back
 
 The post is the one stage nothing downstream checks. A strategy is verified

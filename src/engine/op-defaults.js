@@ -76,9 +76,41 @@ export const STRATEGY_DEFAULTS = {
     rampAngle: 2,
     depth: 'stock',
   },
+  spot: {
+    // Wide enough to guide a drill and narrow enough not to be a chamfer, when
+    // a number is wanted; zero means the cone is taken out to the hole's own
+    // diameter, which breaks the edge as well as starting the drill.
+    spotDiameter: 0,
+    // The cone's depth comes from the point angle, so Bottom Z here is only a
+    // floor it may not pass — set clear of any spot rather than snug to one.
+    depth: 'mark',
+  },
   drill: {
     depthMode: 'hole',      // each hole to its own floor
     peck: 0,
+    depth: 'through',
+  },
+  tap: {
+    depthMode: 'hole',
+    threadHand: 'right',
+    // Zero means "the tap's own", which is the only answer that can be right:
+    // a tap cuts one thread and only one, and the schema's 1.5 — which belongs
+    // to the lathe's threading pass — turned an M6×1 into an M6×1.5 looking for
+    // a hole half a millimetre smaller than the one it needs.
+    threadPitch: 0,
+    // The tapping drill, not the thread: an M6 tap goes in a ⌀5 hole, and a
+    // half-millimetre band round it is the difference between a reamed hole and
+    // a drilled one.
+    diameterTol: 0.3,
+    depth: 'through',
+  },
+  threadMill: {
+    threadInternal: true,
+    threadHand: 'right',
+    // the cutter's own pitch, for the same reason — a thread mill is sold by
+    // the pitch it forms
+    threadPitch: 0,
+    direction: 'climb',
     depth: 'through',
   },
   bore: {

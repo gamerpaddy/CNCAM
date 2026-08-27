@@ -217,6 +217,18 @@ export class CLBuilder {
 
 
   coolant(mode) { this.event('coolant', { mode }); }
+
+  /**
+   * Tapping on, or off.
+   *
+   * A tapped hole is geometrically a drilled one — down to depth and back to
+   * the retract — so it stays a DRILL move and nothing downstream has to learn
+   * a second kind of hole. What is different is not the shape, it is the
+   * *mode*: the control locks the Z axis to the spindle encoder, one turn to
+   * one pitch, and no feed rate can stand in for that. A mode is a state event,
+   * which is what this side table is for.
+   */
+  tapping(pitch, hand = 'right') { this.event('tapping', { pitch, hand }); }
   comment(text) { this.event('comment', { text }); }
 
   /**
