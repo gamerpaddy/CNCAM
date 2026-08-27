@@ -228,6 +228,11 @@ export function createSetup(name = 'Setup 1', mode = 'mill') {
     // in that tilted frame — 3+1 or 3+2 rather than a re-fixturing. Null (the
     // default) is an ordinary setup reached by hand. See engine/indexing.js.
     index: null,
+    // Rotary wrap: when enabled, the program is written flat — against the
+    // unrolled surface of a cylinder of `diameter` — and the post bends it
+    // round the named rotary axis on the way out. Not a second kind of
+    // toolpath: the CL data is the same flat CL data. See engine/wrap.js.
+    wrap: null,
     // clamps and jaws holding the part down: keep-outs every operation in this
     // setup respects. See engine/fixtures.js
     fixtures: [],

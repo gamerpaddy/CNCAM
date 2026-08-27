@@ -127,12 +127,21 @@ time, and a program that will not fit in the envelope, or that asks for more rpm
 than the spindle has, tells you in the setup panel instead of as an alarm
 halfway through the job.
 
-A milling machine can also carry **rotary axes** for indexed 3+1 / 3+2 work —
-pick a configuration under *Machines → Rotary axes* (a 4-axis A, or a 5-axis A/C
-or B/C trunnion). Then set a setup to **Indexed** and rotate it to the face you
-want: the machine swings the rotary axes to that orientation, locks, and cuts it
-three-axis, without you re-fixturing. LinuxCNC drives this with a G68.2 tilted
-work plane; the setup panel tells you whether the machine can reach the face.
+A milling machine can also carry **rotary axes**, and they do two different
+jobs. Set a setup to **Wrapped** and give it a bar diameter, and the program you
+write flat — against the cylinder's surface unrolled, a sheet π×⌀ wide — is bent
+round the rotary axis on the way out: Y millimetres along the sheet become A
+degrees round the bar. That is how a spline, a scale round a dial or a name down
+a tube gets cut, none of which lie flat at any angle. It posts as lines with
+inverse-time feed, because F is millimetres a minute on a linear move and
+degrees a minute on a rotary one and no control can tell which a block meant.
+
+Or, for indexed 3+1 / 3+2 work, pick a configuration under *Machines → Rotary
+axes* (a 4-axis A, or a 5-axis A/C or B/C trunnion), set a setup to **Indexed**
+and rotate it to the face you want: the machine swings the rotary axes to that
+orientation, locks, and cuts it three-axis, without you re-fixturing. LinuxCNC
+drives that with a G68.2 tilted work plane; the setup panel tells you whether
+the machine can reach the face.
 
 Posts included: LinuxCNC, GRBL, and a lathe post.
 

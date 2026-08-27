@@ -411,6 +411,14 @@ export function checkPost({
   }
 
   const each = ops.map((op, i) => {
+    // A wrapped operation is posted in a different space from the one it was
+    // planned in: the file's Y is an angle and its feed is a duration. Walking
+    // the two paths side by side would be comparing millimetres with degrees,
+    // so it is not attempted — the wrap is checked where it is applied, in
+    // engine/wrap.js, not by pretending the file is flat.
+    if (op.wrap?.diameter > 0) {
+      return { name: op.name, allowed: Infinity, over: -Infinity, worst: 0, wrapped: true };
+    }
     const allowed = Math.max(ARC_REFIT_FLOOR,
       3 * Math.max(fitTolerance, op.cl?.resolution ?? 0) + ROUNDING);
     const result = comparePaths(op.cl, buckets[i]);

@@ -21,6 +21,7 @@ import { transformMesh } from '../../engine/setup.js';
 import { turningProfile, barFromStock } from '../../engine/lathe.js';
 import { estimateSeconds } from '../../engine/toolpath.js';
 import { orientationFor, indexingWarnings } from '../../engine/indexing.js';
+import { wrapFor, wrapWarnings, wrapExtent } from '../../engine/wrap.js';
 import { buildGcode, postsFor, defaultPostFor } from '../../post/index.js';
 import { renderGcodePanel } from '../gcode-panel.js';
 import { opStatus, formatTime, opFingerprint, toolNumberClashes } from '../op-status.js';
@@ -173,6 +174,16 @@ export function makeProgramActions(ctx, space) {
       // face past an axis's travel, alarms the moment it swings. The whole
       // program is in front of you here, so it is the moment to say so.
       limits.unshift(...indexingWarnings(doc.machineRecord(), doc.setups()));
+      // A wrapped setup on a machine with no such rotary axis, or a pattern
+      // wider than the bar is round — the second is invisible on the flat
+      // program, where it is simply a long one.
+      for (const setup of doc.setups()) {
+        const wrap = wrapFor(setup, doc.machineRecord());
+        if (!wrap) continue;
+        const flat = cls.filter((cl) => setup.operations
+          .some((o) => doc.toolpaths.get(o.id) === cl));
+        limits.unshift(...wrapWarnings(wrap, programExtent(flat)));
+      }
       // Two cutters on one T number is a wrong-tool crash and it is invisible
       // in the file — the second change is dropped as a restatement of the
       // first. The operation panel says so too, but this is the moment the
@@ -569,12 +580,14 @@ export function makeProgramActions(ctx, space) {
       // post applies it before the setup's operations and cancels it after.
       // Plain setups get null and post exactly as they always have.
       const orientation = orientationFor(setup, machine);
+      // And a wrapped setup carries the cylinder its flat program bends round.
+      const wrap = wrapFor(setup, machine);
       for (const op of setup.operations) {
         const cl = doc.toolpaths.get(op.id);
         if (op.enabled && cl) {
           ops.push({
             name: op.name, cl, wcs: setup.wcs, setup: setup.id, setupName: setup.name,
-            orientation,
+            orientation, wrap,
           });
         }
       }
@@ -767,6 +780,7 @@ export function makeProgramActions(ctx, space) {
       [{
         name: op.name, cl, wcs: setup?.wcs,
         orientation: setup ? orientationFor(setup, doc.machineRecord()) : null,
+        wrap: setup ? wrapFor(setup, doc.machineRecord()) : null,
       }], postSettings());
     await saveFile(`${safeFileName(op.name)}.ngc`, text, ACCEPT.gcode);
     ctx.ui.setStatus(`Exported ${op.name} — ${doc.postId()} post`);

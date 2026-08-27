@@ -14,6 +14,7 @@ import {
   ORIGIN_MODES, ORIGIN_LABELS, ORIENTATION_PRESETS, resolveSetup,
 } from '../../engine/setup.js';
 import { orientationFor, indexKind } from '../../engine/indexing.js';
+import { wrapFor, WRAP_AXES, WRAP_AXIS_LABELS } from '../../engine/wrap.js';
 import { setupModelIds } from '../actions/setup-space.js';
 import { boreProfile } from '../../engine/lathe.js';
 import { computeBounds, mergeMeshes } from '../../geom/mesh.js';
@@ -256,6 +257,7 @@ export function setupSections(doc, setup, app) {
   rows.push(orientationPresetRow(doc, setup));
   for (const f of ORIENTATION_FIELDS) rows.push(fieldRow(doc, setup, f, null, null, app));
   if (milling(setup)) rows.push(...indexRows(doc, setup));
+  if (milling(setup)) rows.push(...wrapRows(doc, setup, app));
 
   rows.push(el('h2', {}, ['Raw stock']));
   const seed = () => ensureStockShape(doc, setup);
@@ -517,6 +519,100 @@ function indexRows(doc, setup) {
   ]));
   return rows;
 }
+
+/**
+ * Rotary wrap: bend this setup's flat program round a bar.
+ *
+ * The other thing a 4th axis does, and the opposite of indexing: indexing
+ * swings a face under the spindle and *locks* it, then cuts three-axis; a wrap
+ * turns the rotary while the tool is cutting, so a pattern can run all the way
+ * round a shaft. Neither can do the other's job — there is no angle at which a
+ * spline lies flat.
+ *
+ * What is programmed is the cylinder's surface *unrolled*: a flat rectangle
+ * π·D wide. So everything above this — the stock, the orientation, the
+ * operations, the simulation — stays exactly what it is, and the only thing
+ * that changes is how a coordinate is spelled on the way out. See
+ * engine/wrap.js, which is a page long for that reason.
+ */
+function wrapRows(doc, setup, app) {
+  const machine = doc.machineRecord();
+  const axes = Array.isArray(machine?.rotary) ? machine.rotary : [];
+  const enabled = !!setup.wrap?.enabled;
+
+  const box = el('input', { type: 'checkbox' });
+  box.checked = enabled;
+  box.addEventListener('change', () => {
+    doc.updateItem(setup, {
+      wrap: box.checked
+        ? { enabled: true, axis: setup.wrap?.axis ?? 'A', diameter: setup.wrap?.diameter ?? 0 }
+        : null,
+    }, 'wrapped setup');
+  });
+  const rows = [propRow('Wrapped (rotary)', box)];
+
+  if (axes.length === 0) {
+    rows.push(el('div', { class: `prop-note${enabled ? ' warn' : ''}` }, [
+      enabled
+        ? `${machine?.name ?? 'This machine'} has no rotary axis to wrap around, so `
+          + 'this setup will not post. Add one in Machines → Rotary axes, or turn '
+          + 'the wrap off.'
+        : 'This machine has no rotary axes. Add one in Machines → Rotary axes to '
+          + 'wrap a flat program round a bar.',
+    ]));
+    return rows;
+  }
+  if (!enabled) {
+    rows.push(el('div', { class: 'prop-note' }, [
+      'Program the bar\'s surface unrolled — a flat sheet π×⌀ wide — and the post '
+      + 'bends it round the rotary axis. For anything that goes all the way round: '
+      + 'a spline, a scale, a name down a tube.',
+    ]));
+    return rows;
+  }
+
+  for (const f of WRAP_FIELDS) rows.push(fieldRow(doc, setup, f, null, null, app));
+
+  const wrap = wrapFor(setup, machine);
+  if (!wrap) {
+    rows.push(el('div', { class: 'prop-note warn' }, [
+      'Give the bar a diameter: it is what one turn is worth, and without it there '
+      + 'is nothing to wrap around.',
+    ]));
+    return rows;
+  }
+  rows.push(el('div', { class: `prop-note${wrap.reachable ? '' : ' warn'}` }, [
+    wrap.reachable
+      ? `One turn is ${wrap.circumference.toFixed(1)}mm of ${wrap.developed.toUpperCase()}, `
+        + `so 1mm is ${wrap.degPerMm.toFixed(3)}° of ${wrap.axis}. Set the datum on the `
+        + 'top of the bar, not on the centreline. Posted as lines with inverse-time '
+        + 'feed (G93) — an arc on the unrolled sheet is not an arc round the bar.'
+      : `${wrap.reason} — this setup will not post.`,
+  ]));
+  return rows;
+}
+
+/** The two things a wrap needs told: which axis turns, and how big the bar is. */
+const WRAP_FIELDS = [
+  {
+    path: 'wrap.axis',
+    label: 'Rotary axis',
+    type: 'select',
+    options: WRAP_AXES,
+    labels: WRAP_AXIS_LABELS,
+    hint: 'An A axis turns about X, so it is Y that becomes the angle; a B axis '
+      + 'turns about Y and eats X.',
+  },
+  {
+    path: 'wrap.diameter',
+    label: 'Bar ⌀ (mm)',
+    type: 'number',
+    min: 0,
+    step: 0.1,
+    hint: 'What one turn is worth. The flat program is the surface of this '
+      + 'cylinder unrolled, so π×⌀ of the developed axis is 360°.',
+  },
+];
 
 function round3(v) { return Math.round(v * 1000) / 1000; }
 

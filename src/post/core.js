@@ -22,6 +22,7 @@
 
 import { MOVE_STRIDE, OP, FEED, feedRate, descentOf } from '../engine/cl.js';
 import { orientationKey } from '../engine/indexing.js';
+import { wrapPoint, inverseTime } from '../engine/wrap.js';
 import { Modal, LineWriter, num } from './format.js';
 import { planArcs } from './arcs.js';
 
@@ -125,7 +126,23 @@ export function buildProgram(dialect, ops, options = {}) {
     let dwellDropped = false;
     // Never tighter than the path was written at — see CLBuilder.setResolution.
     const arcTolerance = Math.max(options.arcTolerance ?? 0.01, cl.resolution ?? 0);
-    const arcs = useArcs ? planArcs(cl, arcTolerance) : null;
+    // A wrapped operation is posted as lines, and that is not a limitation to be
+    // lifted later: a circle on the unrolled sheet is not a circle round the
+    // bar, so a G2 written in X and A cuts something else entirely. See
+    // engine/wrap.js.
+    const wrap = op.wrap?.diameter > 0 ? op.wrap : null;
+    const arcs = useArcs && !wrap ? planArcs(cl, arcTolerance) : null;
+    // Every move of a wrapped operation goes through this instead of straight
+    // to the dialect: the developed axis becomes a rotary word, and the feed
+    // becomes a duration, because F is millimetres per minute on a linear move
+    // and degrees per minute on a rotary one and no control can tell which this
+    // block wanted.
+    // Inverse time is switched on at the first move rather than here, because
+    // a tool change stands between the two and M6 leaves the feed mode where it
+    // pleases on a good half of the controls this posts for. It is switched off
+    // again at the end of the operation: a program that inherits G93 from the
+    // pass before reads every later feed as a duration.
+    const emit = wrap ? wrapped(wrap, motion) : motion;
 
     // An operation that produced no motion must not touch the machine.
     //
@@ -203,6 +220,11 @@ export function buildProgram(dialect, ops, options = {}) {
     };
 
     w.comment(`operation: ${op.name}`);
+    if (wrap) {
+      if (!wrap.reachable) w.comment(`WARNING: ${wrap.reason} — do not run this`);
+      w.comment(`wrapped round ⌀${num(wrap.diameter, 2)} on ${wrap.axis}: `
+        + `${num(wrap.circumference, 1)}mm is one turn`);
+    }
     // A new fixturing cannot begin while the last one is still in the vice.
     //
     // Generate and Export both span every setup on the machine, and the file
@@ -347,7 +369,13 @@ export function buildProgram(dialect, ops, options = {}) {
           x: d[o + 1], y: d[o + 2], z: d[o + 3],
           retractZ: d[o + 4], peck: d[o + 5], dwell: d[o + 6],
         };
-        if (tapPitch > 0) {
+        if (wrap) {
+          // A canned cycle and inverse time do not sit together on any control
+          // worth trusting, so a hole in a wrapped operation is written out in
+          // full. It is a hole round a shaft either way.
+          endCycle();
+          expandDrill(w, modal, move, feeds, emit, { rpm: spindleRpm, feedMode: options.feedMode });
+        } else if (tapPitch > 0) {
           // A tapped hole never joins a drilling cycle: the modal state a
           // canned cycle leaves behind is not what a tapping block expects, and
           // the two must not be interleaved.
@@ -393,7 +421,7 @@ export function buildProgram(dialect, ops, options = {}) {
       } else {
         endCycle();
         const rapid = opcode === OP.RAPID;
-        motion(w, modal, {
+        emit(w, modal, {
           rapid,
           x: d[o + 1], y: d[o + 2], z: d[o + 3],
           feed: feedRate(d[o + 7], feeds, descentOf(at, positionOf(n))),
@@ -412,6 +440,7 @@ export function buildProgram(dialect, ops, options = {}) {
     }
     while (events.length) flush(events.shift());
     endCycle();
+    if (wrap && emit.started) { w.line('G94'); modal.force('F'); }
     // neither a synchronised run nor a tapping mode survives the end of the
     // operation that opened it
     threadPitch = 0;
@@ -519,13 +548,23 @@ function defaultStop(w) {
 }
 
 /** How a mill writes a straight move: the three axes it has. */
-function defaultMotion(w, modal, { rapid, x, y, z, feed }) {
-  const wx = modal.word('X', x);
-  const wy = modal.word('Y', y);
+function defaultMotion(w, modal, {
+  rapid, x, y, z, feed, rotary = null, forceFeed = false,
+}) {
+  // A wrapped program has no coordinate on the developed axis — that direction
+  // is round the bar now, not across the table — so the word is left out rather
+  // than written as a stale zero. See engine/wrap.js.
+  const wx = x == null ? null : modal.word('X', x);
+  const wy = y == null ? null : modal.word('Y', y);
   const wz = modal.word('Z', z);
-  if (!wx && !wy && !wz) return;
-  if (rapid) w.line(modal.word('G', 0, 0), wx, wy, wz);
-  else w.line(modal.word('G', 1, 0), wx, wy, wz, modal.word('F', feed, 1));
+  const wr = rotary ? modal.word(rotary.letter, rotary.value) : null;
+  if (!wx && !wy && !wz && !wr) return;
+  if (rapid) { w.line(modal.word('G', 0, 0), wx, wy, wz, wr); return; }
+  // Under inverse time every cutting block states its own F — it is the block's
+  // duration rather than a rate, so there is nothing modal about it and a
+  // control that finds one missing faults.
+  const wf = forceFeed ? `F${num(feed, 1)}` : modal.word('F', feed, 1);
+  w.line(modal.word('G', 1, 0), wx, wy, wz, wr, wf);
 }
 
 /**
@@ -567,6 +606,42 @@ function expandDrill(w, modal, move, feeds, motion, spindle = {}) {
     }
   }
   go(true, move.retractZ);
+}
+
+/**
+ * A motion writer that bends its moves round the rotary axis.
+ *
+ * Two substitutions and nothing else. The developed coordinate becomes an angle
+ * and stops being written; the feed becomes an inverse-time number, measured on
+ * the unrolled sheet where the surface distance actually is — which is the flat
+ * program's own move length, so there is no trigonometry anywhere in this.
+ *
+ * It keeps the previous *flat* point rather than reading the caller's, because
+ * the caller's is in the wrapped frame by the time it gets there and the length
+ * of a move from X to A is not a length.
+ */
+function wrapped(wrap, motion) {
+  let last = null;
+  const write = (w, modal, m) => {
+    if (!write.started) {
+      write.started = true;
+      w.line('G93');
+      modal.force('F');
+    }
+    const p = wrapPoint(wrap, m);
+    const f = m.rapid ? 0 : inverseTime(last ?? m, m, m.feed);
+    motion(w, modal, {
+      ...m,
+      x: p.x,
+      y: p.y,
+      rotary: { letter: wrap.axis, value: p.angle },
+      feed: f,
+      forceFeed: !m.rapid && f > 0,
+    });
+    last = { x: m.x, y: m.y, z: m.z };
+  };
+  write.started = false;
+  return write;
 }
 
 /**

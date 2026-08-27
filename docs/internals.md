@@ -613,6 +613,58 @@ place. And the spindle can hold a **surface speed** (`G96`) rather than an rpm,
 with the maximum-rpm clamp that is not optional — as a facing cut reaches the
 centre the commanded speed goes to infinity.
 
+### Rotary wrap
+
+The other thing a 4th axis does, and the opposite of indexing: indexing swings a
+face under the spindle and *locks* it, then cuts three-axis; a wrap turns the
+rotary while the tool is cutting. Neither can do the other's job — there is no
+angle at which a spline lies flat.
+
+It is the same trick as the tilted work plane, which is what keeps
+`engine/wrap.js` to a page. Unroll the cylinder's surface and it is a rectangle
+π·D wide; anything on that rectangle can be programmed by the ordinary flat
+strategies against an ordinary flat billet, because on the unrolled sheet it
+*is* flat. The only difference between that program and the one the machine runs
+is how a coordinate is spelled, and spelling is the post's job. So no strategy
+changes, the CL data is the same CL data, the simulation is the same simulation,
+and the wrap is a fact about the setup applied on the way out — one description
+of the geometry, in one place.
+
+Three things fall out of that and each is worth stating.
+
+**Z is untouched**, which looks wrong and is not. It works because the datum
+sits on the *top of the bar*: the tool is always over the axis, so whatever
+angle the work is at, the surface under the tool is at the same height. Set the
+datum on the rotary centreline instead and every depth in the program is out by
+the radius — which is why the panel says so where the diameter is typed.
+
+**Arcs cannot survive it.** A circle on the unrolled sheet is not a circle round
+the bar, so a G2 written in X and A cuts something else entirely. Wrapped
+operations are posted as lines, and that is not a limitation waiting to be
+lifted.
+
+**The feed is not a feed.** F is millimetres per minute on a linear move and
+degrees per minute on a rotary one, and a control has no way to know that this
+particular degree is worth three tenths of a millimetre of surface. The answer
+every control agrees on is inverse time: G93, where each block says how many
+minutes it should take. And the number is free — the surface distance *is* the
+flat move's own length, because that is what unrolling means, so there is no
+trigonometry anywhere in the transformation. It is switched on at the first
+move rather than at the top of the operation, because a tool change stands
+between the two and M6 leaves the feed mode where it pleases on half the
+controls this posts for; and it is switched off at the end, because a program
+that inherits G93 from the pass before reads every later feed as a duration.
+
+The one mistake the transformation makes easy is a pattern wider than the bar is
+round: it wraps over itself and the second lap cuts through the first, which on
+the flat program is invisible because there it is simply a long one. So it is
+measured and said — "75mm across the wrapped axis and ⌀20 is only 62.8mm round —
+it turns 430° and cuts over itself".
+
+The post's own round-trip check sits this one out, and says why: a wrapped
+operation is posted in a different space from the one it was planned in, and
+walking the two paths side by side would be comparing millimetres with degrees.
+
 ### Threads, and the hole they go in
 
 Drilling was the whole of the hole story, and a drilled hole is a hole nobody
