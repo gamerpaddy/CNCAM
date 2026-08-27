@@ -145,6 +145,15 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
   here answers — every other check compares a stage with the stage before it.
 * Holding tabs, lead in and lead out, ramped and helical entry, arc fitting on
   the way out to G2/G3.
+* **Reading a program back in.** *Export… → Check a file* opens any `.nc` —
+  ours, another CAM system's, or one somebody typed — draws it, simulates it
+  against the billet, measures what it leaves against the model, and checks it
+  for travels, clamps and rapids that take metal. Inch programs, incremental
+  programs, R-format arcs and canned cycles all come in; anything it cannot read
+  it names rather than skipping.
+* And it checks its own posts the same way. Every time a program is written the
+  file is read straight back and compared with the path it was printed from, so
+  a flipped G2/G3 or a lost modal word is a warning rather than a scrapped part.
 * Projects save to a file, and autosave to the browser so a reload does not cost
   you an afternoon of setup.
 * Export the whole program or one operation at a time.

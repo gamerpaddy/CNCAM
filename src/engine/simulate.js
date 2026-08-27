@@ -216,6 +216,13 @@ export function simulateRemoval({
   const tip = [];
   // What each step asked of the cutter — see `cut` and `LoadLog`.
   const load = new LoadLog();
+  // And whether any of it was taken at rapid, which is not a heavy cut but a
+  // crash. Counted here rather than guessed at from the geometry, because the
+  // guess — "a G0 that travels while below the top of the billet" — fires on
+  // every stay-down link this app deliberately makes, and a warning that fires
+  // on correct programs is a warning nobody reads. The simulation knows what
+  // was actually in front of the tool.
+  const rapidCut = { count: 0, depth: 0, step: -1 };
   for (const { cl, tool } of ops) {
     // the profile *and* the radius it covers, from one builder, so the sweep and
     // the shape it sweeps with can never disagree about how wide the cutter is
@@ -290,6 +297,13 @@ export function simulateRemoval({
                 : Math.min(took.swath / travel, 2 * radius),
               took.depth, radius, !entry, travel,
             );
+            if (rapid && took.depth > RAPID_CUT_EPS) {
+              rapidCut.count++;
+              if (took.depth > rapidCut.depth) {
+                rapidCut.depth = took.depth;
+                rapidCut.step = step;
+              }
+            }
             seconds += moveSeconds(a, b, d[o + 7], feeds, rapidFeed);
             step++;
             times.push(seconds);
@@ -322,10 +336,22 @@ export function simulateRemoval({
     tip: new Float32Array(tip),
     times: new Float32Array(times),
     ...load.trimmed(opEnds),
+    rapidCut,
     totalSeconds: seconds,
     truncated,
   };
 }
+
+/**
+ * How much metal a rapid has to take before it is a crash rather than a
+ * rounding error.
+ *
+ * A hundredth of a millimetre. Below that is a cell the sweep grazes as the
+ * tool passes tangent to a wall it has already cut — the same tangency that the
+ * widening in `cut` exists to settle — and counting those would report a crash
+ * on every retract that leaves a finished face.
+ */
+const RAPID_CUT_EPS = 0.01;
 
 /**
  * A whole job, not one fixturing of it.

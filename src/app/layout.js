@@ -250,8 +250,19 @@ export function buildLayout(root, actions, project) {
             + 'into a folder you pick. For proving a program out one operation at a time.',
           onclick: actions.exportOperationsSeparately,
         },
+        // The other direction, and it lives here because this is the menu about
+        // the *file*. A program is motion whichever way it is travelling, and
+        // everything this app can say about a path it generated it can say
+        // about one it is handed.
+        {
+          label: 'Check a file — read a program back in',
+          hint: 'Open any .nc file: it is drawn, simulated against this setup\'s billet, '
+            + 'measured against the model and checked for travels, clamps and rapids '
+            + 'through the job. Ours or anybody else\'s.',
+          onclick: () => actions.checkGcode(),
+        },
       ]),
-      title: 'Write the G-code — as one file, or one file per operation',
+      title: 'Write the G-code — or read a program back in and check it',
     }, ['Export…']),
     gcodeToggle,
     el('span', { class: 'spacer' }),

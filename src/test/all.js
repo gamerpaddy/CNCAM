@@ -30,6 +30,7 @@ import './engagement.test.js';
 import './rest.test.js';
 import './workpiece.test.js';
 import './verify.test.js';
+import './backplot.test.js';
 import './post.test.js';
 import './indexing.test.js';
 import './collision.test.js';

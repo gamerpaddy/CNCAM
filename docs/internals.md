@@ -613,6 +613,68 @@ place. And the spindle can hold a **surface speed** (`G96`) rather than an rpm,
 with the maximum-rpm clamp that is not optional — as a facing cut reaches the
 centre the commanded speed goes to infinity.
 
+### Reading G-code back
+
+The post is the one stage nothing downstream checks. A strategy is verified
+against the part and the simulator against the CL data, and then the text that
+actually goes to the machine is trusted because it was printed by code that
+looked right. `src/post/parse.js` closes that loop: it parses a program back
+into motion, and `engine/backplot.js` turns that motion into **CL data**.
+
+Which is the whole trick. Everything downstream of a strategy — the backplot in
+the viewport, the simulation, the timeline, the cycle-time estimate, the load
+report, the verification against the model, the G-code panel with its
+line-to-move mapping — works on CL data and knows nothing about where it came
+from. So a file from another CAM system, or one somebody typed, arrives by a
+different door and gets all of it. Not one of those features needed a second
+implementation.
+
+The parser is modal in the ways a control is and only in those: units (a G20
+program comes back in millimetres, feeds included), distance mode, plane —
+a G18 arc read off I and J is not a slightly wrong arc, it is a straight line
+through the middle of the part — feed, tool, and the canned cycles. Arcs come in
+both spellings; R is ambiguous by design, two arcs pass through the same two
+points at the same radius and the sign picks between them, which is exactly the
+sort of thing reading a file back is supposed to catch. A canned cycle stays a
+cycle, because the CL data has a drill move for precisely this reason: a G83 is
+one hole, not eleven pecks the simulator would then have to recognise as a hole
+again. Anything it does not understand is *reported* — a program half-read is
+worse than one not read, because it looks like an answer.
+
+**Comparing two paths** is harder than it sounds, and the two obvious methods
+are both wrong. Point for point fails because the counts legitimately differ:
+the post fits a run of short lines into one G2, and reading that back expands it
+into chords near the originals rather than on them. "How far is each point from
+the nearest point of the other path" is the natural fix and a trap — an arc
+posted the wrong way round traces *the same circle*, so every point of one path
+lies on the other and the distance is zero. A shuffled program scores zero too.
+
+So both paths are walked from start to end together, each at its own pace, and
+compared where they are at each step — by *fraction* of each path's own length,
+because arc fitting makes the two lengths differ by design and walking by
+absolute distance turns four parts per million into a drift that reports a third
+of a millimetre of "post bug" on an eighty-metre roughing program. Leading and
+trailing rapids are trimmed off both: a post is entitled to add a safe approach
+and a retract, and what is being checked is the path through the metal.
+
+Each operation is judged against the tolerance *it was posted at* rather than
+against one fixed number. The arc fitter never works tighter than the path was
+written at, so an adaptive pass planned at a tenth of a millimetre is
+legitimately a tenth off its polyline and a finishing pass is not; one threshold
+either cries wolf on roughing or sleeps through a fault on finishing. Which
+operation a line of the file belongs to is not guessed either — the post already
+writes it down for the G-code panel, and that map is read the other way round.
+
+**What the checks are, and what they are not.** Travel limits and clamp
+clearance are read off the program. Rapids that take metal are *not*: read off
+the geometry that is a guess — "a G0 that travels while below the top of the
+billet" — and it fires on every stay-down link this app makes on purpose. A
+warning that fires on correct programs is a warning nobody reads. The simulation
+had the in-process stock in front of it, so it counts them instead, and a G0
+that removes a hundredth of a millimetre or more is reported with the depth and
+the moment. That check now runs on programs this app generates too, which is
+where it belongs.
+
 ### Reachability
 
 Toolpaths are planned against the part's **downward silhouette** — the union of

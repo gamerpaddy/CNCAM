@@ -18,6 +18,7 @@ import { makeSetupSpace } from './actions/setup-space.js';
 import { makeProgramActions } from './actions/program.js';
 import { makeFileActions } from './actions/files.js';
 import { makeEditActions } from './actions/editing.js';
+import { makeCheckActions } from './actions/check.js';
 
 export function makeActions(ctx) {
   const { doc } = ctx;
@@ -25,6 +26,7 @@ export function makeActions(ctx) {
   const program = makeProgramActions(ctx, space);
   const files = makeFileActions(ctx, program);
   const editing = makeEditActions(ctx, space);
+  const check = makeCheckActions(ctx, space);
 
   /** The key list and the running order of a job. Bound to ? and the toolbar. */
   function showShortcuts() {
@@ -91,6 +93,7 @@ export function makeActions(ctx) {
     ...program,
     ...files,
     ...editing,
+    ...check,
     // the panel needs it too, to offer "snap this height to the top of the part"
     setupModelBounds: space.setupModelBounds,
     // and how far the part's own bore goes, which is what a drill down the axis

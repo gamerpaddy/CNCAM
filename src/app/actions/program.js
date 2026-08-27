@@ -7,6 +7,16 @@
 
 import { mergeMeshes } from '../../geom/mesh.js';
 import { plural, verb, allOf } from '../../engine/text.js';
+import { checkPost, rapidCutFinding } from '../../engine/backplot.js';
+
+/**
+ * And how big a program is too big to re-read while somebody is waiting.
+ *
+ * Two megabytes is about forty thousand blocks, which is a long 3D finishing
+ * job. Past that the check is skipped rather than allowed to hold up a preview
+ * — a courtesy on top of the panel, never something the panel may hang on.
+ */
+const MAX_CHECKED_PROGRAM = 2_000_000;
 import { transformMesh } from '../../engine/setup.js';
 import { turningProfile, barFromStock } from '../../engine/lathe.js';
 import { estimateSeconds } from '../../engine/toolpath.js';
@@ -171,6 +181,18 @@ export function makeProgramActions(ctx, space) {
         limits.unshift({
           text: `T${number} is ${sharing.length} different cutters `
             + `(${sharing.map((t) => t.name).join(', ')}) — renumber before running this`,
+        });
+      }
+      // And the file against the path it was printed from. The post is the one
+      // stage nothing else checks; `refreshGcodePreview` reads its own output
+      // back and this is where the answer is worth saying out loud.
+      const post = ctx.lastProgram?.postCheck;
+      if (post && post.over > 0) {
+        limits.unshift({
+          text: `the posted file does not match the path it came from — `
+            + `${post.ops[post.op]?.name ?? 'an operation'} is out by `
+            + `${post.worst.toFixed(3)}mm when the file is read back. That is a bug `
+            + `in the post, not in the toolpath; do not run this`,
         });
       }
 
@@ -399,7 +421,15 @@ export function makeProgramActions(ctx, space) {
       // Truncation means the tail of the program is *not on screen*, which looks
       // exactly like a toolpath that cuts nothing — so it is an error, and it
       // says what to do about it.
-      if (sim.truncated) {
+      // A rapid that takes metal is a crash, and unlike everything else the
+      // simulation reports it is not a matter of degree. Said before the count
+      // of operations, because it is the only line in the message that could
+      // stop somebody running the program.
+      const crash = rapidCutFinding(sim, ops);
+      if (crash) {
+        ctx.ui.setStatus(`${crash.text} Simulated ${plural(ops.length, 'operation')} `
+          + `in ${setup.name} — scrub to the moment and look.`, true);
+      } else if (sim.truncated) {
         ctx.ui.setStatus('Simulated, but the program outran the record — the last '
           + `part of it is not shown. Raise "Recording limit" in Options (it is at ${record}×), `
           + 'lower the simulation detail, or simulate fewer operations at a time.', true);
@@ -563,9 +593,35 @@ export function makeProgramActions(ctx, space) {
     // preview is what the file is checked in, so a preview built from different
     // options than the file is worse than no preview.
     const { text, lineMap } = buildGcode(doc.postId(), ops, postSettings());
-    ctx.lastProgram = { text, lineMap, ops };
+    ctx.lastProgram = { text, lineMap, ops, postCheck: postCheck(ops, text, lineMap) };
     renderGcodePanel(ctx.ui.gcode, ctx.lastProgram, ctx);
     if (show) ctx.ui.showGcodePanel();
+  }
+
+  /**
+   * How far the file that was just printed is from the path it was printed
+   * from.
+   *
+   * The post is the one stage nothing downstream checks: a strategy is verified
+   * against the part and the simulator against the CL data, and then the text
+   * that actually goes to the machine is trusted because it was printed by code
+   * that looked right. Reading it back closes that loop for free — the parser
+   * already exists for the test suite, and running it here means every program
+   * anybody posts is checked rather than only the ones a test happens to cover.
+   *
+   * Skipped on a program too big to re-read while somebody is waiting. That is
+   * a real gap and it is the honest place for one: the check is a courtesy on
+   * top of a preview, not something the preview may hang on.
+   */
+  function postCheck(ops, text, lineMap) {
+    if (text.length > MAX_CHECKED_PROGRAM) return null;
+    // eslint-disable-next-line no-use-before-define
+    try {
+      return checkPost({ ops, text, lineMap, fitTolerance: postSettings().arcTolerance });
+    } catch (err) {
+      console.error(err);
+      return null;
+    }
   }
 
   function setPost(postId) {
