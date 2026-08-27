@@ -303,7 +303,25 @@ export function makeProgramActions(ctx, space) {
   }
 
   /**
-   * Simulate the first setup's program and hand the record to the timeline.
+   * Every milling setup of the job, in program order, ready for the simulator.
+   *
+   * The setups of a job are one billet held several ways round, so the second
+   * one does not start from a fresh block — it starts from whatever the first
+   * left, seen from the other side. That is only knowable by running them in
+   * order, which is what `simulateProgram` does with these; each carries the
+   * transform that says which way up it was (engine/workpiece.js).
+   */
+  function jobSetups() {
+    return doc.setups().map((setup) => {
+      const { stock, matrix, offset } = resolveSetupSpace(setup);
+      return {
+        setup, stock, frame: { matrix, offset }, ops: simulatableOps(setup),
+      };
+    });
+  }
+
+  /**
+   * Simulate the active setup's program and hand the record to the timeline.
    * Runs in a worker: the sweep touches every grid cell under every move, which
    * is far too much to do on the frame thread.
    */
@@ -334,6 +352,10 @@ export function makeProgramActions(ctx, space) {
       // How much the run may remember, which is a different question from how
       // finely it draws — see the note on the setting.
       const record = Number(getSetting('simRecord')) || 1;
+      const job = turning ? null : jobSetups();
+      // findIndex cannot miss — the active setup comes from the same list — but
+      // a -1 here would silently simulate nothing, so it is pinned.
+      const active = turning ? 0 : Math.max(0, job.findIndex((s) => s.setup === setup));
       const sim = turning
         ? await ctx.pool.run('simulateTurn', {
           bar: barFromStock(stock, turningProfile(mergeMeshes(meshes))),
@@ -343,8 +365,12 @@ export function makeProgramActions(ctx, space) {
           record,
         })
         : await ctx.pool.run('simulate', {
-          stock,
-          ops: ops.map(({ cl, tool }) => ({ cl, tool })),
+          setups: job.map((s) => ({
+            stock: s.stock,
+            frame: s.frame,
+            ops: s.ops.map(({ cl, tool }) => ({ cl, tool })),
+          })),
+          active,
           maxCells: SIM_CELLS[getSetting('simQuality')] ?? SIM_CELLS.high,
           rapidFeed,
           record,
@@ -363,18 +389,26 @@ export function makeProgramActions(ctx, space) {
       } else {
         // Which operations these were, when they are not all of them.
         //
-        // Generate and Export span every setup on the machine; a simulation
-        // cannot, because the setups after this one are the part held a
-        // different way round and the billet it comes back as is not something
-        // the app knows. So a two-setup job simulated exactly half its
-        // operations and said "Simulated 11 operation(s)", which reads as the
-        // whole program — the missing half looks like a program that ends early.
-        const elsewhere = doc.setups().filter((s) => s !== setup)
+        // One setup is watched at a time, because a scrub bar is a picture of
+        // one fixturing and the part is in a different place in the next. The
+        // earlier setups still *ran* — this billet is what they left — so the
+        // sentence says which ones are on screen rather than implying the rest
+        // were ignored.
+        const before = doc.setups().slice(0, active)
           .reduce((n, s) => n + s.operations.filter((o) => o.enabled).length, 0);
-        ctx.ui.setStatus(elsewhere
-          ? `Simulated ${plural(ops.length, 'operation')} in ${setup.name} — scrub or press play. `
-            + `${elsewhere} more are in another setup: that is the part fixtured again, `
-            + 'so select it and simulate it on its own.'
+        const after = doc.setups().slice(active + 1)
+          .reduce((n, s) => n + s.operations.filter((o) => o.enabled).length, 0);
+        const inherited = before
+          ? ` The billet it starts from is what ${plural(before, 'operation')} `
+            + `in the setups before it left.`
+          : '';
+        const rest = after
+          ? ` ${plural(after, 'operation')} ${verb(after, 'follows', 'follow')} in a later `
+            + `setup — select it to watch ${verb(after, 'it', 'those')}.`
+          : '';
+        ctx.ui.setStatus(before || after
+          ? `Simulated ${plural(ops.length, 'operation')} in ${setup.name} — scrub or press play.`
+            + inherited + rest
           : `Simulated ${plural(ops.length, 'operation')} — scrub or press play`);
       }
     } catch (err) {

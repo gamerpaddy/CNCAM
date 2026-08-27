@@ -13,6 +13,7 @@
 // forward.
 
 import { MOVE_STRIDE, OP, FEED, syncFeed, rapidSeconds, feedRate, descentOf } from './cl.js';
+import { inheritedColumns, settleThrough, cutFromSimulation } from './workpiece.js';
 import { profileTable } from './tool-geometry.js';
 import { isRoundStock } from './stock.js';
 
@@ -113,12 +114,32 @@ class EventLog {
 }
 
 /**
+ * The log that records nothing, for a run whose surface is all that is wanted.
+ *
+ * A stand-in rather than an `if` at the two hundred million call sites the
+ * sweep makes: `cut` pushes an event every time a cell drops and must not learn
+ * that there is a mode where it does not.
+ */
+const NULL_LOG = {
+  count: 0,
+  push() {},
+  trimmed: () => ({
+    evStep: new Int32Array(0), evCell: new Int32Array(0),
+    evHeight: new Float32Array(0), evPrev: new Float32Array(0), eventCount: 0,
+  }),
+};
+
+/**
  * @param stock { kind, min, max, cylinder? } in setup space
  * @param ops [{ cl, tool }] in program order
+ * @param cuts what earlier setups already removed — see engine/workpiece.js
+ * @param frame this setup's own { matrix, offset }, needed to read `cuts`
+ * @param logEvents false for a run that only needs its finished surface
  * @returns a simulation record; feed it to SimulationPlayback
  */
 export function simulateRemoval({
   stock, ops, maxCells = DEFAULT_MAX_CELLS, rapidFeed = 3000, record = 1,
+  cuts = null, frame = null, logEvents = true,
 }) {
   const spanX = stock.max[0] - stock.min[0];
   const spanY = stock.max[1] - stock.min[1];
@@ -138,11 +159,28 @@ export function simulateRemoval({
   const cellCount = width * height;
 
   const stockTop = stock.max[2];
-  const initial = new Float32Array(cellCount).fill(stockTop);
   const mask = buildMask(stock, width, height, cellSize);
+  // What the setups before this one left. The grid is decided here, so the
+  // inherited surface is sampled onto it here too rather than by a caller
+  // reproducing this arithmetic — see engine/workpiece.js.
+  const columns = cuts?.length && frame
+    ? inheritedColumns({
+      cuts, frame, mask,
+      grid: { width, height, cellSize, origin: stock.min },
+      stock: { top: stockTop, bottom: stock.min[2] },
+    })
+    : null;
+  const initial = columns
+    ? columns.initial
+    : new Float32Array(cellCount).fill(stockTop);
 
   const heights = initial.slice();
-  const log = new EventLog();
+  // A run whose only product is its finished surface — one setup's contribution
+  // to the workpiece the next one starts from — has no use for the event log,
+  // and the log is by far the largest thing a simulation makes. Skipping it is
+  // the difference between carrying three previous setups and running out of
+  // memory on the second.
+  const log = logEvents ? new EventLog() : NULL_LOG;
   const times = [0];
   let step = 0;
   let seconds = 0;
@@ -206,7 +244,7 @@ export function simulateRemoval({
       if (opcode === OP.DRILL) {
         const [x, y, zBottom, retractZ] = [d[o + 1], d[o + 2], d[o + 3], d[o + 4]];
         const took = cut(heights, mask, log, step, grid,
-          [x, y, retractZ], [x, y, zBottom], cutter, stockTop);
+          [x, y, retractZ], [x, y, zBottom], cutter, stockTop, columns);
         // a hole is full width by definition and travels no distance across the
         // floor, so there is no radial width to report — only how deep it went
         load.push(2 * radius, took.depth, radius, false);
@@ -236,7 +274,7 @@ export function simulateRemoval({
           for (let s = 1; s <= subs; s++) {
             const a = lerp(prev, p, (s - 1) / subs);
             const b = lerp(prev, p, s / subs);
-            const took = cut(heights, mask, log, step, grid, a, b, cutter, stockTop);
+            const took = cut(heights, mask, log, step, grid, a, b, cutter, stockTop, columns);
             const travel = Math.hypot(b[0] - a[0], b[1] - a[1]);
             // A rapid that removes anything is a crash, not a cut, and dividing
             // its swath by its length would report it as a gentle one.
@@ -268,10 +306,16 @@ export function simulateRemoval({
 
   return {
     opEnds,
+    // the voids the earlier setups left under this one's surface, so a
+    // breakthrough is drawn as one — see engine/workpiece.js
+    inherited: columns ? columns.voids > 0 : false,
     width, height, cellSize,
     origin: [stock.min[0], stock.min[1]],
     stockTop, stockBottom: stock.min[2],
     mask, initial,
+    // the surface the program leaves behind, which is what the next setup
+    // inherits and what verification measures against the model
+    final: heights,
     ...log.trimmed(),
     stepCount: step,
     // three floats per step: where the tip finished it — see `tip` above
@@ -281,6 +325,54 @@ export function simulateRemoval({
     totalSeconds: seconds,
     truncated,
   };
+}
+
+/**
+ * A whole job, not one fixturing of it.
+ *
+ * The setups of a milling job are one billet held several ways round, and each
+ * of them is simulated in its own frame — so the only way the second can start
+ * from what the first left is for the first to have been run. This runs them in
+ * order, keeping each finished surface as a cut record (engine/workpiece.js)
+ * that the next one reads through its own transform.
+ *
+ * Only the setup being watched keeps an event log, because only that one is
+ * scrubbed; the others contribute a surface and nothing else, which is a
+ * fraction of the memory. Setups *after* the active one are run when `all` is
+ * set — nothing about the picture on screen needs them, but verification does:
+ * metal standing proud of the model in setup 1 is not excess if setup 2 is
+ * about to take it off.
+ *
+ * @param setups [{ stock, ops, frame }] in program order, all the same machine
+ * @param active which of them is on screen and gets the full record
+ * @param all also run the setups after the active one, for their cuts
+ * @returns { sim, cuts } — cuts in setup order, one per setup that ran
+ */
+export function simulateProgram({
+  setups, active = 0, all = false,
+  maxCells = DEFAULT_MAX_CELLS, rapidFeed = 3000, record = 1,
+}) {
+  const cuts = [];
+  const last = all ? setups.length - 1 : active;
+  let sim = null;
+  for (let k = 0; k <= last; k++) {
+    const setup = setups[k];
+    const watched = k === active;
+    const run = simulateRemoval({
+      stock: setup.stock,
+      ops: setup.ops,
+      frame: setup.frame,
+      cuts: cuts.slice(),
+      maxCells,
+      rapidFeed,
+      record,
+      logEvents: watched,
+    });
+    cuts.push(cutFromSimulation(run, run.final, setup.frame));
+    if (watched) sim = run;
+  }
+  if (!sim) throw new Error(`no setup at index ${active} to simulate`);
+  return { sim, cuts };
 }
 
 /**
@@ -1041,7 +1133,7 @@ function coneStop(slope, scale, samples, nearest, from, reach, fall) {
  */
 const NOTHING_REMOVED = { swath: 0, depth: 0 };
 
-function cut(heights, mask, log, step, grid, p0, p1, cutter, stockTop) {
+function cut(heights, mask, log, step, grid, p0, p1, cutter, stockTop, columns) {
   // nothing below the stock top can be touched by a move that stays above it
   const lowestZ = p0[2] < p1[2] ? p0[2] : p1[2];
   if (lowestZ >= stockTop) return NOTHING_REMOVED;
@@ -1097,10 +1189,11 @@ function cut(heights, mask, log, step, grid, p0, p1, cutter, stockTop) {
         if (d2 > r2) continue;
         const lowest = zLow + surfaceAt(table, scale, samples, Math.sqrt(d2));
         if (lowest >= before - MIN_CHANGE) continue;
+        const settled = columns ? settleThrough(columns, cell, lowest) : lowest;
         if (before - lowest > deepest) deepest = before - lowest;
         if (before > plane && lowest <= plane) swathCells++;
-        log.push(step, cell, lowest, before);
-        heights[cell] = lowest;
+        log.push(step, cell, settled, before);
+        heights[cell] = settled;
       }
     }
     return { swath: swathCells * cellArea, depth: deepest };
@@ -1224,10 +1317,15 @@ function cut(heights, mask, log, step, grid, p0, p1, cutter, stockTop) {
       }
 
       if (lowest >= before - MIN_CHANGE) continue;
+      // What the cutter took is measured against where the metal was; where the
+      // surface ends up is that, dropped through anything an earlier setup
+      // already hollowed out under it. The two differ exactly at a
+      // breakthrough, and each is the right answer to its own question.
+      const settled = columns ? settleThrough(columns, cell, lowest) : lowest;
       if (before - lowest > deepest) deepest = before - lowest;
       if (before > plane && lowest <= plane) swathCells++;
-      log.push(step, cell, lowest, before);
-      heights[cell] = lowest;
+      log.push(step, cell, settled, before);
+      heights[cell] = settled;
     }
   }
   return { swath: swathCells * cellArea, depth: deepest };
@@ -1328,9 +1426,18 @@ export class SimulationPlayback {
     return this.sim.times[Math.min(this.step, this.sim.times.length - 1)];
   }
 
-  /** Has this cell been cut at all by now? */
+  /**
+   * Has this cell been cut at all by now?
+   *
+   * Against the *raw* stock top, not against where this simulation started:
+   * with a second setup starting from what the first one left, a surface
+   * machined an hour ago is below the billet but exactly at this run's initial
+   * height, and comparing with the initial would paint it as untouched stock.
+   * A turning record has no single top — its bar has a bore — so there it is
+   * the initial radius, which is the same statement one dimension down.
+   */
   isCut(cell) {
-    return this.current[cell] < this.sim.initial[cell] - 1e-6;
+    return this.current[cell] < (this.sim.stockTop ?? this.sim.initial[cell]) - 1e-6;
   }
 }
 

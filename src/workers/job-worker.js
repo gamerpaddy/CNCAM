@@ -4,7 +4,7 @@
 // Return { result, transfer } to move buffers instead of copying them.
 
 import { generateToolpath } from '../engine/toolpath.js';
-import { simulateRemoval, simulateTurning } from '../engine/simulate.js';
+import { simulateProgram, simulateTurning } from '../engine/simulate.js';
 
 const jobs = {
   async ping(args, ctx) {
@@ -19,7 +19,10 @@ const jobs = {
   },
 
   async simulate(args, ctx) {
-    const sim = simulateRemoval(args);
+    // The whole job, not one fixturing of it: the setups before the one being
+    // watched have to run for it to know what billet it is starting from.
+    // See engine/workpiece.js.
+    const { sim } = simulateProgram(args);
     ctx.progress(1);
     return { result: sim, transfer: simTransfer(sim) };
   },
@@ -35,6 +38,8 @@ const jobs = {
 function simTransfer(sim) {
   const buffers = [sim.mask.buffer, sim.initial.buffer, sim.evStep.buffer,
     sim.evCell.buffer, sim.evHeight.buffer, sim.evPrev.buffer, sim.times.buffer];
+  // the surface the program leaves, which verification measures against the model
+  if (sim.final) buffers.push(sim.final.buffer);
   // a milling record carries the tip at every step, and a turning one the
   // tool's own track — both one entry per sub-step rather than per CL move
   for (const key of ['tip', 'trackX', 'trackZ', 'trackTool']) {
