@@ -245,6 +245,27 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .sim-load:hover { border-color: var(--border); color: var(--fg); }
 .sim-load.warn { color: var(--warn); }
 
+/* The verification verdict, beside the load. Same shape, its own colours: a
+   gouge is not a heavy cut, it is a scrapped part. */
+.sim-verify {
+  font: 11px/1 Consolas, monospace;
+  color: var(--fg-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px 5px;
+  flex: 0 0 auto;
+  min-width: 104px;
+  white-space: nowrap;
+  text-align: right;
+  cursor: pointer;
+}
+.sim-verify:empty { visibility: hidden; }
+.sim-verify:hover { border-color: var(--border); color: var(--fg); }
+.sim-verify.ok { color: #4fb96a; }
+.sim-verify.left { color: #6fa8dc; }
+.sim-verify.bad { color: #ff6a55; }
+
 #gcode {
   grid-area: gcode;
   height: var(--gcode-size);

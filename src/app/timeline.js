@@ -138,6 +138,8 @@ export function buildTimeline(onSeek, onClose) {
   const currentLabel = el('span', { class: 'sim-op' }, ['']);
   // the heaviest moment in the program — see drawLoad
   const loadLabel = el('button', { class: 'sim-load' }, []);
+  // and whether what it leaves behind is the part — see drawVerify
+  const verifyLabel = el('button', { class: 'sim-verify' }, []);
 
   const drawBands = (sim, ops) => {
     bandStrip.replaceChildren();
@@ -237,6 +239,60 @@ export function buildTimeline(onSeek, onClose) {
     };
   };
 
+  /**
+   * The verdict on the finished part, in the two numbers that matter.
+   *
+   * A gouge wins whenever there is one, because the two are not comparable:
+   * excess is another pass and a gouge is a new billet. Clicking goes to the
+   * moment it happened, which is the whole reason the event log records which
+   * step took each cell down — see engine/verify.js lastTouch.
+   */
+  const drawVerify = (sim, ops) => {
+    const v = sim?.verify;
+    verifyLabel.className = 'sim-verify';
+    verifyLabel.onclick = null;
+    if (!v) {
+      verifyLabel.replaceChildren();
+      verifyLabel.title = '';
+      return;
+    }
+    const tol = v.tolerance.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+    // A share of the part rather than a count of cells: how many grid cells
+    // there are is a detail setting, and a number that moves when you change
+    // the picture quality says nothing about the program.
+    const share = (n) => `${((n / Math.max(v.checked, 1)) * 100).toFixed(
+      n > 0 && n * 1000 < v.checked ? 2 : 0)}%`;
+    const worst = v.worstGouge ?? v.worstExcess;
+    const gouged = !!v.worstGouge;
+    if (!worst) {
+      verifyLabel.className = 'sim-verify ok';
+      verifyLabel.replaceChildren(`✓ ±${tol}mm`);
+      verifyLabel.title = `The finished surface is within ${tol}mm of the model `
+        + 'everywhere the part is. Green on the stock is the part, blue is metal '
+        + 'still standing on it, red is metal cut out of it.';
+      return;
+    }
+    const where = ops[worst.op]?.name;
+    verifyLabel.className = `sim-verify ${gouged ? 'bad' : 'left'}`;
+    verifyLabel.replaceChildren(gouged
+      ? `gouge ${worst.mm.toFixed(2)}mm`
+      : `${worst.mm.toFixed(2)}mm left`);
+    verifyLabel.title = gouged
+      ? `The program cuts ${worst.mm.toFixed(3)}mm into the part at `
+        + `X${worst.x.toFixed(1)} Y${worst.y.toFixed(1)}${where ? `, in ${where}` : ''}. `
+        + `${share(v.gougeCells)} of the part is past the ${tol}mm tolerance. `
+        + 'Nothing later can put that metal back. Click to go to the move that took it.'
+      : `${worst.mm.toFixed(3)}mm of stock is still standing on the part at `
+        + `X${worst.x.toFixed(1)} Y${worst.y.toFixed(1)}, and no operation in any setup `
+        + `takes it off. ${share(v.excessCells)} of the part is over the ${tol}mm `
+        + 'tolerance. Click to go there.';
+    verifyLabel.onclick = () => {
+      if (!(worst.step >= 0) || !sim.times) return;
+      if (playing) setPlaying(false);
+      seekSeconds(sim.times[Math.min(worst.step, sim.times.length - 1)] ?? 0);
+    };
+  };
+
   const root = el('div', { id: 'sim', class: 'collapsed' }, [
     el('span', { class: 'sim-label' }, ['Simulation']),
     el('button', { title: 'Back to start', onclick: () => jump(-Infinity) }, ['⏮']),
@@ -248,6 +304,7 @@ export function buildTimeline(onSeek, onClose) {
     el('div', { class: 'sim-track' }, [slider, bandStrip]),
     currentLabel,
     loadLabel,
+    verifyLabel,
     timeLabel,
     el('button', { class: 'sim-close', title: 'Close simulation', onclick: () => { setPlaying(false); onClose(); } }, ['✕']),
   ]);
@@ -261,6 +318,7 @@ export function buildTimeline(onSeek, onClose) {
       slider.max = String(Math.max(1, Math.round(totalSeconds * 1000)));
       drawBands(sim, ops);
       drawLoad(sim, ops);
+      drawVerify(sim, ops);
       root.classList.remove('collapsed');
       seekSeconds(0);
     },

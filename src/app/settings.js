@@ -154,6 +154,37 @@ export const SETTINGS = [
       + 'step between two passes is still there, because it is real.',
   },
   {
+    key: 'verify',
+    label: 'Check the cut part against the model',
+    group: 'Simulation',
+    type: 'checkbox',
+    default: true,
+    hint: 'Measures the surface the program leaves against the model it was '
+      + 'made from, and colours the stock by the difference: green is the part, '
+      + 'blue is metal still standing on it, red is metal taken out of it. The '
+      + 'one question nothing else here answers — every other check compares a '
+      + 'stage with the stage before it.',
+  },
+  {
+    key: 'verifyTolerance',
+    label: 'Close enough, in mm',
+    group: 'Simulation',
+    type: 'select',
+    options: ['0.01', '0.02', '0.05', '0.1', '0.25'],
+    labels: {
+      '0.01': '0.01 — a hundredth',
+      '0.02': '0.02 — two hundredths',
+      '0.05': '0.05 — a twentieth',
+      0.1: '0.1 — a tenth',
+      0.25: '0.25 — a quarter',
+    },
+    default: '0.05',
+    hint: 'How far off the model still counts as on it. Set below the '
+      + 'simulation\'s own cell size and every sloped face reports as rough, '
+      + 'because a grid draws a slope in steps — the detail setting is the '
+      + 'floor on what this can honestly resolve.',
+  },
+  {
     key: 'showHolder',
     label: 'Draw the shank and holder',
     group: 'Simulation',

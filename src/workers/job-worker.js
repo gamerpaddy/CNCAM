@@ -5,6 +5,7 @@
 
 import { generateToolpath } from '../engine/toolpath.js';
 import { simulateProgram, simulateTurning } from '../engine/simulate.js';
+import { verifyRun } from '../engine/verify.js';
 
 const jobs = {
   async ping(args, ctx) {
@@ -22,7 +23,23 @@ const jobs = {
     // The whole job, not one fixturing of it: the setups before the one being
     // watched have to run for it to know what billet it is starting from.
     // See engine/workpiece.js.
-    const { sim } = simulateProgram(args);
+    //
+    // Verification needs the setups *after* it too, since metal standing proud
+    // of the model here is not excess if a later setup takes it off — so the
+    // check is what decides whether the rest of the job is run.
+    const check = args.verify;
+    const { sim, cuts } = simulateProgram({ ...args, all: !!check });
+    if (check) {
+      const setup = args.setups[args.active ?? 0];
+      sim.verify = verifyRun({
+        sim,
+        mesh: check.mesh,
+        stock: setup.stock,
+        cuts,
+        frame: setup.frame,
+        tolerance: check.tolerance,
+      });
+    }
     ctx.progress(1);
     return { result: sim, transfer: simTransfer(sim) };
   },
@@ -40,6 +57,9 @@ function simTransfer(sim) {
     sim.evCell.buffer, sim.evHeight.buffer, sim.evPrev.buffer, sim.times.buffer];
   // the surface the program leaves, which verification measures against the model
   if (sim.final) buffers.push(sim.final.buffer);
+  for (const key of ['low', 'high', 'judged', 'gouge', 'excess']) {
+    if (sim.verify?.[key]) buffers.push(sim.verify[key].buffer);
+  }
   // a milling record carries the tip at every step, and a turning one the
   // tool's own track — both one entry per sub-step rather than per CL move
   for (const key of ['tip', 'trackX', 'trackZ', 'trackTool']) {

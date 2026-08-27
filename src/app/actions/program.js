@@ -374,9 +374,26 @@ export function makeProgramActions(ctx, space) {
           maxCells: SIM_CELLS[getSetting('simQuality')] ?? SIM_CELLS.high,
           rapidFeed,
           record,
+          // The model the program was made from, in this setup's frame, so the
+          // finished surface can be measured against it — see engine/verify.js.
+          // Without a model there is nothing to check, which is the DXF-only
+          // case: an engraving job has a drawing and no part.
+          verify: getSetting('verify') && meshes.length ? {
+            mesh: mergeMeshes(meshes),
+            tolerance: Number(getSetting('verifyTolerance')) || undefined,
+          } : null,
         });
       ctx.simulation = { sim, ops, playback: new SimulationPlayback(sim) };
       ctx.viewport.simulation.setSimulation(sim);
+      // The stock is coloured by its distance from the model rather than by
+      // what has been cut — see SimulationView.setDeviation. Set before the
+      // first seek, so the opening frame is already the right picture.
+      ctx.viewport.simulation.setDeviation(sim.verify ?? null);
+      // The opening frame is the raw billet, and under this shading the raw
+      // billet is already an answer — every millimetre of stock over the model
+      // is metal the program still has to take off. Painted here because the
+      // playback path only ever recolours the cells a move has *changed*.
+      ctx.viewport.simulation.repaint(ctx.simulation.playback);
       ctx.viewport.setSimulationMode(true);
       ctx.ui.timeline.show(sim, ops);
       // Truncation means the tail of the program is *not on screen*, which looks

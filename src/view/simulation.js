@@ -19,6 +19,34 @@ const RAW = new THREE.Color(0xb08a5a);        // uncut billet
 const MACHINED = new THREE.Color(0x9fb4c7);   // freshly exposed surface
 const CONTACT = new THREE.Color(0xff4d2e);    // where metal is coming off now
 
+// Deviation shading: the same surface, coloured by how far it is from the model
+// rather than by whether it has been cut. Green is the part; blue is metal
+// still standing on it; red is metal taken out of it. See setDeviation.
+const ON_MODEL = new THREE.Color(0x2f9e50);
+const EXCESS_NEAR = new THREE.Color(0x9fd0f0);
+const EXCESS_FAR = new THREE.Color(0x14448c);
+const GOUGE_NEAR = new THREE.Color(0xff9a80);
+const GOUGE_FAR = new THREE.Color(0xa60d00);
+const UNJUDGED = new THREE.Color(0x6c6c6c);   // no part over this cell to judge against
+
+/**
+ * How much excess saturates the blue, in millimetres.
+ *
+ * Roughing leaves millimetres and finishing leaves hundredths, and one ramp
+ * cannot show both: scaled to the roughing pass, a finish pass is uniformly
+ * green whatever it left. Two millimetres is where a rougher's stock-to-leave
+ * sits, so the picture reads as "this is what the finisher still has to take"
+ * during roughing and saturates immediately on anything grossly uncut.
+ */
+const EXCESS_FULL = 2;
+
+/**
+ * And how much gouge saturates the red. A tenth: a gouge is not a quantity you
+ * are meant to weigh up, and anything past a tenth of a millimetre is as bad as
+ * it needs to look.
+ */
+const GOUGE_FULL = 0.1;
+
 /**
  * The rim of the stock: which cells are on it, which way each of them faces
  * out, and which pairs of them are joined.
@@ -331,6 +359,61 @@ export class SimulationView {
     this.ghostTool = false;
     this.showCutMarker = true;
     this.cutMarker = null;
+    // The model's own surface on this grid, when the stock is being coloured by
+    // how far from it the cut has got — see setDeviation.
+    this.deviation = null;
+  }
+
+  /**
+   * Colour the stock by its distance from the model instead of by what has been
+   * cut, or stop doing so.
+   *
+   * The comparison is against the playhead, not against the finished program.
+   * That is the version worth watching: the billet starts blue all over (two
+   * millimetres of stock everywhere), drains to green as the passes take it
+   * down to size, and anything that goes red has been cut into the part and is
+   * not coming back. A static picture of the final answer would say the same
+   * thing about the last frame and nothing at all about the rest of the job.
+   *
+   * @param deviation { low, high, tolerance } — the band of model heights each
+   *   cell has to answer to, from engine/verify.js. The band rather than a
+   *   single surface because one grid cell at a wall holds both the top of the
+   *   wall and the floor beside it, and a picture that judged such a cell
+   *   against either one alone painted a red stripe down every edge of a
+   *   program that had not gouged anything.
+   */
+  setDeviation(deviation) {
+    this.deviation = deviation?.low ? deviation : null;
+  }
+
+  /** Whether the stock is currently being shaded by deviation. */
+  get showingDeviation() {
+    return !!this.deviation;
+  }
+
+  /**
+   * The colour for one cell's surface, either way of shading it.
+   *
+   * One function, so the two paths that paint a cell — the top and the skirt
+   * vertex that carries the billet's side wall with it — can never be given
+   * different answers about what colour the cell is.
+   */
+  cellColor(cell, z, cut) {
+    if (!this.deviation) return cut ? MACHINED : RAW;
+    const { low, high, judged, tolerance } = this.deviation;
+    // Nothing to be right or wrong about: no part over this cell, or the metal
+    // here has gone entirely and what is drawn is the floor of the billet
+    // standing in for a hole.
+    if (!judged[cell] || z <= this.sim.stockBottom + 1e-6) return UNJUDGED;
+    const over = z - high[cell];
+    if (over > tolerance) {
+      return EXCESS_NEAR.clone().lerp(EXCESS_FAR, Math.min((over - tolerance) / EXCESS_FULL, 1));
+    }
+    const under = low[cell] - z;
+    if (under > tolerance) {
+      return GOUGE_NEAR.clone().lerp(GOUGE_FAR, Math.min((under - tolerance) / GOUGE_FULL, 1));
+    }
+    return ON_MODEL;
   }
 
   /**
@@ -951,8 +1034,7 @@ export class SimulationView {
     if (this.sim.kind === 'turn') return this.updateTurned(playback, changed);
     const position = this.surface.geometry.attributes.position;
     const color = this.surface.geometry.attributes.color;
-    const { initial, stockBottom } = this.sim;
-
+    const { stockBottom } = this.sim;
     for (const cell of changed) {
       // Never below the bottom of the billet: there is no stock down there to
       // draw. A cell taken to the bottom is not a very deep floor, it is a hole
@@ -960,23 +1042,13 @@ export class SimulationView {
       const z = playback.current[cell];
       const top = z < stockBottom ? stockBottom : z;
       position.array[cell * 3 + 2] = top;
-      const cut = z < initial[cell] - 1e-6;
-      (cut ? MACHINED : RAW).toArray(color.array, cell * 3);
+      this.paintCell(playback, cell, color.array, z);
       // A cell on the rim carries the top of the billet's side wall with it, so
       // facing the stock lowers the outside of it too. Without that the wall
       // stayed at its original height and the cut looked like a lid taken off
       // a box whose sides had not moved.
       const skirt = this.skirtOf?.[cell] ?? -1;
-      if (skirt >= 0) {
-        position.array[skirt * 3 + 2] = top;
-        // Both ends of the wall, not just the top one. A side wall is either
-        // the sawn face of the billet or a face the cutter made; it is never
-        // one shading into the other down its height, and colouring only the
-        // top vertex drew exactly that — a thirty-millimetre gradient from
-        // machined to raw on a wall nothing had touched below the first cell.
-        (cut ? MACHINED : RAW).toArray(color.array, skirt * 3);
-        (cut ? MACHINED : RAW).toArray(color.array, (skirt + 1) * 3);
-      }
+      if (skirt >= 0) position.array[skirt * 3 + 2] = top;
     }
     position.needsUpdate = true;
     color.needsUpdate = true;
@@ -985,6 +1057,47 @@ export class SimulationView {
     // from those, which is what keeps playback interactive
     this.updateGridNormals(changed);
     return undefined;
+  }
+
+  /**
+   * One cell's colour, and its side wall's with it.
+   *
+   * Both ends of the wall, not just the top one: a side wall is either the sawn
+   * face of the billet or a face the cutter made, never one shading into the
+   * other down its height, and colouring only the top vertex drew exactly that
+   * — a thirty-millimetre gradient from machined to raw on a wall nothing had
+   * touched below the first cell.
+   *
+   * `isCut` rather than a comparison written out here: with a setup that starts
+   * from what an earlier one left, "below where this run began" and "machined"
+   * stopped being the same statement, and the surface painted an inherited face
+   * as raw billet.
+   */
+  paintCell(playback, cell, colors, height) {
+    const z = height ?? playback.current[cell];
+    const shade = this.cellColor(cell, z, playback.isCut(cell));
+    shade.toArray(colors, cell * 3);
+    const skirt = this.skirtOf?.[cell] ?? -1;
+    if (skirt >= 0) {
+      shade.toArray(colors, skirt * 3);
+      shade.toArray(colors, (skirt + 1) * 3);
+    }
+  }
+
+  /**
+   * Recolour the whole surface without moving any of it.
+   *
+   * What changes when the shading changes is the question being asked of every
+   * cell, so the set of cells that *moved* is exactly the wrong one — but the
+   * positions, the normals and the holes are all untouched, and re-deriving
+   * those over the whole grid is the expensive half of a playback frame.
+   */
+  repaint(playback) {
+    if (!this.surface || this.sim?.kind === 'turn') return;
+    const color = this.surface.geometry.attributes.color;
+    const cells = this.sim.width * this.sim.height;
+    for (let cell = 0; cell < cells; cell++) this.paintCell(playback, cell, color.array);
+    color.needsUpdate = true;
   }
 
   /**

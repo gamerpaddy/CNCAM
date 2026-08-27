@@ -131,11 +131,18 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
 ### Everything else
 
 * Setups with their own orientation and work offset, so you can flip the part
-  and machine the other side as a second setup.
+  and machine the other side as a second setup — and the second setup starts
+  from what the first one left, hole for hole, rather than from a fresh block.
 * Stock as a box, a cylinder or a tube, sized outright or as a margin around
   the model, with fixtures and clamps as keep-out volumes the toolpaths avoid.
 * Material removal simulation you can scrub through, which shows the cut shape
   and reports the load.
+* **A check on the finished part.** The surface the program leaves is measured
+  against the model it was made from, and the stock is coloured by the
+  difference: green is the part, blue is metal still standing on it, red is
+  metal cut out of it. The worst of each is named with the operation that did
+  it, and clicking takes you to that move. It is the one question nothing else
+  here answers — every other check compares a stage with the stage before it.
 * Holding tabs, lead in and lead out, ramped and helical entry, arc fitting on
   the way out to G2/G3.
 * Projects save to a file, and autosave to the browser so a reload does not cost

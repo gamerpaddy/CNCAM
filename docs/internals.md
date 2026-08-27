@@ -480,6 +480,77 @@ the two contacts also says which cells are not touched at all, and that throws
 out the corners of every bounding box before any work is done on them. See
 `bench/` for the harness and the numbers.
 
+**The setups are one billet.** A simulation is a height per (x, y) *in the
+setup that owns it*, which is exactly right for one fixturing and useless
+across two: turn the part over and "height" points the other way, so the second
+setup used to begin from a full block and cut air through everything the first
+had already taken off. The app admitted as much in its own status line.
+
+What fixed it is refusing to build a second model of the metal. A finished
+setup's height field is already a complete statement — in its own frame,
+everything above `heights[cell]` is gone — so the workpiece is the *stack* of
+those fields read through their own transforms: there is metal at a part-space
+point when every setup's field agrees there is. Nothing is resampled into a
+common grid, so a third setup adds a term rather than another copy of the part,
+and the accuracy is each setup's own grid rather than some new one's. The
+rotation is orthonormal, so the inverse is the transpose and there is no matrix
+inversion in `engine/workpiece.js` at all.
+
+One height per column is not enough, though, and the flip is what shows it. The
+channel machined into the top is a void in the *underside* of the next billet:
+the surface the cutter meets is still full stock, and the hole is waiting six
+millimetres down. A height grid cannot say that, so the second setup drilled
+happily down to the channel, stopped at its own programmed depth and drew a
+floor across a hole. So a column carries its surface *plus the voids under it*,
+found by marching it through the earlier setups' fields, and every height the
+sweep writes settles down through any void it lands in. That is the difference
+between a floor and a breakthrough.
+
+Running the earlier setups is the price, and only the setup being watched keeps
+an event log — the others contribute a surface and nothing else, which is a
+fraction of the memory.
+
+**And whether the program made the part.** Every other check in this app
+compares a stage with the stage before it: a strategy against its geometry, the
+linker against the strategy, the post against the CL data. None of them answers
+whether the metal that comes off the machine is the shape that was asked for.
+The simulation knows what the program leaves and the model says what it should
+be, and nobody was subtracting one from the other.
+
+So `engine/verify.js` does, per cell: **gouge** where the finished surface is
+below the model, **excess** where metal stands above it that nothing will take
+off. The two are not symmetric and neither is their treatment. A gouge is
+absolute — a cut below the part is a cut below the part, and the setups that
+follow only ever remove more — so it is measured against this setup's own
+finished surface. Excess cannot be: stock standing proud in setup 1 is not
+excess if setup 2 is about to take it off, so it is measured against the
+workpiece above, after every setup has run.
+
+The tolerance is not a fudge factor and the edges are the reason. A grid samples
+the model at cell centres, and at a vertical wall one cell holds both the top of
+the wall and the floor beside it — so a single cell straddling an edge reads as
+a gouge as deep as the wall is tall, on a program that is perfect. What a grid
+knows at a cell is not a height but the *range* of heights across it, so a cell
+is judged against the range its neighbourhood spans: below all of it to be a
+gouge, above all of it to be excess, and nothing said in between. A check whose
+whole value is that it does not cry wolf cannot afford to outline every feature
+on the part in red.
+
+The viewport colours the stock by that same range rather than by a surface of
+its own — green on the model, blue for metal still standing, red for metal cut
+out of it — because a picture and a verdict that disagree about what an edge is
+are worse than either alone. It is compared at the *playhead*, not against the
+finished program: the billet starts blue all over, drains to green as the passes
+bring it to size, and anything that goes red is not coming back.
+
+The event log pays for itself twice here. Every drop records the step that made
+it, so the worst gouge names the operation that cut it and the transport button
+seeks to that move — no re-run, no second pass over the program.
+
+On a job with one setup the workpiece *is* that setup's finished surface, so the
+column march is skipped entirely and the whole check costs about ten
+milliseconds on a hundred-thousand-cell grid.
+
 The playhead is held in **seconds**, and the step is derived from it. Never the
 other way round: steps are coarse in time (one plunge can run for seconds), so
 re-deriving the clock from the current step snaps it back to that step's start
