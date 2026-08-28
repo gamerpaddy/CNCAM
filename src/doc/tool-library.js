@@ -14,8 +14,12 @@ import { reachCheck, fluteLengthOf } from '../engine/tool-geometry.js';
 
 export const LIBRARY_VERSION = 1;
 
-/** name, type, diameter and the cutting defaults that go with them. */
-export const TOOL_PRESETS = [
+/**
+ * The default catalogue: metric tooling for a hobby-class machine.
+ *
+ * name, type, diameter and the cutting defaults that go with them.
+ */
+const METRIC_GROUPS = [
   {
     group: 'End mills (flat)',
     tools: [
@@ -44,10 +48,34 @@ export const TOOL_PRESETS = [
     group: 'Drills',
     tools: [
       { name: '3mm drill', type: 'drill', diameter: 3, tipAngle: 118, flutes: 2, fluteLength: 30, spindleRpm: 3000, feedCut: 150, feedPlunge: 150 },
+      { name: '4.2mm tapping drill M5', type: 'drill', diameter: 4.2, tipAngle: 118, flutes: 2, fluteLength: 35, spindleRpm: 2600, feedCut: 170, feedPlunge: 170 },
       { name: '5mm drill', type: 'drill', diameter: 5, tipAngle: 118, flutes: 2, fluteLength: 40, spindleRpm: 2200, feedCut: 180, feedPlunge: 180 },
       { name: '6mm drill', type: 'drill', diameter: 6, tipAngle: 118, flutes: 2, fluteLength: 45, spindleRpm: 1800, feedCut: 200, feedPlunge: 200 },
+      { name: '6.8mm tapping drill M8', type: 'drill', diameter: 6.8, tipAngle: 118, flutes: 2, fluteLength: 50, spindleRpm: 1650, feedCut: 210, feedPlunge: 210 },
       { name: '8mm drill', type: 'drill', diameter: 8, tipAngle: 118, flutes: 2, fluteLength: 55, spindleRpm: 1400, feedCut: 220, feedPlunge: 220 },
-      { name: '10mm spot drill 90°', type: 'drill', diameter: 10, tipAngle: 90, flutes: 2, fluteLength: 12, spindleRpm: 4000, feedCut: 200, feedPlunge: 200 },
+      { name: '8.5mm tapping drill M10', type: 'drill', diameter: 8.5, tipAngle: 118, flutes: 2, fluteLength: 60, spindleRpm: 1300, feedCut: 230, feedPlunge: 230 },
+      { name: '10mm drill', type: 'drill', diameter: 10, tipAngle: 118, flutes: 2, fluteLength: 65, spindleRpm: 1100, feedCut: 240, feedPlunge: 240 },
+    ],
+  },
+  {
+    // Spot and centre drills: their own family, not a stubby jobber drill.
+    //
+    // Everything about one is different. It is spun three times as fast at a
+    // fraction of the chip load, because it only ever cuts on its point; it is
+    // deliberately short, because the stiffness is the whole reason it goes in
+    // first; and its diameter is *not* the hole's — it is bigger than most of
+    // what it spots. Calling it a drill made every one of those a value to
+    // correct by hand, and made a spot drill the tool a drilling pass reached
+    // for first.
+    group: 'Spot & centre drills',
+    tools: [
+      { name: '3mm centre drill 60°', type: 'spot', diameter: 3, tipAngle: 60, flutes: 2, fluteLength: 4, spindleRpm: 8000, feedCut: 120, feedPlunge: 120 },
+      { name: '6mm spot drill 90°', type: 'spot', diameter: 6, tipAngle: 90, flutes: 2, fluteLength: 7, spindleRpm: 6650, feedCut: 200, feedPlunge: 200 },
+      { name: '8mm spot drill 90°', type: 'spot', diameter: 8, tipAngle: 90, flutes: 2, fluteLength: 10, spindleRpm: 4950, feedCut: 200, feedPlunge: 200 },
+      { name: '10mm spot drill 90°', type: 'spot', diameter: 10, tipAngle: 90, flutes: 2, fluteLength: 12, spindleRpm: 4000, feedCut: 200, feedPlunge: 200 },
+      // Ground at more than the drill's own point, so the drill touches at its
+      // outer corners and not on the chisel edge it cannot cut with.
+      { name: '12mm spot drill 120°', type: 'spot', diameter: 12, tipAngle: 120, flutes: 2, fluteLength: 14, spindleRpm: 3300, feedCut: 200, feedPlunge: 200 },
     ],
   },
   {
@@ -70,12 +98,21 @@ export const TOOL_PRESETS = [
     // flute at full depth and cannot be backed off.
     group: 'Taps',
     tools: [
+      { name: 'M2×0.4 tap', type: 'tap', diameter: 2, pitch: 0.4, flutes: 3, fluteLength: 10, spindleRpm: 1000, feedCut: 400, feedPlunge: 400 },
+      { name: 'M2.5×0.45 tap', type: 'tap', diameter: 2.5, pitch: 0.45, flutes: 3, fluteLength: 12, spindleRpm: 800, feedCut: 360, feedPlunge: 360 },
       { name: 'M3×0.5 tap', type: 'tap', diameter: 3, pitch: 0.5, flutes: 3, fluteLength: 16, spindleRpm: 500, feedCut: 250, feedPlunge: 250 },
       { name: 'M4×0.7 tap', type: 'tap', diameter: 4, pitch: 0.7, flutes: 3, fluteLength: 20, spindleRpm: 450, feedCut: 315, feedPlunge: 315 },
       { name: 'M5×0.8 tap', type: 'tap', diameter: 5, pitch: 0.8, flutes: 3, fluteLength: 22, spindleRpm: 400, feedCut: 320, feedPlunge: 320 },
       { name: 'M6×1.0 tap', type: 'tap', diameter: 6, pitch: 1, flutes: 3, fluteLength: 25, spindleRpm: 350, feedCut: 350, feedPlunge: 350 },
       { name: 'M8×1.25 tap', type: 'tap', diameter: 8, pitch: 1.25, flutes: 3, fluteLength: 30, spindleRpm: 280, feedCut: 350, feedPlunge: 350 },
       { name: 'M10×1.5 tap', type: 'tap', diameter: 10, pitch: 1.5, flutes: 3, fluteLength: 35, spindleRpm: 220, feedCut: 330, feedPlunge: 330 },
+      { name: 'M12×1.75 tap', type: 'tap', diameter: 12, pitch: 1.75, flutes: 4, fluteLength: 40, spindleRpm: 190, feedCut: 333, feedPlunge: 333 },
+      // The fine series, which is a different tap and not a setting on the
+      // coarse one — an M8×1 in a hole drilled for an M8×1.25 cuts about half
+      // a thread, and the pitch is what tells the control how fast to feed.
+      { name: 'M8×1.0 fine tap', type: 'tap', diameter: 8, pitch: 1, flutes: 3, fluteLength: 30, spindleRpm: 280, feedCut: 280, feedPlunge: 280 },
+      { name: 'M10×1.25 fine tap', type: 'tap', diameter: 10, pitch: 1.25, flutes: 3, fluteLength: 35, spindleRpm: 220, feedCut: 275, feedPlunge: 275 },
+      { name: 'M12×1.5 fine tap', type: 'tap', diameter: 12, pitch: 1.5, flutes: 4, fluteLength: 40, spindleRpm: 190, feedCut: 285, feedPlunge: 285 },
     ],
   },
   {
@@ -84,10 +121,17 @@ export const TOOL_PRESETS = [
     // they reach, which is what actually decides whether one will do the job.
     group: 'Thread mills',
     tools: [
+      { name: '⌀2.5 thread mill 0.45mm', type: 'threadmill', diameter: 2.5, pitch: 0.45, flutes: 2, fluteLength: 8, spindleRpm: 9000, feedCut: 240, feedPlunge: 80 },
       { name: '⌀3.5 thread mill 0.5mm', type: 'threadmill', diameter: 3.5, pitch: 0.5, flutes: 3, fluteLength: 10, spindleRpm: 6000, feedCut: 300, feedPlunge: 100 },
       { name: '⌀4.8 thread mill 0.8mm', type: 'threadmill', diameter: 4.8, pitch: 0.8, flutes: 3, fluteLength: 14, spindleRpm: 5000, feedCut: 320, feedPlunge: 110 },
       { name: '⌀6 thread mill 1.0mm', type: 'threadmill', diameter: 6, pitch: 1, flutes: 3, fluteLength: 18, spindleRpm: 4500, feedCut: 350, feedPlunge: 120 },
       { name: '⌀8 thread mill 1.25mm', type: 'threadmill', diameter: 8, pitch: 1.25, flutes: 4, fluteLength: 24, spindleRpm: 4000, feedCut: 400, feedPlunge: 130 },
+      { name: '⌀10 thread mill 1.5mm', type: 'threadmill', diameter: 10, pitch: 1.5, flutes: 4, fluteLength: 28, spindleRpm: 2850, feedCut: 400, feedPlunge: 140 },
+      { name: '⌀12 thread mill 1.75mm', type: 'threadmill', diameter: 12, pitch: 1.75, flutes: 4, fluteLength: 32, spindleRpm: 2400, feedCut: 400, feedPlunge: 140 },
+      // Fine pitches, on a cutter of the same size: the pitch is the tooth
+      // form, so one cutter never does two of them.
+      { name: '⌀6 thread mill 0.75mm', type: 'threadmill', diameter: 6, pitch: 0.75, flutes: 3, fluteLength: 18, spindleRpm: 4500, feedCut: 350, feedPlunge: 120 },
+      { name: '⌀8 thread mill 1.0mm', type: 'threadmill', diameter: 8, pitch: 1, flutes: 4, fluteLength: 24, spindleRpm: 3600, feedCut: 400, feedPlunge: 130 },
     ],
   },
   {
@@ -145,6 +189,111 @@ export const TOOL_PRESETS = [
     ],
   },
 ];
+
+/**
+ * The imperial catalogue, as an example of what a second one looks like.
+ *
+ * Not a translation of the metric one. A shop working in inches buys different
+ * cutters, not the same cutters described in other units — a 1/4" end mill is
+ * not a 6mm one, and a 1/4-20 UNC is not an M6. Everything here is still stored
+ * in millimetres, because the geometry engine has exactly one unit and a second
+ * one is how a program comes out twenty-five times too big; the *names* are
+ * what a machinist reaches for.
+ *
+ * It is also here to be copied: "Duplicate to mine" in the tool
+ * library gives you an editable version, which is how a shop's own drawer gets
+ * built without typing forty tools in from nothing.
+ */
+const IMPERIAL_GROUPS = [
+  {
+    group: 'End mills',
+    tools: [
+      { name: '1/8" flat 2FL', type: 'flat', diameter: 3.175, flutes: 2, fluteLength: 12, spindleRpm: 18000, feedCut: 750, feedPlunge: 260 },
+      { name: '1/4" flat 3FL', type: 'flat', diameter: 6.35, flutes: 3, fluteLength: 19, spindleRpm: 12000, feedCut: 1200, feedPlunge: 420 },
+      { name: '3/8" flat 3FL', type: 'flat', diameter: 9.525, flutes: 3, fluteLength: 25, spindleRpm: 8350, feedCut: 1300, feedPlunge: 460 },
+      { name: '1/2" flat 4FL', type: 'flat', diameter: 12.7, flutes: 4, fluteLength: 32, spindleRpm: 6250, feedCut: 1750, feedPlunge: 610 },
+    ],
+  },
+  {
+    group: 'Ball nose',
+    tools: [
+      { name: '1/8" ball', type: 'ball', diameter: 3.175, flutes: 2, fluteLength: 12, spindleRpm: 18000, feedCut: 560, feedPlunge: 200 },
+      { name: '1/4" ball', type: 'ball', diameter: 6.35, flutes: 3, fluteLength: 19, spindleRpm: 11500, feedCut: 990, feedPlunge: 350 },
+      { name: '1/2" ball', type: 'ball', diameter: 12.7, flutes: 4, fluteLength: 32, spindleRpm: 5750, feedCut: 1310, feedPlunge: 460 },
+    ],
+  },
+  {
+    group: 'Drills & spotting',
+    tools: [
+      // A tapping drill in this world is a number or a letter, not a size —
+      // the name is what you go to the index looking for.
+      { name: '#25 drill (10-24 tap)', type: 'drill', diameter: 3.797, tipAngle: 118, flutes: 2, fluteLength: 30, spindleRpm: 2900, feedCut: 175, feedPlunge: 175 },
+      { name: '#7 drill (1/4-20 tap)', type: 'drill', diameter: 5.105, tipAngle: 118, flutes: 2, fluteLength: 40, spindleRpm: 2200, feedCut: 180, feedPlunge: 180 },
+      { name: '1/4" drill', type: 'drill', diameter: 6.35, tipAngle: 118, flutes: 2, fluteLength: 45, spindleRpm: 1750, feedCut: 180, feedPlunge: 180 },
+      { name: '5/16" drill (3/8-16 tap)', type: 'drill', diameter: 7.938, tipAngle: 118, flutes: 2, fluteLength: 55, spindleRpm: 1400, feedCut: 180, feedPlunge: 180 },
+      { name: '1/2" drill', type: 'drill', diameter: 12.7, tipAngle: 118, flutes: 2, fluteLength: 70, spindleRpm: 875, feedCut: 180, feedPlunge: 180 },
+      { name: '1/4" spot drill 90°', type: 'spot', diameter: 6.35, tipAngle: 90, flutes: 2, fluteLength: 8, spindleRpm: 6250, feedCut: 200, feedPlunge: 200 },
+      { name: '1/2" spot drill 90°', type: 'spot', diameter: 12.7, tipAngle: 90, flutes: 2, fluteLength: 15, spindleRpm: 3150, feedCut: 200, feedPlunge: 200 },
+    ],
+  },
+  {
+    // The unified coarse series, by the pitch it actually is: threads per inch
+    // is a *rate*, and a control feeds in millimetres per turn, so the number
+    // stored is 25.4/TPI and the name is what is stamped on the shank.
+    group: 'Taps (UNC)',
+    tools: [
+      { name: '#10-24 UNC tap', type: 'tap', diameter: 4.826, pitch: 1.058, flutes: 3, fluteLength: 22, spindleRpm: 550, feedCut: 582, feedPlunge: 582 },
+      { name: '1/4-20 UNC tap', type: 'tap', diameter: 6.35, pitch: 1.27, flutes: 3, fluteLength: 25, spindleRpm: 400, feedCut: 508, feedPlunge: 508 },
+      { name: '5/16-18 UNC tap', type: 'tap', diameter: 7.938, pitch: 1.411, flutes: 3, fluteLength: 28, spindleRpm: 300, feedCut: 423, feedPlunge: 423 },
+      { name: '3/8-16 UNC tap', type: 'tap', diameter: 9.525, pitch: 1.588, flutes: 3, fluteLength: 32, spindleRpm: 300, feedCut: 476, feedPlunge: 476 },
+      { name: '1/2-13 UNC tap', type: 'tap', diameter: 12.7, pitch: 1.954, flutes: 4, fluteLength: 38, spindleRpm: 300, feedCut: 586, feedPlunge: 586 },
+    ],
+  },
+  {
+    group: 'Thread mills',
+    tools: [
+      { name: '0.185" thread mill 20 TPI', type: 'threadmill', diameter: 4.7, pitch: 1.27, flutes: 3, fluteLength: 14, spindleRpm: 5000, feedCut: 320, feedPlunge: 110 },
+      { name: '0.300" thread mill 16 TPI', type: 'threadmill', diameter: 7.62, pitch: 1.588, flutes: 3, fluteLength: 22, spindleRpm: 3750, feedCut: 300, feedPlunge: 105 },
+      { name: '0.400" thread mill 13 TPI', type: 'threadmill', diameter: 10.16, pitch: 1.954, flutes: 4, fluteLength: 28, spindleRpm: 2800, feedCut: 400, feedPlunge: 140 },
+    ],
+  },
+  {
+    group: 'Chamfer & face',
+    tools: [
+      { name: '1/4" chamfer 90°', type: 'chamfer', diameter: 6.35, tipAngle: 90, tipDiameter: 0.5, flutes: 2, fluteLength: 11, spindleRpm: 11000, feedCut: 1100, feedPlunge: 390 },
+      { name: '1/2" chamfer 90°', type: 'chamfer', diameter: 12.7, tipAngle: 90, tipDiameter: 1, flutes: 2, fluteLength: 21, spindleRpm: 5500, feedCut: 1100, feedPlunge: 390 },
+      { name: '2" face mill', type: 'face', diameter: 50.8, flutes: 6, fluteLength: 13, spindleRpm: 2200, feedCut: 2650, feedPlunge: 930 },
+    ],
+  },
+];
+
+/**
+ * The catalogues that ship with the app.
+ *
+ * Built in, so they cannot be edited away and are the same in every project and
+ * every browser. Everything the user builds lives beside them in catalogues of
+ * their own — see `loadCatalogs` below — and either kind can be exported to a
+ * file and imported anywhere.
+ */
+export const BUILTIN_CATALOGS = [
+  {
+    id: 'metric',
+    name: 'Metric workshop',
+    note: 'The default: metric cutters and ISO turning inserts, at speeds for '
+      + 'aluminium in a hobby-class spindle.',
+    groups: METRIC_GROUPS,
+  },
+  {
+    id: 'imperial',
+    name: 'Imperial / inch',
+    note: 'An example second catalogue: inch cutters and UNC taps, by the names '
+      + 'they are bought under. Sizes are still stored in millimetres.',
+    groups: IMPERIAL_GROUPS,
+  },
+];
+
+/** The default catalogue's groups — what `TOOL_PRESETS` has always meant. */
+export const TOOL_PRESETS = METRIC_GROUPS;
 
 const BASE = {
   cornerRadius: 0,
@@ -213,8 +362,10 @@ export function toolFromPreset(preset, number = 1) {
     // everything else, because nothing else is a screw.
     pitch: merged.pitch ?? 0,
     // How many threads of a tap's end are ground away as a lead. Those cut
-    // nothing at full depth, which is why a blind hole is tapped short.
-    leadThreads: merged.leadThreads ?? 2,
+    // nothing at full depth, which is why a blind hole is tapped short. A lead
+    // belongs to a tap and to nothing else, so an end mill does not carry one —
+    // see defaultsForType, which clears it the same way when a family changes.
+    leadThreads: type === 'tap' ? (merged.leadThreads ?? 2) : 0,
     tipDiameter: merged.tipDiameter ?? 0,
     noseRadius: fromCode?.noseRadius ?? merged.noseRadius ?? 0,
     bladeWidth: merged.bladeWidth ?? 0,
@@ -250,17 +401,32 @@ export function machineForType(type) {
  * lathe library and left centre drilling with nothing to do it with.
  */
 export function machineCanHold(type, machine) {
-  if (type === 'drill') return true;
+  // …and a spot drill for the same reason: a centre drill in the tailstock is
+  // how a bar is started, and it is the one thing that puts a hole on the axis
+  // rather than a millimetre off it.
+  if (type === 'drill' || type === 'spot') return true;
   return machineForType(type) === machine;
 }
 
-/** The preset groups that belong to a machine, so a lathe never offers end mills. */
-export function presetsFor(machine) {
-  return TOOL_PRESETS
-    .map((group) => ({
+/**
+ * The preset groups that belong to a machine, so a lathe never offers end mills.
+ *
+ * @param catalogId one built-in catalogue, or null for every one of them. Each
+ *   group comes back tagged with the catalogue it is from, because two
+ *   catalogues both have a group called "End mills" and a heading that does not
+ *   say which is a heading that lies.
+ */
+export function presetsFor(machine, catalogId = null) {
+  const catalogs = catalogId
+    ? BUILTIN_CATALOGS.filter((c) => c.id === catalogId)
+    : BUILTIN_CATALOGS;
+  return catalogs
+    .flatMap((catalog) => catalog.groups.map((group) => ({
       ...group,
+      catalog: catalog.id,
+      catalogName: catalog.name,
       tools: group.tools.filter((t) => machineCanHold(t.type, machine)),
-    }))
+    })))
     .filter((group) => group.tools.length > 0);
 }
 
@@ -307,6 +473,9 @@ const CUTTING = {
   threadmill: { vc: 90, fz: 0.0035, maxRpm: 12000 },
 };
 
+/** Families that only ever cut on the way down, so their two feeds are one. */
+const PLUNGE_IS_THE_CUT = new Set(['drill', 'spot', 'tap']);
+
 /**
  * The coarse pitch of a metric thread, from the table on every workshop wall.
  *
@@ -339,6 +508,9 @@ export function coarsePitch(diameter) {
 export function suggestCutting({
   type = 'flat', diameter = 6, flutes, tipAngle = 0, workDiameter = 30, pitch = 0,
 }) {
+  // A spot drill is its own family now, but projects saved before it was still
+  // hold theirs as short, blunt drills — and those are spot drills whatever
+  // they are typed as, so they are spun like one.
   const family = type === 'drill' && tipAngle > 0 && tipAngle <= 100 ? 'spot' : type;
   const spec = CUTTING[family] ?? CUTTING.flat;
   const lathe = machineForType(type) === 'turn';
@@ -361,8 +533,13 @@ export function suggestCutting({
     spindleRpm: rpm,
     feedCut,
     // A tap goes in and comes out at the same rate, because both are the same
-    // screw turning the other way.
-    feedPlunge: family === 'tap' ? feedCut
+    // screw turning the other way — and a drill or a spot drill never does
+    // anything *but* plunge, so a third of the cutting feed is not a gentler
+    // entry, it is the whole operation running at a third speed. A drilling
+    // cycle is emitted at FEED.PLUNGE from end to end (see cl.js drill), which
+    // is why the hand-tuned drill presets all carry the two the same and only
+    // a wizard-built drill came out slow.
+    feedPlunge: PLUNGE_IS_THE_CUT.has(family) ? feedCut
       : Math.max(10, Math.round((feedCut * (lathe ? 0.8 : 0.35)) / 5) * 5),
     shank: [{ diameter: shankFor(diameter), length: Math.max(25, diameter * 4) }],
     holder: [{ diameter: Math.max(25, diameter * 2.5), length: 50 }],
@@ -417,7 +594,10 @@ export function defaultsForType(type, from = {}) {
     type,
     cornerRadius: type === 'bull' ? Math.max(0.1, from.cornerRadius || 1) : 0,
     tipAngle: type === 'drill' ? (from.tipAngle || 118)
-      : type === 'chamfer' ? (from.tipAngle || 90) : 0,
+      // 90° is what a spot drill is bought as: it leaves a cone the drill's
+      // outer corners touch first, and it is the same cut as a chamfer.
+      : type === 'spot' ? (from.tipAngle || 90)
+        : type === 'chamfer' ? (from.tipAngle || 90) : 0,
     tipDiameter: type === 'chamfer' ? (from.tipDiameter || 0.2) : 0,
     noseRadius: type === 'turning' || type === 'boring'
       ? Math.max(0.05, from.noseRadius || 0.8) : 0,
@@ -561,7 +741,7 @@ export function toolWarnings(tool) {
 
 function defaultFlutes(type, diameter) {
   if (isLatheTool(type)) return 1;
-  if (type === 'drill') return 2;
+  if (type === 'drill' || type === 'spot') return 2;
   if (type === 'chamfer') return diameter < 5 ? 1 : 2;
   if (type === 'face') return Math.max(3, Math.round(diameter / 8));
   return diameter < 4 ? 2 : diameter < 10 ? 3 : 4;
@@ -569,7 +749,11 @@ function defaultFlutes(type, diameter) {
 
 function defaultFluteLength(type, diameter, tipAngle = 0) {
   // a spot drill is stubby on purpose; that stiffness is the whole point of it
+  if (type === 'spot') return diameter * 1.2;
   if (type === 'drill') return tipAngle > 0 && tipAngle <= 100 ? diameter * 1.2 : diameter * 8;
+  // A tap's cutting length is the thread it can cut, which is what a blind hole
+  // is measured against — three diameters is a stub tap's, and typical.
+  if (type === 'tap') return Math.max(8, diameter * 3);
   if (type === 'face') return Math.max(6, diameter * 0.25);
   if (isLatheTool(type)) return Math.max(10, diameter * 2);
   if (type === 'chamfer') {
@@ -601,6 +785,12 @@ export function suggestName(tool) {
     case 'ball': return `${d}mm ball`;
     case 'bull': return `${d}mm bull r${trim(tool.cornerRadius)}`;
     case 'drill': return `${d}mm drill`;
+    // A spot drill is named by its point, because the point is what it does:
+    // a 60° one centres, a 90° one spots and chamfers, a 120° one prepares a
+    // 118° drill without letting it touch on the chisel edge.
+    case 'spot': return tool.tipAngle > 0 && tool.tipAngle < 75
+      ? `${d}mm centre drill ${trim(tool.tipAngle)}°`
+      : `${d}mm spot drill ${trim(tool.tipAngle ?? 90)}°`;
     case 'chamfer':
       return tool.tipAngle && tool.tipAngle < 70
         ? `${d}mm V bit ${trim(tool.tipAngle)}°`
@@ -628,57 +818,215 @@ export function suggestName(tool) {
 
 function trim(v) { return String(Math.round((v ?? 0) * 1000) / 1000); }
 
-// --- the user's own tools -------------------------------------------------
+// --- the user's own catalogues --------------------------------------------
 //
-// The built-in presets are a starting point and cannot be edited away. Tools
-// the user builds in the wizard, or saves out of a project, go here — and can
-// be deleted again, which is the half of "a library" that was missing.
+// A catalogue is a named drawer of cutters. The built-in ones above cannot be
+// edited away and are the same everywhere; these are the user's, they live in
+// this browser, and either kind can be written to a file and read back.
+//
+// Why more than one drawer rather than one long list: a shop does not have "my
+// tools", it has the tools in the mill's carousel, the ones in the lathe's
+// turret, and the box of specials for the one job that comes back every March.
+// A single list of ninety cutters is a list nobody scans, and the thing that
+// makes it a library rather than a heap is being able to hand somebody *the
+// carousel* as a file.
 
-const USER_KEY = 'cncam.toolLibrary';
+const USER_KEY = 'cncam.toolLibrary';         // the old flat list, read once
+const CATALOG_KEY = 'cncam.toolCatalogs';
 
-export function loadUserTools() {
-  try {
-    const raw = localStorage.getItem(USER_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];      // private mode, or something else wrote to the key
-  }
-}
+/** The catalogue a tool goes to when nobody says which. */
+export const DEFAULT_CATALOG = 'mine';
 
-function writeUserTools(tools) {
-  try {
-    localStorage.setItem(USER_KEY, JSON.stringify(tools));
-    return true;
-  } catch {
-    return false;
-  }
+function emptyCatalog() {
+  return { id: DEFAULT_CATALOG, name: 'My tools', tools: [] };
 }
 
 /**
- * Put a tool in the library, replacing any entry of the same name.
+ * Every catalogue the user has, always with at least the default one.
+ *
+ * Migrates the single flat list this used to be, the first time it is asked:
+ * those tools become "My tools" and the old key is left alone, so an older
+ * build of the app opened against the same browser still finds them.
+ */
+export function loadCatalogs() {
+  let stored = null;
+  try {
+    stored = JSON.parse(localStorage.getItem(CATALOG_KEY) ?? 'null');
+  } catch {
+    stored = null;              // private mode, or something else wrote the key
+  }
+  const catalogs = Array.isArray(stored?.catalogs)
+    ? stored.catalogs.filter((c) => c && typeof c.id === 'string' && Array.isArray(c.tools))
+    : null;
+  if (catalogs) {
+    return catalogs.some((c) => c.id === DEFAULT_CATALOG)
+      ? catalogs
+      : [emptyCatalog(), ...catalogs];
+  }
+  return [{ ...emptyCatalog(), tools: readLegacyTools() }];
+}
+
+function readLegacyTools() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(USER_KEY) ?? 'null');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCatalogs(catalogs) {
+  try {
+    localStorage.setItem(CATALOG_KEY, JSON.stringify({
+      version: LIBRARY_VERSION, catalogs,
+    }));
+    return true;
+  } catch {
+    return false;               // storage is full, or unavailable
+  }
+}
+
+/** One catalogue by id — built-in or the user's — or null. */
+export function catalogById(id) {
+  const builtin = BUILTIN_CATALOGS.find((c) => c.id === id);
+  if (builtin) {
+    return { ...builtin, builtin: true, tools: builtin.groups.flatMap((g) => g.tools) };
+  }
+  const mine = loadCatalogs().find((c) => c.id === id);
+  return mine ? { ...mine, builtin: false } : null;
+}
+
+/**
+ * A new catalogue, with whatever should already be in it.
+ * @returns the catalogue, or null when storage would not take it
+ */
+export function createCatalog(name, tools = []) {
+  const catalogs = loadCatalogs();
+  const catalog = { id: uid('cat'), name: uniqueCatalogName(name, catalogs), tools };
+  catalogs.push(catalog);
+  return writeCatalogs(catalogs) ? catalog : null;
+}
+
+/**
+ * Two drawers with the same name on them are two drawers you cannot tell apart,
+ * and the place that bites is import: bring the same file in twice and the
+ * picker shows two identical entries with different contents.
+ */
+function uniqueCatalogName(name, catalogs) {
+  const base = String(name ?? '').trim() || 'Catalogue';
+  const taken = new Set([
+    ...catalogs.map((c) => c.name),
+    ...BUILTIN_CATALOGS.map((c) => c.name),
+  ]);
+  if (!taken.has(base)) return base;
+  for (let n = 2; n < 500; n++) {
+    if (!taken.has(`${base} ${n}`)) return `${base} ${n}`;
+  }
+  return `${base} ${uid('')}`;
+}
+
+export function renameCatalog(id, name) {
+  const catalogs = loadCatalogs();
+  const catalog = catalogs.find((c) => c.id === id);
+  if (!catalog) return false;
+  const wanted = String(name ?? '').trim();
+  if (!wanted || wanted === catalog.name) return false;
+  catalog.name = uniqueCatalogName(wanted, catalogs.filter((c) => c.id !== id));
+  return writeCatalogs(catalogs);
+}
+
+/**
+ * Throw a catalogue away. The default one is emptied rather than removed: it is
+ * where a tool goes when nobody says where, so it has to exist.
+ */
+export function deleteCatalog(id) {
+  const catalogs = loadCatalogs();
+  if (!catalogs.some((c) => c.id === id)) return false;
+  return writeCatalogs(id === DEFAULT_CATALOG
+    ? catalogs.map((c) => (c.id === id ? { ...c, tools: [] } : c))
+    : catalogs.filter((c) => c.id !== id));
+}
+
+/**
+ * Put a tool in a catalogue, replacing any entry of the same name in it.
  * Ids and tool numbers are not saved: those belong to the project it came from.
  */
-export function saveUserTool(tool) {
+export function saveUserTool(tool, catalogId = DEFAULT_CATALOG) {
   const { id, number, ...rest } = tool;
-  const tools = loadUserTools().filter((t) => t.name !== rest.name);
-  tools.push(rest);
-  tools.sort((a, b) => a.name.localeCompare(b.name));
-  return writeUserTools(tools) ? tools : null;
+  const catalogs = loadCatalogs();
+  const catalog = catalogs.find((c) => c.id === catalogId)
+    ?? catalogs.find((c) => c.id === DEFAULT_CATALOG);
+  if (!catalog) return null;
+  catalog.tools = catalog.tools.filter((t) => t.name !== rest.name);
+  catalog.tools.push(rest);
+  catalog.tools.sort((a, b) => a.name.localeCompare(b.name));
+  return writeCatalogs(catalogs) ? catalog.tools : null;
 }
 
-export function removeUserTool(name) {
-  return writeUserTools(loadUserTools().filter((t) => t.name !== name));
+/**
+ * Take a tool out again.
+ * @param catalogId the one to take it from, or null for wherever it is
+ */
+export function removeUserTool(name, catalogId = null) {
+  const catalogs = loadCatalogs().map((c) => (catalogId && c.id !== catalogId ? c : {
+    ...c, tools: c.tools.filter((t) => t.name !== name),
+  }));
+  return writeCatalogs(catalogs);
 }
 
-/** Flat list of every preset, with its group name attached. */
+/** Every tool the user has, across every catalogue of theirs. */
+export function loadUserTools() {
+  return loadCatalogs().flatMap((c) => c.tools);
+}
+
+/**
+ * The user's catalogues holding only what this machine can hold, which is the
+ * shape the picker lists them in — so a lathe never offers end mills out of a
+ * drawer either.
+ */
+export function userCatalogsFor(machine) {
+  return loadCatalogs().map((c) => ({
+    ...c,
+    tools: c.tools.filter((t) => machineCanHold(t.type, machine)),
+  }));
+}
+
+/** Flat list of every built-in preset, with its group and catalogue attached. */
 export function allPresets() {
-  return TOOL_PRESETS.flatMap((g) => g.tools.map((t) => ({ ...t, group: g.group })));
+  return BUILTIN_CATALOGS.flatMap((c) => c.groups.flatMap(
+    (g) => g.tools.map((t) => ({ ...t, group: g.group, catalog: c.id })),
+  ));
 }
 
-export function serializeLibrary(tools) {
-  return JSON.stringify({ version: LIBRARY_VERSION, tools }, null, 2);
+/**
+ * A library, or a catalogue, as a file.
+ *
+ * One format for both, because they are one thing: a catalogue is a named list
+ * of tools and a project's tools are the same list without a name on it. So an
+ * exported catalogue imports straight into a project as tools, and a project's
+ * tools import as a catalogue — which is most of what the file is for.
+ */
+export function serializeLibrary(tools, name = '') {
+  return JSON.stringify({
+    version: LIBRARY_VERSION, ...(name ? { name } : {}), tools,
+  }, null, 2);
+}
+
+/** The same file read as a catalogue: the name on it, and its tools as records. */
+export function deserializeCatalog(json) {
+  const parsed = JSON.parse(json);
+  const tools = Array.isArray(parsed) ? parsed : parsed?.tools;
+  if (!Array.isArray(tools)) throw new Error('not a tool library (expected a tools array)');
+  // Stored as records rather than as project tools: a catalogue entry has no id
+  // and no tool number, because those belong to the project it is pulled into
+  // and not to the drawer it sits in.
+  return {
+    name: typeof parsed?.name === 'string' ? parsed.name : '',
+    tools: tools.map((t) => {
+      const { id, number, ...rest } = toolFromPreset(t, 1);
+      return rest;
+    }),
+  };
 }
 
 /**

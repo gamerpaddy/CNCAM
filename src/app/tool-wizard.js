@@ -22,6 +22,7 @@ import { toolIcon, toolAssembly, describeTool, TYPE_COLORS } from './tool-shape.
 import {
   toolFromPreset, suggestCutting, suggestName, machineForType,
   toolWarnings, cuttingReadout, defaultsForType, coarsePitch,
+  loadCatalogs, DEFAULT_CATALOG,
 } from '../doc/tool-library.js';
 import { toolLength, reachCheck, latheReachOf, fluteLengthOf } from '../engine/tool-geometry.js';
 import {
@@ -40,6 +41,7 @@ const FAMILIES = [
   { type: 'bull', label: 'Bull nose', hint: 'Flat with a radiused corner — stiffer than a ball, kinder than a flat.' },
   { type: 'chamfer', label: 'Chamfer / V bit', hint: 'A cone. Breaks edges, cuts V grooves, engraves.' },
   { type: 'drill', label: 'Drill', hint: 'Makes holes on centre. Cannot cut sideways.' },
+  { type: 'spot', label: 'Spot / centre drill', hint: 'Short and stiff, cuts only on its point. Starts a hole where the program put it.' },
   { type: 'face', label: 'Face mill', hint: 'Wide and shallow, for taking the skin off a billet.' },
   { type: 'tap', label: 'Tap', hint: 'Cuts a thread in a drilled hole. One turn advances it one pitch, and nothing else will do.' },
   { type: 'threadmill', label: 'Thread mill', hint: 'Mills a thread on a helix. One cutter does every diameter of its pitch, in either hand.' },
@@ -124,12 +126,14 @@ const SIZE_FIELDS = [
   },
   {
     key: 'tipAngle', label: 'Point angle (°)', step: 1, min: 1, max: 179,
-    when: (t) => t.type === 'drill' || t.type === 'chamfer',
-    hint: 'The full included angle. 118° is a jobber drill; 90° a chamfer mill; 30° a fine V bit.',
+    when: (t) => t.type === 'drill' || t.type === 'chamfer' || t.type === 'spot',
+    hint: 'The full included angle. 118° is a jobber drill; 90° a spot drill or a '
+      + 'chamfer mill; 60° a centre drill; 30° a fine V bit. A spot for a drill is '
+      + 'ground blunter than the drill, so the drill touches at its corners.',
   },
   {
     key: 'tipDiameter', label: 'Flat on the tip (mm)', step: 0.05, min: 0,
-    when: (t) => t.type === 'drill' || t.type === 'chamfer',
+    when: (t) => t.type === 'drill' || t.type === 'chamfer' || t.type === 'spot',
     hint: 'Most V bits end in a small flat rather than a point. It sets the finest line the tool can hold.',
   },
   {
@@ -189,6 +193,10 @@ function isInsert(draft) { return draft.type === 'turning' || draft.type === 'bo
 /** Sizes that other fields are computed from, so changing one re-derives. */
 const DERIVING = new Set([
   'diameter', 'flutes', 'tipAngle', 'cornerRadius', 'noseRadius', 'bladeWidth',
+  // A tap's feed *is* its pitch times its speed, and its name is the pair — so
+  // typing a fine pitch into an M8 has to move both. Without this the dialog
+  // sat there reading "M8×1.25 tap" at 350mm/min with 1.0 in the pitch box.
+  'pitch',
 ]);
 
 const SPEED_FIELDS = [
@@ -204,7 +212,8 @@ const SPEED_KEYS = new Set(SPEED_FIELDS.map((f) => f.key));
  * @param number the tool number to give it
  * @param tool an existing tool to edit rather than a blank one to build
  * @param onCreate (tool) => void
- * @param onSaveToLibrary optional (tool) => void, for the "keep this" tick
+ * @param onSaveToLibrary optional (tool, catalogId) => void, for the "keep
+ *   this" tick and the drawer it is kept in
  */
 export function openToolWizard({
   machine = 'mill', number = 1, tool: editing = null, onCreate, onSaveToLibrary,
@@ -230,6 +239,10 @@ export function openToolWizard({
     customPoints: null,
     minBore: 0,
     maxDepth: 0,
+    // screws: millimetres per turn, and how many threads of a tap's end are
+    // ground away as a lead
+    pitch: 0,
+    leadThreads: 2,
     fluteLength: 20,
     flutes: 2,
     shankDiameter: 6,
@@ -266,6 +279,8 @@ export function openToolWizard({
       customPoints: isPolygon(editing.customPoints) ? editing.customPoints : null,
       minBore: editing.minBore ?? 0,
       maxDepth: editing.maxDepth ?? 0,
+      pitch: editing.pitch ?? 0,
+      leadThreads: editing.leadThreads ?? 2,
       fluteLength: fluteLengthOf(editing) || draft.fluteLength,
       flutes: editing.flutes ?? draft.flutes,
       shankDiameter: shank?.diameter ?? draft.shankDiameter,
@@ -293,6 +308,14 @@ export function openToolWizard({
   const nameInput = el('input', { type: 'text', class: 'wiz-name' });
   const saveToLibrary = el('input', { type: 'checkbox' });
   saveToLibrary.checked = true;
+  // Which drawer it is kept in. Shown only when there is more than one, because
+  // a choice of one is not a choice — it is a control that says "My tools" and
+  // does nothing.
+  const catalogs = loadCatalogs();
+  const saveWhere = el('select', { class: 'wiz-catalog' }, catalogs.map((c) =>
+    el('option', { value: c.id }, [c.name])));
+  saveWhere.value = catalogs.some((c) => c.id === DEFAULT_CATALOG)
+    ? DEFAULT_CATALOG : catalogs[0].id;
 
   const familyCards = FAMILIES.map((family) => {
     const card = el('button', {
@@ -383,6 +406,13 @@ export function openToolWizard({
       cornerRadius: draft.cornerRadius,
       tipAngle: draft.tipAngle,
       tipDiameter: draft.tipDiameter,
+      // The pitch is the whole of what makes a tap a tap and a thread mill a
+      // thread mill — on a tap it is the feed, and there is no other number it
+      // could be. It was asked for, drawn, and then dropped on the way out of
+      // this function, so every tap the wizard built came out with a pitch of
+      // zero and no feed anything could compute.
+      pitch: draft.pitch,
+      leadThreads: draft.leadThreads,
       noseRadius: draft.noseRadius,
       bladeWidth: draft.bladeWidth,
       insert: draft.insert,
@@ -495,6 +525,9 @@ export function openToolWizard({
       if (spec.key === 'fluteLength') draft.fluteEdited = true;
       if (spec.key === 'shankDiameter') draft.shankEdited = true;
       if (spec.key === 'stickout') draft.stickoutEdited = true;
+      // …and a pitch that was typed is a thread that was chosen, not a coarse
+      // one to be filled back in the next time a diameter moves
+      if (spec.key === 'pitch') draft.pitchEdited = true;
       if (SPEED_KEYS.has(spec.key)) draft.speedsEdited = true;
       // Every size that feeds the name or the speeds re-derives them. Without
       // the angle in this list, typing 30° into a V bit left it named "90°".
@@ -600,8 +633,15 @@ export function openToolWizard({
     return {
       diameter: type === 'boring' ? 12 : 6,
       cornerRadius: type === 'bull' ? 1.5 : 0,
-      tipAngle: type === 'drill' ? 118 : type === 'chamfer' ? 60 : 0,
+      tipAngle: type === 'drill' ? 118 : type === 'chamfer' ? 60
+        : type === 'spot' ? 90 : 0,
       tipDiameter: 0,
+      // A tap and a thread mill are both shaped *by* their pitch — the lead
+      // taper on one and the tooth form on the other — so a card drawn with the
+      // draft's pitch of zero showed both as plain cylinders, identical to the
+      // flat end mill three cards to the left.
+      pitch: type === 'tap' || type === 'threadmill' ? 1 : 0,
+      leadThreads: type === 'tap' ? 3 : 0,
       // a card icon has to show the *family*, so the insert is drawn at the
       // shape and size the family is typically bought in rather than at
       // whatever the draft happens to hold
@@ -621,7 +661,7 @@ export function openToolWizard({
   create.addEventListener('click', () => {
     const tool = toolFromDraft();
     dialog.close();
-    if (!editing && saveToLibrary.checked) onSaveToLibrary?.(tool);
+    if (!editing && saveToLibrary.checked) onSaveToLibrary?.(tool, saveWhere.value);
     onCreate?.(tool);
   });
 
@@ -663,6 +703,7 @@ export function openToolWizard({
       ...(editing ? [] : [el('label', { class: 'toggle', title: 'Keep it for other projects too' }, [
         saveToLibrary, 'Add to my library',
       ])]),
+      ...(editing || catalogs.length < 2 ? [] : [saveWhere]),
       el('span', { class: 'spacer' }),
       el('button', { onclick: () => dialog.close() }, ['Cancel']),
       create,

@@ -20,7 +20,9 @@ const WORKFLOW = [
     + 'engrave rather than a solid to machine.'],
   ['Pull the cutters', 'Tool Library. Every cutter is drawn to scale, so a bull '
     + 'nose and a ball are told apart by shape. A lathe shows lathe tooling and '
-    + 'a mill shows end mills; drills are in both.'],
+    + 'a mill shows end mills; drills and centre drills are in both. Cutters sit '
+    + 'in catalogues — two built in, plus any of your own, which can be exported '
+    + 'to a file and imported anywhere.'],
   ['Describe the setup', 'Raw stock as a size, how the part is fixtured, where the '
     + 'controller\'s zero sits, and any clamps the tool has to keep out of.'],
   ['Add operations, in machining order', 'Face, rough, profile, holes, chamfer, '

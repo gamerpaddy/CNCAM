@@ -573,7 +573,10 @@ function turnPathLength(ops) {
 
 /** Tools that work inside the part rather than on the outside of it. */
 function isInternalTool(tool) {
-  return tool?.type === 'boring' || tool?.type === 'drill';
+  // A centre drill in the tailstock is the same move as a drill in it — down
+  // the axis, opening a hole — so it opens one here too. Leaving it out left a
+  // lathe spotting pass cutting nothing visible at all.
+  return tool?.type === 'boring' || tool?.type === 'drill' || tool?.type === 'spot';
 }
 
 /**
@@ -650,7 +653,7 @@ export function simulateTurning({
     const cycleR = Math.max(0.05, (tool?.diameter ?? 3) / 2);
     // The radius a drill *tool* sweeps on its ordinary moves, and zero for
     // everything else — an insert cuts with its nose, not with its shank.
-    const drillR = tool?.type === 'drill' ? cycleR : 0;
+    const drillR = tool?.type === 'drill' || tool?.type === 'spot' ? cycleR : 0;
     const d = cl.moves;
     let feeds = { cut: 120, plunge: 80 };
     let prev = null;

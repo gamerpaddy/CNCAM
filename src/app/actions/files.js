@@ -235,6 +235,13 @@ export function makeFileActions(ctx, program) {
       onNew: newTool,
       onImport: importTools,
       onExport: exportTools,
+      // The catalogue buttons read and write their own files: what goes in one
+      // is a catalogue, and only the dialog knows which drawer is open.
+      files: {
+        open: () => openFile(ACCEPT.toolLibrary),
+        save: (name, text) => saveFile(name, text, ACCEPT.toolLibrary),
+      },
+      onStatus: (message, isError = false) => ctx.ui.setStatus(message, isError),
     });
   }
 
@@ -255,7 +262,7 @@ export function makeFileActions(ctx, program) {
         doc.select('tool', tool.id);
         ctx.ui.setStatus(`Added T${tool.number} ${tool.name} — ${describeTool(tool)}`);
       },
-      onSaveToLibrary: (tool) => saveUserTool(tool),
+      onSaveToLibrary: (tool, catalogId) => saveUserTool(tool, catalogId),
     });
   }
 
@@ -289,7 +296,7 @@ export function makeFileActions(ctx, program) {
     if (!tool) return;
     const saved = saveUserTool(tool);
     ctx.ui.setStatus(saved
-      ? `${tool.name} saved to your library — it is in the Tool Library dialog now`
+      ? `${tool.name} saved to My tools — it is in the Tool Library dialog now`
       : 'Could not save to the library (browser storage is unavailable)', !saved);
   }
 
@@ -319,7 +326,9 @@ export function makeFileActions(ctx, program) {
       return ctx.ui.setStatus('No tools to export', true);
     }
     await saveFile(`${doc.project.name}-tools.json`,
-      serializeLibrary(doc.project.tools), ACCEPT.toolLibrary);
+      // named after the project, so importing it back as a catalogue gives a
+      // drawer that says where those cutters came from
+      serializeLibrary(doc.project.tools, doc.project.name), ACCEPT.toolLibrary);
     ctx.ui.setStatus(`Exported ${plural(doc.project.tools.length, 'tool')}`);
   }
 

@@ -23,7 +23,9 @@ const DEFAULT_ARC_SEGMENTS = 20;
 /** Point angle for a cutter that has not been given one. */
 export function tipAngleOf(tool) {
   if (tool?.tipAngle > 0 && tool.tipAngle < 180) return tool.tipAngle;
-  return tool?.type === 'drill' ? 118 : tool?.type === 'chamfer' ? 90 : 0;
+  if (tool?.type === 'drill') return 118;
+  // a spot drill and a chamfer mill are the same cone, bought at the same angle
+  return tool?.type === 'chamfer' || tool?.type === 'spot' ? 90 : 0;
 }
 
 /**
@@ -49,7 +51,7 @@ export function cuttingPoints(tool, segments = DEFAULT_ARC_SEGMENTS) {
       const a = (i / segments) * (Math.PI / 2);
       points.push([flat + corner * Math.sin(a), corner - corner * Math.cos(a)]);
     }
-  } else if (type === 'drill' || type === 'chamfer') {
+  } else if (type === 'drill' || type === 'chamfer' || type === 'spot') {
     const angle = (tipAngleOf(tool) * Math.PI) / 180;
     const tipR = Math.min(Math.max(0, (tool.tipDiameter ?? 0) / 2), r * 0.9);
     points.push([0, 0], [tipR, 0], [r, (r - tipR) / Math.tan(angle / 2)]);
@@ -80,6 +82,22 @@ export function cuttingPoints(tool, segments = DEFAULT_ARC_SEGMENTS) {
     const start = Math.max(0.05, r - pitch * 0.65);
     points.push([0, 0], [start, 0]);
     if (lead > 0) points.push([r, lead]); else points.push([r, 0]);
+  } else if (type === 'threadmill' && tool.pitch > 0) {
+    // A thread mill is not an end mill: the form *is* the tool. A stack of vee
+    // teeth of the thread's own pitch, cut on the flank, and a cutter drawn as
+    // a plain cylinder was indistinguishable from a flat end mill in the rack —
+    // which is the one thing the picture is there to tell you.
+    //
+    // The crest is the full diameter and the root is a thread depth in from it
+    // (0.54×pitch for a 60° ISO form), so the widest point is unchanged and
+    // nothing downstream reads a different size than it did.
+    const pitch = tool.pitch;
+    const root = Math.max(0.05, r - pitch * 0.54);
+    const teeth = Math.max(1, Math.min(24, Math.floor(fluteLengthOf(tool) / pitch)));
+    points.push([0, 0], [root, 0]);
+    for (let i = 0; i < teeth; i++) {
+      points.push([r, i * pitch + pitch * 0.5], [root, (i + 1) * pitch]);
+    }
   } else if (type === 'face') {
     // insert corners are chamfered; that is what a face mill's edge looks like
     const c = Math.min(r * 0.15, 2);

@@ -75,11 +75,12 @@ test('a machine is only offered cutters it can hold', () => {
     'no lathe inserts in the mill list');
   assert.ok(lathe.every((t) => machineCanHold(t.type, 'turn')),
     'and no end mills in the turret');
-  assert.ok(!lathe.some((t) => machineForType(t.type) === 'mill' && t.type !== 'drill'),
-    'the only milling cutter a lathe holds is a drill, down the axis');
-  // Drills are held by both, so the two lists overlap rather than partition —
-  // which is the point: a lathe that could not offer a drill had nothing to
-  // centre-drill with.
+  assert.ok(!lathe.some((t) => machineForType(t.type) === 'mill'
+    && t.type !== 'drill' && t.type !== 'spot'),
+  'the only milling cutters a lathe holds go down the axis: drills and centre drills');
+  // Those are held by both, so the two lists overlap rather than partition —
+  // which is the point: a lathe that could not offer a drill or a centre drill
+  // had nothing to start a hole with.
   const together = new Set([...mill, ...lathe]);
   assert.eq(together.size, allPresets().length, 'and none went missing');
 });

@@ -36,12 +36,29 @@ flat milled on it is one part and two jobs, and switching machines hides
 nothing: the other machine's work is there when you switch back.
 
 **Tool library** — presets by cutter family (flat / ball / bull / drill /
-chamfer & V bit / face mill / turning insert / boring bar / parting & grooving
-blade / threading tool) with starting feeds and speeds, multi-select add, search,
-and JSON import/export. Cutters you build or keep are saved in the browser under
-**My tools** and can be deleted again. The library is a grid of cards rather than
-a list of rows, because a tool is found by its shape and a row gives the shape
-the least room on screen.
+spot & centre drill / chamfer & V bit / face mill / tap / thread mill / turning
+insert / boring bar / parting & grooving blade / threading tool) with starting
+feeds and speeds, multi-select add, search, and JSON import/export. The library
+is a grid of cards rather than a list of rows, because a tool is found by its
+shape and a row gives the shape the least room on screen.
+
+Cutters live in **catalogues**: named drawers rather than one long list, because
+a shop does not have "my tools", it has what is in the mill's carousel, what is
+in the lathe's turret, and a box of specials. Two catalogues are built in —
+*Metric workshop* (the default) and *Imperial / inch*, which is an example of
+what a second one looks like and is there to be copied. Neither can be edited,
+but **Duplicate to mine** makes an editable copy, which is how a shop's own
+drawer gets built without typing forty cutters in from nothing. Your own
+catalogues live in the browser, and any catalogue — built-in or yours — can be
+written to a JSON file and read back. The file format is the same one a project's
+tool list exports to (`{ version, name?, tools }`), so a catalogue imports into a
+project as tools and a project's tools import as a catalogue.
+
+A **spot drill** is its own family rather than a stubby drill: it is spun three
+times as fast at a fraction of the chip load, it is short on purpose, and its
+diameter is not the hole's. A **tap** and a **thread mill** are shaped by their
+pitch — the lead taper on one, the tooth form on the other — and on a tap the
+pitch *is* the feed, because one turn advances it one pitch.
 
 Every cutter is **drawn** — to scale, from its own numbers. A milling cutter gets
 its shank, a gradient across the diameter because a cylinder has a lit side, and

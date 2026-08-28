@@ -778,6 +778,32 @@ button.pick-active {
 }
 .lib-search:focus { outline: none; border-color: var(--accent); }
 
+/* Which drawer is open, and what can be done to it. Its own row rather than
+   more buttons in the footer: the footer is about the *project* — add these
+   cutters, import into it, export it — and this row is about the library
+   itself, which is a different question that happens to be asked in the same
+   dialog. */
+.lib-catalogs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.lib-catalogs .spacer { flex: 1; }
+.lib-catalog-label { font-size: 11px; color: var(--fg-dim); }
+.lib-catalog-select { max-width: 220px; }
+/* the note about the open catalogue: it wraps rather than pushing the buttons
+   off the row, and never grows the dialog */
+.lib-catalogs .lib-hint {
+  flex: 1 1 200px;
+  min-width: 0;
+  text-align: right;
+}
+.wiz-catalog { max-width: 180px; }
+
 .lib-body { max-height: 60vh; overflow-y: auto; padding-right: 4px; }
 
 /* A grid of cards, not a list of rows. A tool is found by its shape, so the

@@ -239,7 +239,38 @@ export function opPreflight(doc, op) {
     }
   }
   if (op.type === 'drill' && tool && tool.type !== 'drill') {
-    notes.push(`T${tool.number} is a ${tool.type}, not a drill.`);
+    notes.push(tool.type === 'spot'
+      ? `T${tool.number} is a spot drill — it starts a hole, it does not make one. `
+        + 'Spot with it and drill with a drill.'
+      : `T${tool.number} is a ${tool.type}, not a drill.`);
+  }
+  // The rest of what happens to a hole. Each has one cutter that *is* the
+  // operation, and the panel said nothing when it was holding another.
+  if (op.type === 'spot' && tool && !(tipAngleOf(tool) > 0)) {
+    notes.push(`T${tool.number} is a ${tool.type} with no point angle — spotting `
+      + 'sinks a cone, and a flat-ended cutter sinks a flat-bottomed hole.');
+  }
+  if (op.type === 'tap' && tool) {
+    if (tool.type !== 'tap') {
+      notes.push(`T${tool.number} is a ${tool.type}, not a tap. `
+        + 'Thread milling is the operation for an end mill.');
+    }
+    // Zero on the pass means "the tap's own", so between them there has to be
+    // one — and a tap with no pitch has no feed either, because the feed *is*
+    // the pitch times the speed.
+    if (!(p.threadPitch > 0) && !(tool.pitch > 0)) {
+      notes.push(`Neither this pass nor T${tool.number} has a pitch, and a tap's feed `
+        + 'is its pitch times its speed — there is no other number it could be.');
+    }
+  }
+  if (op.type === 'threadMill' && tool) {
+    if (tool.type !== 'threadmill') {
+      notes.push(`T${tool.number} is a ${tool.type}, not a thread mill — the thread `
+        + 'form is ground on the cutter, so nothing else leaves a thread.');
+    }
+    if (!(p.threadPitch > 0) && !(tool.pitch > 0)) {
+      notes.push('A thread has a pitch. Set one on this pass or on the cutter.');
+    }
   }
   // The cutter this operation asks for is not the only one that answers to its
   // number, so the machine may well fit the other one. See toolNumberClashes.

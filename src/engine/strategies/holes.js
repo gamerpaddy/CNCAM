@@ -280,9 +280,24 @@ export function generateThreadMill({ mesh, tool, params, regions }) {
 
   let cut = 0;
   let tooBig = 0;
+  let tight = 0;
+  // the threads actually cut, not the ones looked at: reporting a size that was
+  // skipped two lines above reads as though it had been made
+  const made = new Set();
   cl.rapid(holes[0].cx, holes[0].cy, clearance);
   for (const h of holes) {
     const nominal = threadForHole(h.r * 2, pitch);
+    // Does the cutter go down the hole at all?
+    //
+    // The orbit test below is not this question and cannot stand in for it: a
+    // ⌀6 cutter in a ⌀6 hole orbits (7−6)/2 = 0.5mm, which is comfortably
+    // above any epsilon, and the cutter is still exactly as wide as the hole it
+    // is being rapided into. That is a broken tool on the first hole, and it
+    // was being emitted without a word.
+    if (internal && tool.diameter >= h.r * 2 - 0.05) {
+      tooBig++;
+      continue;
+    }
     // Where the *centre* of the cutter runs: out to the major diameter for an
     // internal thread, in to it for an external one. Half the cutter either
     // way, because it is the flank of the cutter that forms the thread.
@@ -291,6 +306,10 @@ export function generateThreadMill({ mesh, tool, params, regions }) {
       tooBig++;
       continue;
     }
+    // It fits, but only just. Two thirds of the thread is the published limit
+    // and it is about chips rather than geometry: past it there is nowhere for
+    // them to go, and a thread mill that packs its own hole snaps in it.
+    if (internal && cutter > nominal * 0.7) tight++;
     const floor = Math.max(params.bottomZ, h.bottom > -Infinity ? h.bottom : params.bottomZ);
     const depth = topZ - floor;
     if (!(depth > 0)) continue;
@@ -336,11 +355,12 @@ export function generateThreadMill({ mesh, tool, params, regions }) {
       cl.cut(h.cx + orbit * t * Math.cos(a), h.cy + orbit * t * Math.sin(a), topZ, FEED.LEAD);
     }
     cl.rapid(h.cx, h.cy, clearance);
+    made.add(nominal.toFixed(1));
     cut++;
   }
 
   if (cut > 0) {
-    const sizes = [...new Set(holes.map((h) => threadForHole(h.r * 2, pitch).toFixed(1)))];
+    const sizes = [...made].sort((a, b) => a - b);
     cl.info(`${plural(cut, 'thread')} milled at ${pitch}mm pitch — `
       + `M${sizes.join(', M')}${internal ? '' : ' external'}`);
   }
@@ -348,6 +368,11 @@ export function generateThreadMill({ mesh, tool, params, regions }) {
     cl.warn(`${plural(tooBig, 'hole')} ${verb(tooBig, 'is', 'are')} too small for a `
       + `⌀${cutter} cutter to orbit in — a thread mill has to fit down the hole with `
       + 'room to reach the wall, which means about two thirds of its diameter');
+  }
+  if (tight > 0) {
+    cl.warn(`⌀${cutter} is more than two thirds of the thread in `
+      + `${plural(tight, 'hole')} — it will cut, but the chips have nowhere to go. `
+      + 'A smaller cutter is the usual answer.');
   }
   return cl.finish();
 }

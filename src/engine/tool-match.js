@@ -12,6 +12,7 @@
 // refuse to be wrong.
 
 import { isLatheTool } from './insert.js';
+import { tipAngleOf } from './tool-geometry.js';
 
 /**
  * Cutter families each strategy would like, best first.
@@ -23,6 +24,14 @@ import { isLatheTool } from './insert.js';
 const PREFERRED = {
   face: ['face', 'flat'],
   drill: ['drill'],
+  // The rest of what happens to a hole. Each of these has a cutter that is the
+  // operation — a tap *is* the thread — and without them here a new tapping
+  // pass arrived holding whatever end mill happened to be first in the rack,
+  // which is a tool change to a cutter that cannot do the job and no warning
+  // until Generate.
+  spot: ['spot', 'chamfer', 'drill'],
+  tap: ['tap'],
+  threadMill: ['threadmill'],
   // pointed cutters: the cone is the whole mechanism
   chamfer: ['chamfer', 'drill'],
   engrave: ['chamfer', 'flat'],
@@ -61,15 +70,35 @@ const PREFERRED = {
 const STRICT = new Set([
   'turnFace', 'turnRough', 'turnFinish', 'turnGroove', 'turnThread',
   'turnDrill', 'turnBore', 'turnPart', 'drill',
+  // A thread is cut by the tool that has the thread on it and by nothing else.
+  // Handing one an end mill is not a worse choice, it is a different operation.
+  'tap', 'threadMill',
 ]);
 
 /** Families that would actively break a strategy rather than merely suit it badly. */
 const NOT_TURNING = new Set(['parting', 'threading', 'boring']);
 
+/**
+ * Cutters that only work down their own axis.
+ *
+ * A drill, a spot drill and a tap have no side to cut with: a slot or a helical
+ * bore drives them sideways through metal, which is how a tap gets left in the
+ * part. A thread mill does have a side and it is a thread form, so a slot cut
+ * with one comes out threaded.
+ */
+const DOWN_THE_AXIS = new Set(['drill', 'spot', 'tap', 'threadmill']);
+
 const UNUSABLE = {
-  chamfer: (t) => !(t.tipAngle > 0),
-  slot: (t) => t.type === 'drill' || t.type === 'chamfer',
-  bore: (t) => t.type === 'drill',
+  // through tipAngleOf, because a drill with the angle left blank is a 118° one
+  // everywhere else in the app — including in the chamfer strategy, which is
+  // the thing this preference exists to agree with
+  chamfer: (t) => !(tipAngleOf(t) > 0),
+  // spotting is a cone sunk on centre, so anything without a point is out
+  spot: (t) => !(tipAngleOf(t) > 0),
+  tap: (t) => t.type !== 'tap',
+  threadMill: (t) => t.type !== 'threadmill',
+  slot: (t) => DOWN_THE_AXIS.has(t.type) || t.type === 'chamfer',
+  bore: (t) => DOWN_THE_AXIS.has(t.type),
   drill: (t) => t.type !== 'drill',
   turnFace: (t) => NOT_TURNING.has(t.type),
   turnRough: (t) => NOT_TURNING.has(t.type),
@@ -77,7 +106,8 @@ const UNUSABLE = {
   // a groove is cut by something with parallel sides, not by a pointed insert
   turnGroove: (t) => t.type !== 'parting',
   turnThread: (t) => t.type !== 'threading' && t.type !== 'parting',
-  turnDrill: (t) => t.type !== 'drill',
+  // a lathe starts a hole with a centre drill and opens it with a drill
+  turnDrill: (t) => t.type !== 'drill' && t.type !== 'spot',
   // a boring bar or, at a push, a small turning insert on a bar — never a
   // blade, which cannot travel along a bore at all
   turnBore: (t) => t.type !== 'boring' && t.type !== 'turning',
@@ -93,7 +123,9 @@ const UNUSABLE = {
  */
 function heldBy(type, tools) {
   const turning = type.startsWith('turn');
-  return tools.filter((t) => t.type === 'drill' || isLatheTool(t.type) === turning);
+  // drills and centre drills belong to both — see tool-library machineCanHold
+  return tools.filter((t) => t.type === 'drill' || t.type === 'spot'
+    || isLatheTool(t.type) === turning);
 }
 
 /**

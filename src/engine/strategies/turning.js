@@ -1141,10 +1141,15 @@ export function generateTurnDrill({ mesh, tool, params, stock, fixtures }) {
   // nothing over the whole depth of the "hole", which reads on screen as the
   // part being shoved backwards. Refusing here is the honest answer, and it
   // stops the picture being drawn at all.
-  if (tool.type !== 'drill') {
+  //
+  // A centre drill counts: starting the hole in the tailstock is the same move
+  // and the same cycle, and it is how a bar is started at all — the rule is
+  // "something that cuts on its point, down the axis", not "the word drill".
+  // See tool-match.js, which says the same thing about which tool to fit.
+  if (tool.type !== 'drill' && tool.type !== 'spot') {
     cl.warn(`${tool.name ? `${tool.name} is a ` : 'this is a '}${tool.type ?? 'non-drill'} `
-      + 'tool, and a hole on the centreline can only be made by a drill. '
-      + 'Fit a drill, or use Bore to open a hole that is already there.');
+      + 'tool, and a hole on the centreline can only be made by a drill or a '
+      + 'centre drill. Fit one, or use Bore to open a hole that is already there.');
     return cl.finish();
   }
 

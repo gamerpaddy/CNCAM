@@ -46,8 +46,11 @@ export const TYPE_COLORS = {
   ball: '#7fd4ec',
   bull: '#9fd89f',
   drill: '#e8bd76',
+  spot: '#f0d08a',
   chamfer: '#e2a8d6',
   face: '#b8b3ee',
+  tap: '#8fc9b3',
+  threadmill: '#6fbfa0',
 };
 
 const SHANK_COLOR = '#8d949f';
@@ -581,9 +584,18 @@ export function describeTool(tool) {
   // tipAngleOf rather than the field: a drill with the angle left blank is a
   // 118° one everywhere else in the app, and the line describing it said
   // nothing at all
-  if (tool.type === 'drill' || tool.type === 'chamfer') {
+  if (tool.type === 'drill' || tool.type === 'chamfer' || tool.type === 'spot') {
     const point = tipAngleOf(tool);
     if (point > 0) bits.push(`${point}° point`);
+  }
+  // The pitch is not a detail of a tap or a thread mill, it is which tool it
+  // is: an M6×1 and an M6×0.75 are two taps for two different holes, and the
+  // line describing them read the same. It is also the feed, on a tap.
+  if (tool.type === 'tap' || tool.type === 'threadmill') {
+    bits.push(tool.pitch > 0 ? `${tool.pitch}mm pitch` : 'no pitch set');
+  }
+  if (tool.type === 'tap' && tool.leadThreads > 0) {
+    bits.push(`${tool.leadThreads}-thread lead`);
   }
   if (tool.flutes) bits.push(`${tool.flutes}FL`);
   if (tool.fluteLength) bits.push(`${tool.fluteLength}mm flute`);

@@ -129,7 +129,7 @@ export function createDrawingPlacement() {
 }
 
 export const TOOL_TYPES = [
-  'flat', 'ball', 'bull', 'drill', 'chamfer', 'face',
+  'flat', 'ball', 'bull', 'drill', 'spot', 'chamfer', 'face', 'tap', 'threadmill',
   'turning', 'boring', 'parting', 'threading',
 ];
 
@@ -138,8 +138,11 @@ export const TOOL_TYPE_LABELS = {
   ball: 'Ball nose',
   bull: 'Bull nose (corner radius)',
   drill: 'Drill',
+  spot: 'Spot / centre drill',
   chamfer: 'Chamfer mill / V bit',
   face: 'Face mill',
+  tap: 'Tap',
+  threadmill: 'Thread mill',
   turning: 'Turning tool (external)',
   boring: 'Boring bar (internal)',
   parting: 'Parting / grooving blade',
@@ -189,8 +192,15 @@ export function createTool(type = 'flat') {
     // its end. Most chamfer mills and V bits have one, and it is the difference
     // between a chamfer that lands where it was asked for and one that is off
     // by half the flat — see engine/strategies/chamfer.js.
-    tipAngle: type === 'drill' ? 118 : type === 'chamfer' ? 90 : 0,
+    tipAngle: type === 'drill' ? 118 : type === 'chamfer' || type === 'spot' ? 90 : 0,
     tipDiameter: 0,
+    // Screws: the thread a tap cuts or a thread mill forms, in mm per turn, and
+    // how many threads of a tap's end are ground away as a lead. The pitch is
+    // not a detail of a tap, it *is* the tap — one turn advances it one pitch,
+    // which is the feed — and the lead is why a blind hole is tapped short of
+    // its floor. Zero on everything that is not a screw. See engine/holes.js.
+    pitch: type === 'tap' || type === 'threadmill' ? 1 : 0,
+    leadThreads: type === 'tap' ? 2 : 0,
     // Lathe inserts: the nose radius is what a finishing pass is compensated
     // for, and the blade width is what a parting or grooving cut removes.
     noseRadius: type === 'turning' || type === 'boring' ? 0.4 : 0,

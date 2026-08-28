@@ -117,6 +117,20 @@ const FIELDS = {
     { path: 'cornerRadius', label: 'Corner radius', type: 'number', when: (t) => t.type === 'bull' },
     { path: 'tipAngle', label: 'Tip angle (°)', type: 'number', when: isPointed },
     {
+      path: 'pitch', label: 'Pitch (mm)', type: 'number',
+      when: (t) => t.type === 'tap' || t.type === 'threadmill',
+      hint: 'Millimetres per turn. On a tap this is also the feed — one turn, one '
+        + 'pitch — and no other number will do; on a thread mill it is the tooth '
+        + 'form, so one cutter never does two pitches.',
+    },
+    {
+      path: 'leadThreads', label: 'Lead (threads)', type: 'number',
+      when: (t) => t.type === 'tap',
+      hint: 'How many threads of the end are ground away as a taper. Those cut '
+        + 'nothing at full depth, which is why a blind hole is tapped that much '
+        + 'short of its floor.',
+    },
+    {
       path: 'tipDiameter', label: 'Flat on the tip (mm)', type: 'number', when: isPointed,
       hint: 'Most chamfer mills and V bits end in a small flat rather than a point. '
         + 'It shifts where the cone sits on the edge, so it is worth measuring.',
@@ -205,7 +219,9 @@ const FIELDS = {
   ],
 };
 
-function isPointed(tool) { return tool.type === 'drill' || tool.type === 'chamfer'; }
+function isPointed(tool) {
+  return tool.type === 'drill' || tool.type === 'chamfer' || tool.type === 'spot';
+}
 
 /** Tools whose geometry is an indexable insert rather than a ground end. */
 function isInsertTool(tool) { return tool.type === 'turning' || tool.type === 'boring'; }
