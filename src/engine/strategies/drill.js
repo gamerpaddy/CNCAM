@@ -199,7 +199,30 @@ function holesFromDrawing(paths) {
  * carrying its top (where it first appears) and its bottom (the last slice that
  * still shows it).
  */
-export function findHoles(mesh, { topZ, bottomZ, bounds }) {
+export function findHoles(mesh, opts) {
+  return findRoundFeatures(mesh, { ...opts, outward: false });
+}
+
+/**
+ * The same scan, asked for round *bosses* instead — a spigot, a turned pad, the
+ * outside of a round part.
+ *
+ * A boss is the same measurement as a hole with one sign flipped: a slice's
+ * loops are unioned, and the ones enclosing material have positive area where a
+ * hole's enclose none. Everything after that is identical, which is why it is
+ * this function with a flag rather than a second scan — external thread milling
+ * used to be handed the *holes* and told to orbit outside them, which put the
+ * cutter through the wall of every hole on the part.
+ *
+ * `bottom` is where the feature stops being its own loop, which for a boss is
+ * where it meets whatever it stands on. That is its base, which is the number
+ * the caller wants.
+ */
+export function findBosses(mesh, opts) {
+  return findRoundFeatures(mesh, { ...opts, outward: true });
+}
+
+function findRoundFeatures(mesh, { topZ, bottomZ, bounds, outward = false }) {
   const hi = Math.min(topZ, bounds.max[2]) - EPS;
   const lo = Math.max(bottomZ, bounds.min[2]) + EPS;
   if (!(hi > lo)) return [];
@@ -218,7 +241,9 @@ export function findHoles(mesh, { topZ, bottomZ, bounds }) {
   for (let i = 0; i <= steps; i++) {
     const at = hi - step * i;
     for (const loop of unionLoops(sliceMeshZ(mesh, at))) {
-      if (loopArea(loop) >= 0) continue;              // only hole loops
+      // a hole encloses no material and comes back negative; a boss is the
+      // other sign of the same test
+      if (outward ? loopArea(loop) <= 0 : loopArea(loop) >= 0) continue;
       const circle = fitCircle(loop);
       if (!circle) continue;
       // the same hole, seen one slice further down
@@ -237,7 +262,8 @@ export function findHoles(mesh, { topZ, bottomZ, bounds }) {
     if (h.top >= hi - 1e-9) h.top = hi + EPS;
   }
   // a "hole" seen on a single slice is a chamfer or a tessellation artefact,
-  // not something to put a drill into — unless the scan was that shallow
+  // not something to put a drill into — unless the scan was that shallow. The
+  // same is true of a boss: one slice of a round pad is a fillet.
   const real = merged.filter((h) => h.top - h.bottom >= step * 1.5);
   return real.length ? real : merged;
 }

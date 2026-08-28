@@ -1,13 +1,13 @@
 import { test, assert } from './runner.js';
 import { parseGcode } from '../post/parse.js';
 import {
-  readGcode, reviewProgram, comparePaths, rapidCutFinding,
+  readGcode, reviewProgram, comparePaths, checkPost, rapidCutFinding,
 } from '../engine/backplot.js';
 import { simulateRemoval } from '../engine/simulate.js';
 import { buildGcode } from '../post/index.js';
 import { generateToolpath } from '../engine/toolpath.js';
 import { CLBuilder, FEED } from '../engine/cl.js';
-import { makePocketBlock } from './fixtures.js';
+import { makePocketBlock, makeTube } from './fixtures.js';
 
 const TOOL = {
   number: 1, type: 'flat', diameter: 6, fluteLength: 25, shankDiameter: 6,
@@ -291,4 +291,151 @@ test('a peck depth is modal too', () => {
     'G98 G83 X5 Y5 Z-9 R1 Q3 F100', 'X15 Y5', 'G80',
   ));
   assert.close(r.parsed.cycles[1].q, 3, 1e-9, 'the second hole pecks the same way');
+});
+
+// --- a lathe writes X as a diameter ---
+
+test('X on a lathe is a diameter, and comes back as the radius it is', () => {
+  // G7 is in the header of every file post/lathe.js writes. Read as a plain
+  // coordinate, a ⌀40 bar comes back at ⌀80 — the backplot draws it off the
+  // stock, the simulation cuts air, and the round-trip check reports every
+  // operation in the program as out by half a diameter.
+  const r = readGcode(program('G21 G90 G18 G7', 'G0 X43 Z1', 'G1 X40 F0.2', 'Z-20'));
+  assert.eq(r.parsed.xWords, 'diameter', 'and says which the file said');
+  assert.eq(r.parsed.unsupported.length, 0, 'G7 is a word this reader knows');
+  assert.close(r.parsed.points[0].x, 21.5, 1e-9, 'half of X43');
+  assert.close(r.parsed.points[1].x, 20, 1e-9, 'and half of X40');
+});
+
+test('and G8 puts it back', () => {
+  const r = readGcode(program('G21 G90 G18 G7', 'G0 X40 Z1', 'G8', 'G1 X40 Z-1'));
+  assert.close(r.parsed.points[0].x, 20, 1e-9, 'a diameter while G7 stands');
+  assert.close(r.parsed.points[1].x, 40, 1e-9, 'and a radius after G8');
+});
+
+test("a lathe's T0909 is station 9, not tool 909", () => {
+  // Read as one number, the read-back tells you the file asks for a T909 you
+  // have not got, and then simulates it with whatever the widest cutter in the
+  // library is.
+  const r = readGcode(program('G21 G90 G18 G7', 'T0909 M6', 'G0 X40 Z1'));
+  const change = r.parsed.events.find((e) => e.type === 'tool');
+  assert.eq(change.tool, 9, 'the turret station');
+});
+
+test('and a mill still calls T909 tool 909', () => {
+  const r = readGcode(program('G21 G90 G17', 'T909 M6', 'G0 X40 Y0 Z1'));
+  assert.eq(r.parsed.events.find((e) => e.type === 'tool').tool, 909);
+});
+
+test('a mill file is radius all the way, G7 never having been said', () => {
+  const r = readGcode(program('G21 G90 G17', 'G0 X40 Y0 Z1', 'G1 Z0 F100'));
+  assert.eq(r.parsed.xWords, 'radius');
+  assert.close(r.parsed.points[0].x, 40, 1e-9, 'X is X');
+});
+
+// --- the round-trip check's own noise floor ---
+
+/**
+ * A long path with arcs in it, which is where the check used to cry wolf: the
+ * fitter makes the file a hair longer than the polyline it came from, and a
+ * comparison walked by fraction of length slips by that much.
+ */
+function spiralProgram(turns = 15, segments = 90) {
+  const cl = new CLBuilder();
+  cl.toolChange(1);
+  cl.event('feeds', { cut: 600, plunge: 200 });
+  cl.rapid(10, 0, 5);
+  cl.cut(10, 0, 0, FEED.PLUNGE);
+  for (let i = 1; i <= turns * segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    cl.cut(10 * Math.cos(a), 10 * Math.sin(a), -(i / (turns * segments)) * 15);
+  }
+  cl.rapid(10, 0, 5);
+  return cl.finish();
+}
+
+/** Post an op and check the file against the path, as refreshGcodePreview does. */
+function checked(cl, name, post = 'linuxcnc', options = {}, mangle = (t) => t) {
+  const ops = [{ name, cl }];
+  const { text, lineMap } = buildGcode(post, ops, options);
+  return { ...checkPost({ ops, text, lineMap, fitTolerance: 0.01 }), text };
+}
+
+test('a correct program with arcs in it is not reported as a post bug', () => {
+  const spiral = spiralProgram();
+  const r = checked(spiral, 'spiral');
+  assert.ok(/\bG[23]\b/.test(r.text), 'the post fitted arcs, which is the case that drifts');
+  assert.ok(r.over <= 0, `nothing to say: worst ${r.worst.toFixed(3)}mm, `
+    + `allowed ${r.ops[0].allowed.toFixed(3)}mm over ${r.ops[0].extra.toFixed(3)}mm of drift`);
+});
+
+test('and the fault it exists to find still fires on the same program', () => {
+  const spiral = spiralProgram();
+  const ops = [{ name: 'spiral', cl: spiral }];
+  const { text, lineMap } = buildGcode('linuxcnc', ops);
+  const flipped = text.split('\n')
+    .map((l) => l.replace(/^G2\b/, 'G@').replace(/^G3\b/, 'G2').replace(/^G@/, 'G3'))
+    .join('\n');
+  const r = checkPost({ ops, text: flipped, lineMap, fitTolerance: 0.01 });
+  assert.ok(r.over > 1, `a flipped arc is still a diameter out: ${r.worst.toFixed(2)}mm `
+    + `against ${r.ops[0].allowed.toFixed(2)}mm allowed`);
+});
+
+/** A real drilling pass, pecked - the operation both posts spell differently. */
+function peckedHole() {
+  return generateToolpath({
+    type: 'drill',
+    name: 'drill',
+    tool: { ...TOOL, type: 'drill', diameter: 5, tipAngle: 118 },
+    mesh: makeTube(20, 20, 18, 2.5, 20),
+    stock: { kind: 'box', min: [0, 0, 0], max: [40, 40, 20] },
+    params: {
+      topZ: 20, bottomZ: 0, clearanceHeight: 30, tolerance: 0.01,
+      diameterTol: 0.5, entryGap: 1, peck: 2,
+    },
+  });
+}
+
+test('a hole pecked long-hand is the same hole as one pecked by canned cycle', () => {
+  // GRBL and the lathe have no G83, so both write the pecks out as moves. The
+  // CL says one hole; the file says twenty blocks of down, out, down again, and
+  // walked side by side the two part company by the depth of the hole - which
+  // put "do not run this" on every drilling operation posted for either.
+  const cl = peckedHole();
+  assert.ok(!/G8[13]/.test(buildGcode('grbl', [{ name: 'drill', cl }]).text),
+    'GRBL writes the pecks out');
+  assert.ok(/G8[13]/.test(buildGcode('linuxcnc', [{ name: 'drill', cl }]).text),
+    'and LinuxCNC writes a cycle');
+  for (const post of ['linuxcnc', 'grbl']) {
+    const r = checked(cl, 'drill', post);
+    assert.ok(r.over <= 0, `${post}: nothing to say, worst ${r.worst.toFixed(3)}mm`);
+  }
+});
+
+test('but a hole drilled to the wrong depth is still caught, however it is spelled', () => {
+  const cl = peckedHole();
+  for (const post of ['linuxcnc', 'grbl']) {
+    const ops = [{ name: 'drill', cl }];
+    const { text, lineMap } = buildGcode(post, ops);
+    const shallow = text.replace(/Z-1\.502/g, 'Z6.498');
+    assert.ok(shallow !== text, `${post}: the depth was there to break`);
+    const r = checkPost({ ops, text: shallow, lineMap, fitTolerance: 0.01 });
+    assert.ok(r.over > 0, `${post}: eight millimetres short is a fault, not noise`);
+  }
+});
+
+
+test('and a closed profile keeps the retract that ends it', () => {
+  // A loop arrives back where it started and lifts: three moves at one XY that
+  // are not a hole. Reduced as though they were, an engraved rectangle lost its
+  // lift-off and read as 22mm of post bug.
+  const cl = new CLBuilder();
+  cl.toolChange(1);
+  cl.event('feeds', { cut: 600, plunge: 200 });
+  cl.rapid(0, 0, 10);
+  cl.cut(0, 0, -1, FEED.PLUNGE);
+  for (const [x, y] of [[30, 0], [30, 20], [0, 20], [0, 0]]) cl.cut(x, y, -1);
+  cl.rapid(0, 0, 10);
+  const r = checked(cl.finish(), 'engrave');
+  assert.ok(r.over <= 0, `nothing to say: ${r.worst.toFixed(3)}mm`);
 });

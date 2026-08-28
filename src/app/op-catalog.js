@@ -23,6 +23,11 @@ import { plural, pluralEs } from '../engine/text.js';
 // and an engraved mark's depth was the whole height between Top Z and Bottom Z.
 import { threadFormDepth, threadInfeed, grooveBites } from '../engine/strategies/turning.js';
 import { grooveGeometry } from '../engine/strategies/engrave.js';
+// Same rule for the three hole operations: the tapping drill a tap looks for
+// and the cone a spot drill sinks are worked out by the strategy, so the panel
+// asks the strategy rather than restating the arithmetic.
+import { tapDrillDiameter } from '../engine/strategies/holes.js';
+import { tipAngleOf } from '../engine/tool-geometry.js';
 
 /**
  * The strategies that ask `depthLevelsFor` for their levels rather than
@@ -389,6 +394,44 @@ export function describeIntent(op, tool) {
       return `Drills every hole matching ⌀${tool?.diameter ?? '?'}±${p.diameterTol ?? 0.5}, `
         + ((p.depthMode ?? 'hole') === 'hole' ? 'each to its own floor.' : `all to Z${p.bottomZ}.`)
         + (p.peck > 0 ? ` Pecking ${mm(p.peck)} at a time.` : '');
+    case 'spot': {
+      // The depth is not typed and the width usually is not either: the cone is
+      // as wide as `spotDiameter`, or as wide as the hole when that is blank —
+      // and never wider than the cutter, which is the case worth saying,
+      // because a ⌀3 spot drill asked to spot a ⌀20 hole makes a ⌀3 cone.
+      const angle = tipAngleOf(tool);
+      const asked = p.spotDiameter > 0 ? p.spotDiameter : 0;
+      const capped = tool ? Math.min(asked || Infinity, tool.diameter) : asked;
+      const how = asked > 0
+        ? `a ⌀${mm(capped)} cone`
+          + (tool && asked > tool.diameter ? ` — ⌀${mm(asked)} is wider than this cutter` : '')
+        : `a cone as wide as each hole, up to ⌀${tool?.diameter ?? '?'}`;
+      return `Sinks ${how} at every hole centre with ${cutter}`
+        + (angle > 0
+          ? `, which its ${angle}° point reaches ${mm((capped / 2) / Math.tan((angle * Math.PI) / 360))} down.`
+          : ' — this cutter has no point, so it cannot spot.');
+    }
+    case 'tap': {
+      // Pitch comes from the tool unless this pass overrides it, exactly as the
+      // strategy reads it — a tap carries its own thread, and a shared default
+      // of 1.5 once turned every M6×1 into an M6×1.5.
+      const pitch = p.threadPitch > 0 ? p.threadPitch : (tool?.pitch ?? 0);
+      if (!(pitch > 0)) return 'This tap has no pitch — set one on the cutter or on this pass.';
+      const drill = tapDrillDiameter(tool?.diameter ?? 0, pitch);
+      const lead = pitch * (tool?.leadThreads ?? 2);
+      return `Taps M${tool?.diameter ?? '?'}×${pitch} ${p.threadHand === 'left' ? 'left' : 'right'} hand `
+        + `in every ⌀${Math.round(drill * 100) / 100}±${p.diameterTol ?? 0.3} hole, `
+        + 'spindle locked to the feed'
+        + (lead > 0 ? `, stopping ${mm(lead)} short of a blind floor for the tap's lead.` : '.');
+    }
+    case 'threadMill': {
+      const pitch = p.threadPitch > 0 ? p.threadPitch : (tool?.pitch ?? 0);
+      if (!(pitch > 0)) return 'This cutter has no pitch — a thread has one, so set it here or on the tool.';
+      const internal = p.threadInternal !== false;
+      return `Spirals ${cutter} up ${internal ? 'every hole it fits down' : 'every round boss'} `
+        + `on a ${pitch}mm ${p.threadHand === 'left' ? 'left' : 'right'}-hand helix, `
+        + `${mm(depth)} of thread, ${(p.direction ?? 'climb') === 'climb' ? 'climbing' : 'conventional'}.`;
+    }
     case 'bore':
       return `Spirals ${cutter} down ${p.boreDiameter > 0 ? `⌀${p.boreDiameter} holes` : 'every hole it fits inside'}, `
         + `${mm(p.stepdown ?? 1)} per turn, ${mm(depth)} deep.`;

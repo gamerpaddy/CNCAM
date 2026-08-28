@@ -1007,6 +1007,12 @@ function summary({
   // not reach and had to be opened from the inside — so it cannot be written as
   // a share of the entries. It was, and on the plate that exposed the seeding
   // bug it read "17 entries (48 of them opening a walled-off region)".
+  //
+  // Which is also why the clause sits *after* the count of descents rather than
+  // between it and the entries it counts: written the other way round, "them"
+  // reached back to the regions instead of to the entries and the sentence read
+  // "20 walled-off regions opened from the inside (29 of them straight down)" —
+  // a share bigger than the whole it claims to be a share of.
   const walled = seeds > 0
     ? `, ${plural(seeds, 'walled-off region')} opened from the inside` : '';
   const left = unopened > 0
@@ -1014,8 +1020,9 @@ function summary({
       + 'material is left standing there'
     : '';
   return `adaptive: peak bite ${peakBite.toFixed(2)}xD, `
-    + `${plural(entries, 'entry', 'entries')}${walled} `
-    + `(${opened} of them straight down into space the pass had already cleared), `
+    + `${plural(entries, 'entry', 'entries')} `
+    + `(${opened} of them straight down into space the pass had already cleared)`
+    + `${walled}, `
     + `${plural(links, 'stay-down link')}, `
     + `${hops} crossing at the feed plane rather than at clearance, `
     + `${dropped}% of the sampled points merged away${steep}${left}${over}`;

@@ -10,7 +10,7 @@
 import { test, assert } from './runner.js';
 import { makeBox, makeTube, makePocketBlock } from './fixtures.js';
 import {
-  createOperation, createTool, createSetup, createModel, createDrawing,
+  createOperation, createTool, createSetup, createModel, createDrawing, OP_TYPES,
 } from '../doc/schema.js';
 import {
   formatTime, opPreflight, opFingerprint, toolNumberClashes,
@@ -30,7 +30,7 @@ import { Document } from '../doc/document.js';
 import { UndoStack } from '../doc/undo.js';
 import { OP, FEED, eachMove } from '../engine/cl.js';
 import { OP_PARAM_GROUPS, paramApplies } from '../app/op-params.js';
-import { describeIntent } from '../app/op-catalog.js';
+import { describeIntent, strategyCard } from '../app/op-catalog.js';
 import { threadFormDepth, threadInfeed } from '../engine/strategies/turning.js';
 
 /** A 40×40×10 part sitting in a billet with 1mm of margin all round. */
@@ -1084,4 +1084,43 @@ test('an engraved mark is described at the depth it is cut, not the height it si
   assert.ok(byWidth.includes('0.6mm wide'), `the width asked for: ${byWidth}`);
   assert.ok(byWidth.includes('0.3mm deep'),
     `which a 90° point reaches at half of it: ${byWidth}`);
+});
+
+/** The cutter each strategy is written for, so its sentence has one to describe. */
+const CUTTER_FOR = {
+  spot: 'spot', drill: 'drill', tap: 'tap', threadMill: 'threadmill',
+  chamfer: 'chamfer', engrave: 'chamfer', parallel3d: 'ball', waterline: 'ball',
+  face: 'face',
+  turnFace: 'turning', turnRough: 'turning', turnFinish: 'turning',
+  turnGroove: 'parting', turnPart: 'parting', turnThread: 'threading',
+  turnBore: 'boring', turnDrill: 'drill',
+};
+
+test('every strategy says what its settings will do — none of them silently', () => {
+  // The panel's one line of "here is what this operation will actually cut" is
+  // a switch on the strategy, and three strategies added in two days fell
+  // through it: spot, tap and thread mill each showed a blank where every other
+  // operation explains itself. Nothing failed, which is why it stood.
+  const missing = [];
+  for (const type of OP_TYPES) {
+    const op = createOperation(type);
+    const tool = toolFor(CUTTER_FOR[type] ?? 'flat', 6);
+    tool.pitch = 1;
+    tool.tipAngle = tool.type === 'chamfer' || tool.type === 'spot' ? 90 : 0;
+    tool.noseRadius = 0.4;
+    tool.bladeWidth = 3;
+    const { stock, modelBounds } = scene();
+    Object.assign(op.params, defaultParamsFor(type, { stock, modelBounds, tool }));
+    const said = describeIntent(op, tool);
+    if (!said || said.length < 20) missing.push(`${type}: ${JSON.stringify(said)}`);
+    assert.ok(!/undefined|NaN|\[object/.test(said), `${type} reads badly: ${said}`);
+  }
+  assert.eq(missing.length, 0, `every strategy explains itself: ${missing.join('; ')}`);
+});
+
+test('and every strategy has a card to be chosen by', () => {
+  for (const type of OP_TYPES) {
+    const card = strategyCard(type);
+    assert.ok(card?.summary && card?.when && card?.cutter, `${type} has no card`);
+  }
 });

@@ -2,10 +2,10 @@ import { test, assert } from './runner.js';
 import { generateToolpath } from '../engine/toolpath.js';
 import { buildGcode } from '../post/index.js';
 import { readGcode } from '../engine/backplot.js';
-import { MOVE_STRIDE, OP, eachMove } from '../engine/cl.js';
+import { MOVE_STRIDE, OP, FEED, eachMove } from '../engine/cl.js';
 import { tapDrillDiameter, threadForHole } from '../engine/strategies/holes.js';
 import { coarsePitch, suggestCutting } from '../doc/tool-library.js';
-import { makeTube } from './fixtures.js';
+import { makeTube, makeBoss, makeBox } from './fixtures.js';
 
 const STOCK = { kind: 'box', min: [0, 0, 0], max: [40, 40, 20] };
 /** A block with a ⌀5 hole through it — what an M6 tapping drill leaves. */
@@ -235,4 +235,72 @@ test('a spot wider than the cutter is clipped to the cutter, with a warning', ()
   const holes = drillMoves(cl);
   assert.close(20 - holes[0].z, 1.5, 0.05, 'as wide as the cutter goes');
   assert.ok(/as wide as it goes/.test(notes(cl)), notes(cl));
+});
+
+test('a hole wider than the cutter is not "spotted to the hole diameter"', () => {
+  // The sentence promised the second half of the job — the chamfer the hole
+  // wants anyway — on a cone a ⌀3 cutter cannot make in a ⌀5 hole.
+  const cl = run('spot', { ...SPOT, diameter: 3 }, TAPPED, { spotDiameter: 0 });
+  const holes = drillMoves(cl);
+  assert.close(20 - holes[0].z, 1.5, 0.05, 'the cone is the cutter, not the hole');
+  assert.ok(!/to the hole diameter/.test(notes(cl)),
+    `and does not claim otherwise: ${notes(cl)}`);
+  assert.ok(/as wide as (it|this cutter) goes/.test(notes(cl)), notes(cl));
+});
+
+// --- threading the outside of a boss ---
+
+const BOSS = makeBoss({ diameter: 20, plateHeight: 10, height: 12 });
+
+/** How far from the boss centre each cutting move ran. */
+function cutRadii(cl, cx, cy) {
+  const out = [];
+  eachMove(cl, (opcode, x, y) => {
+    if (opcode !== OP.RAPID) out.push(Math.hypot(x - cx, y - cy));
+  });
+  return out;
+}
+
+test('an external thread is milled round a boss, not round a hole', () => {
+  // Pointed at holes, the strategy plunged down the middle of each one and fed
+  // the cutter sideways out through the wall to orbit *outside* it.
+  const cl = run('threadMill', MILL, BOSS.mesh, {
+    threadInternal: false, topZ: BOSS.top, bottomZ: BOSS.base,
+  });
+  assert.ok(cutMoves(cl) > 0, `it cuts something: ${notes(cl)}`);
+  assert.ok(/M20/.test(notes(cl)), `a boss is already the major diameter: ${notes(cl)}`);
+  const radii = cutRadii(cl, BOSS.cx, BOSS.cy);
+  // the cutter's centre runs a cutter radius outside the boss and never inside it
+  assert.close(Math.min(...radii), (BOSS.diameter + MILL.diameter) / 2, 0.01,
+    'the flank of the cutter forms the thread');
+});
+
+test('and it comes down beside the boss rather than into it', () => {
+  const cl = run('threadMill', MILL, BOSS.mesh, {
+    threadInternal: false, topZ: BOSS.top, bottomZ: BOSS.base,
+  });
+  // every plunge is in clear air: the whole cutter outside the boss
+  let worst = Infinity;
+  eachMove(cl, (opcode, x, y, z, a, b, c, feed) => {
+    if (opcode === OP.RAPID || feed !== FEED.PLUNGE) return;
+    worst = Math.min(worst, Math.hypot(x - BOSS.cx, y - BOSS.cy) - MILL.diameter / 2);
+  });
+  assert.ok(worst > BOSS.diameter / 2,
+    `the plunge clears the ⌀${BOSS.diameter} boss by ${(worst - BOSS.diameter / 2).toFixed(2)}mm`);
+});
+
+test('a bar is a boss: its own outside is what an external thread is cut on', () => {
+  // BORED is a ⌀36 cylinder with a hole down it. The hole is where an internal
+  // thread goes; the ⌀36 outside is where an external one goes, and pointing
+  // the pass at the hole for both was the bug.
+  const cl = run('threadMill', MILL, BORED, { threadInternal: false, bottomZ: 10 });
+  assert.ok(/M36/.test(notes(cl)), `the outside, not the ⌀10 bore: ${notes(cl)}`);
+  const radii = cutRadii(cl, 20, 20);
+  assert.ok(Math.min(...radii) > 18, `and it stays outside the bar: ${Math.min(...radii).toFixed(2)}`);
+});
+
+test('an external pass over a part with no round outside says so, not "no holes"', () => {
+  const cl = run('threadMill', MILL, makeBox(40, 40, 20), { threadInternal: false, bottomZ: 10 });
+  assert.eq(cutMoves(cl), 0, 'nothing cut');
+  assert.ok(/boss/.test(notes(cl)), notes(cl));
 });

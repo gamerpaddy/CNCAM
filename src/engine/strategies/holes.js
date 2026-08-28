@@ -14,13 +14,13 @@
 // tool does when it gets there.
 
 import { CLBuilder, FEED } from '../cl.js';
-import { plural, verb, allOf } from '../text.js';
+import { plural, pluralEs, verb, allOf } from '../text.js';
 import { computeBounds } from '../../geom/mesh.js';
 import { applyCutting, effectiveCutting } from '../cutting.js';
 import { entryGapOf } from '../heights.js';
 import { regionAllowsPoint } from '../regions.js';
 import { tipAngleOf } from '../tool-geometry.js';
-import { findHoles } from './drill.js';
+import { findHoles, findBosses } from './drill.js';
 
 /**
  * How much smaller than the thread the hole is, as a share of the pitch.
@@ -42,26 +42,38 @@ export function threadForHole(diameter, pitch) {
   return diameter + pitch * TAP_DRILL_FACTOR;
 }
 
-/** The holes an operation is actually allowed to work on, with the reasons. */
+/**
+ * The round features an operation is actually allowed to work on, with the
+ * reasons.
+ *
+ * @param outward look for bosses rather than holes — external thread milling,
+ *   and nothing else so far. The two are the same scan (see drill.js), and the
+ *   only thing that changes here is the noun in the warnings, because "no round
+ *   holes found" on a part covered in bosses is a wrong answer, not a terse one.
+ */
 function holesFor(cl, {
-  mesh, tool, params, regions, wantDiameter, radiusUsed, what,
+  mesh, tool, params, regions, wantDiameter, radiusUsed, what, outward = false,
 }) {
   const bounds = computeBounds(mesh.positions);
   const topZ = Math.min(params.topZ, bounds.max[2]);
   const bottomZ = Math.max(params.bottomZ, bounds.min[2]);
   const matchTol = Math.max(0, params.diameterTol ?? 0.5);
+  const noun = outward ? 'boss' : 'hole';
+  // "boss" takes -es, which is the whole reason text.js has a second helper
+  const many = (n) => (outward ? pluralEs(n, noun) : plural(n, noun));
 
-  const found = findHoles(mesh, { topZ, bottomZ, bounds });
+  const found = (outward ? findBosses : findHoles)(mesh, { topZ, bottomZ, bounds });
   const matched = wantDiameter > 0
     ? found.filter((h) => Math.abs(h.r * 2 - wantDiameter) <= matchTol)
     : found;
 
   if (matched.length === 0) {
     cl.warn(found.length === 0
-      ? `no round holes found between Z${topZ.toFixed(2)} and Z${bottomZ.toFixed(2)}`
-      : `no hole matches ⌀${wantDiameter.toFixed(2)}±${matchTol} — this part has `
-        + `${[...new Set(found.map((h) => (h.r * 2).toFixed(2)))].join(', ')}mm holes. `
-        + `${what}`);
+      ? `no round ${outward ? 'bosses' : 'holes'} found between `
+        + `Z${topZ.toFixed(2)} and Z${bottomZ.toFixed(2)}`
+      : `no ${noun} matches ⌀${wantDiameter.toFixed(2)}±${matchTol} — this part has `
+        + `${[...new Set(found.map((h) => (h.r * 2).toFixed(2)))].join(', ')}mm `
+        + `${outward ? 'bosses' : 'holes'}. ${what}`);
     return { holes: [], found, topZ, bounds };
   }
 
@@ -69,10 +81,10 @@ function holesFor(cl, {
     radius: radiusUsed, tolerance: params.tolerance ?? 0.01,
   }));
   if (holes.length === 0) {
-    cl.warn(`${allOf(matched.length, 'matching hole')} `
+    cl.warn(`${allOf(matched.length, `matching ${noun}`, `matching ${noun}${outward ? 'es' : 's'}`)} `
       + `${verb(matched.length, 'is', 'are')} under a clamp or outside the picked regions`);
   } else if (matched.length > holes.length) {
-    cl.info(`${plural(matched.length - holes.length, 'hole')} skipped — under a clamp `
+    cl.info(`${many(matched.length - holes.length)} skipped — under a clamp `
       + 'or outside the picked regions');
   }
   holes.sort((a, b) => a.cy - b.cy || a.cx - b.cx);
@@ -129,19 +141,32 @@ export function generateSpot({ mesh, tool, params, regions }) {
 
   cl.rapid(holes[0].cx, holes[0].cy, clearance);
   let clipped = 0;
+  let widest = 0;
   for (const h of holes) {
     // the cone is as wide as asked, or as wide as the hole when nothing was
     // asked — which is the chamfer case
     const across = Math.min(wanted > 0 ? wanted : h.r * 2, maxR * 2);
-    if (wanted > maxR * 2) clipped++;
+    // A cone cannot be wider than the cutter that cuts it, whether the width
+    // was typed or taken from the hole. Counting only the typed case left the
+    // other one saying "spotted to the hole diameter" on a ⌀20 hole a ⌀3 spot
+    // drill had put a ⌀3 dimple in — and the chamfer that sentence promises is
+    // the second reason to run the operation at all.
+    if ((wanted > 0 ? wanted : h.r * 2) > maxR * 2 + 1e-9) clipped++;
+    widest = Math.max(widest, across);
     const depth = (across / 2) / Math.tan(half);
     cl.drill(h.cx, h.cy, h.top - depth, { retractZ, peck: 0, dwell: params.dwell ?? 0 });
   }
-  cl.info(`${plural(holes.length, 'hole')} spotted `
-    + `${wanted > 0 ? `⌀${wanted}` : 'to the hole diameter'} with a ${angle}° point`);
+  // What the cones actually came out at, not what was asked for.
+  const across = clipped === holes.length
+    ? `⌀${widest.toFixed(2)} with a ${angle}° point — as wide as this cutter goes`
+    : `${wanted > 0 ? `⌀${wanted}` : 'to the hole diameter'} with a ${angle}° point`;
+  cl.info(`${plural(holes.length, 'hole')} spotted ${across}`);
   if (clipped > 0) {
-    cl.warn(`⌀${params.spotDiameter} is wider than this ⌀${tool.diameter} cutter — `
-      + `the spots are ⌀${(maxR * 2).toFixed(2)}, which is as wide as it goes`);
+    cl.warn(`${wanted > 0 ? `⌀${params.spotDiameter} is`
+      : `${plural(clipped, 'hole')} ${verb(clipped, 'is', 'are')}`} `
+      + `wider than this ⌀${tool.diameter} cutter — `
+      + `${clipped === holes.length ? 'the spots are' : `${clipped} of the spots are`} `
+      + `⌀${(maxR * 2).toFixed(2)}, which is as wide as it goes`);
   }
   return cl.finish();
 }
@@ -257,11 +282,16 @@ export function generateThreadMill({ mesh, tool, params, regions }) {
     tool,
     params,
     regions,
-    // Every hole this cutter fits down, threaded to whatever size it is:
-    // a thread mill is not sized to one thread the way a tap is, so asking
-    // which holes are "its" size would be asking the wrong question.
-    wantDiameter: params.threadDiameter > 0
-      ? tapDrillDiameter(params.threadDiameter, pitch) : 0,
+    // An internal thread is cut in a hole and an external one on a boss, and
+    // they are not the same feature seen from two sides: run outward over the
+    // *holes* and the cutter plunges down the middle of each one and then feeds
+    // sideways out through the wall, which is what this did.
+    outward: !internal,
+    // Every feature this cutter fits, threaded to whatever size it is: a thread
+    // mill is not sized to one thread the way a tap is, so asking which of them
+    // are "its" size would be asking the wrong question. Narrow the list with
+    // picked regions, which is the answer to "thread these and not those".
+    wantDiameter: 0,
     radiusUsed: cutter / 2,
     what: '',
   });
@@ -286,7 +316,10 @@ export function generateThreadMill({ mesh, tool, params, regions }) {
   const made = new Set();
   cl.rapid(holes[0].cx, holes[0].cy, clearance);
   for (const h of holes) {
-    const nominal = threadForHole(h.r * 2, pitch);
+    // A hole is the *minor* diameter — the tapping drill — and the thread is
+    // cut out to the major. A boss is already the major diameter: it was turned
+    // to size and the thread is cut into it, so nothing is added.
+    const nominal = internal ? threadForHole(h.r * 2, pitch) : h.r * 2;
     // Does the cutter go down the hole at all?
     //
     // The orbit test below is not this question and cannot stand in for it: a
@@ -328,16 +361,21 @@ export function generateThreadMill({ mesh, tool, params, regions }) {
     const anticlockwise = internal === (rightHand === climb);
     const dir = anticlockwise ? 1 : -1;
 
-    cl.rapid(h.cx, h.cy, clearance);
-    cl.rapid(h.cx, h.cy, topZ + 0.5);
-    cl.cut(h.cx, h.cy, floor, FEED.PLUNGE);
-    // out to the thread on a quarter-turn arc, so the cutter is never fed
+    // Where the cutter comes down, which is the one place it can: clear air.
+    // Inside a hole that is the middle of it; outside a boss the middle is
+    // solid metal, so it is a cutter's width further out than the orbit.
+    const entryR = internal ? 0 : orbit + cutter;
+    cl.rapid(h.cx + entryR, h.cy, clearance);
+    cl.rapid(h.cx + entryR, h.cy, topZ + 0.5);
+    cl.cut(h.cx + entryR, h.cy, floor, FEED.PLUNGE);
+    // and on to the thread on a quarter-turn arc, so the cutter is never fed
     // straight into the wall
     const leadSteps = Math.max(6, Math.round(segments / 4));
     for (let i = 1; i <= leadSteps; i++) {
       const t = i / leadSteps;
+      const r = entryR + (orbit - entryR) * t;
       const a = dir * (Math.PI / 2) * t;
-      cl.cut(h.cx + orbit * t * Math.cos(a), h.cy + orbit * t * Math.sin(a), floor, FEED.LEAD);
+      cl.cut(h.cx + r * Math.cos(a), h.cy + r * Math.sin(a), floor, FEED.LEAD);
     }
     const start = dir * (Math.PI / 2);
     const total = segments * turns;
@@ -346,15 +384,16 @@ export function generateThreadMill({ mesh, tool, params, regions }) {
       const z = floor + (depth * i) / total;
       cl.cut(h.cx + orbit * Math.cos(a), h.cy + orbit * Math.sin(a), z);
     }
-    // and back to the middle before lifting, so the retract is up the hole and
-    // not through the thread that has just been cut
+    // and back off the thread before lifting, so the retract is up clear air
+    // and not through the thread that has just been cut
     const end = start + dir * turns * Math.PI * 2;
     for (let i = 1; i <= leadSteps; i++) {
       const t = 1 - i / leadSteps;
+      const r = entryR + (orbit - entryR) * t;
       const a = end + dir * (Math.PI / 2) * (1 - t);
-      cl.cut(h.cx + orbit * t * Math.cos(a), h.cy + orbit * t * Math.sin(a), topZ, FEED.LEAD);
+      cl.cut(h.cx + r * Math.cos(a), h.cy + r * Math.sin(a), topZ, FEED.LEAD);
     }
-    cl.rapid(h.cx, h.cy, clearance);
+    cl.rapid(h.cx + entryR, h.cy, clearance);
     made.add(nominal.toFixed(1));
     cut++;
   }

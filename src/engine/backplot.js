@@ -247,26 +247,46 @@ function movesOverClamps(cl, fixtures) {
  * the program. Walked by absolute distance that mismatch accumulates into a
  * drift down the whole path, and an eighty-metre roughing program reports a
  * third of a millimetre of "post bug" that is nothing but the arc fitter doing
- * its job. A fraction absorbs a uniform stretch exactly and leaves every real
- * difference where it was.
+ * its job.
+ *
+ * A fraction absorbs that stretch where it is *uniform*, and it is not: the
+ * fitter lengthens the arced stretches of a path and leaves the straight ones
+ * alone, so the two walks slip past each other wherever the arcs are bunched.
+ * Measured on a plate with fifteen operations on it, a helical bore drifted
+ * 2.1mm and read as 0.28mm of "post bug"; the same operation posted without
+ * arcs read 0.03mm.
+ *
+ * So `worst` cannot be read on its own, and `extra`, `length` and `steps` come
+ * back with it: they are what says how far these two walks could have slipped
+ * without anything being wrong. `checkPost` reads all four together, and the
+ * arithmetic for turning them into an allowance is documented there — including
+ * why `extra` is only half the story, the other half being that a printed
+ * coordinate rounds and the rounding wanders.
  *
  * Leading and trailing rapids are trimmed off both. A post is entitled to add a
  * safe approach at the start and a retract at the end — that is what a post is
  * *for* — and a tail nobody asked for would otherwise shift the whole
  * comparison sideways. What is being checked is the path through the metal.
  *
- * @returns { worst, at, samples, extra } — the furthest the two paths get
- *   apart in mm, and the length one has that the other does not
+ * @returns { worst, at, samples, extra, length, steps } — the furthest the two
+ *   paths get apart in mm, the length one has that the other does not, how long
+ *   the path is (which says whether that difference is plausible), and how many
+ *   moves it took to get there (which says how far the walks can have slipped)
  */
 export function comparePaths(a, b) {
-  const A = arcLengths(trimRapids(pathPoints(a)));
-  const B = arcLengths(trimRapids(pathPoints(b)));
+  const A = arcLengths(trimRapids(collapsePecks(pathPoints(a))));
+  const B = arcLengths(trimRapids(collapsePecks(pathPoints(b))));
   // Two paths with no motion in them agree perfectly, and an operation that
   // machines nothing is common enough — a drill that matched no hole, a rest
   // pass with nothing left to take — that calling it an infinite discrepancy
   // would put a post-bug warning on half the programs in the app.
-  if (!A && !B) return { worst: 0, at: -1, samples: 0, extra: 0 };
-  if (!A || !B) return { worst: Infinity, at: -1, samples: 0, extra: 0 };
+  if (!A && !B) return { worst: 0, at: -1, samples: 0, extra: 0, length: 0, steps: 0 };
+  if (!A || !B) {
+    return {
+      worst: Infinity, at: -1, samples: 0, extra: 0, steps: 0,
+      length: A?.total ?? B?.total ?? 0,
+    };
+  }
   const samples = Math.min(MAX_COMPARE_SAMPLES, Math.max(A.points.length, B.points.length) * 2);
   let worst = 0;
   let at = -1;
@@ -278,7 +298,12 @@ export function comparePaths(a, b) {
     if (d > worst) { worst = d; at = t; }
   }
   return {
-    worst, at, samples, extra: Math.abs(A.total - B.total),
+    worst,
+    at,
+    samples,
+    extra: Math.abs(A.total - B.total),
+    length: A.total,
+    steps: Math.max(A.points.length, B.points.length),
   };
 }
 
@@ -310,6 +335,90 @@ function pathPoints(cl) {
   });
   return out;
 }
+
+/**
+ * A hole drilled in bites, reduced to the hole.
+ *
+ * A control with canned cycles is told a hole in one block — `G83 … Q2` — and
+ * the CL data says the same thing in one move, so the two match point for
+ * point. A control without them is told the same hole as forty blocks of down,
+ * out, down again, and the two paths no longer resemble each other at all: the
+ * file is four times longer than the path it came from, and walked side by side
+ * they part company by the depth of the hole. On this shaft that read as 30.8mm
+ * of "post bug" on a centre drill that was perfectly correct, and it fired on
+ * *every* drilling operation posted for GRBL or for the lathe, which are the
+ * two posts here that write pecks out long-hand.
+ *
+ * How a hole is spelled is the post's business, in exactly the way the approach
+ * and the retract trimmed below are. What both sides state, and what a post can
+ * get wrong, is where the hole is and how deep it goes — so a run of moves that
+ * never leaves one XY is reduced to where it started and how far down it got.
+ * Applied to both paths, so the canned-cycle case is untouched (it is already
+ * those two points) and the long-hand case becomes it.
+ *
+ * Only a *pecked* run is touched, and pecking is what the shape says it is: the
+ * tool goes down, comes back out, and goes down again. A plain plunge only
+ * descends and is left alone, and so is the end of a closed profile — which
+ * arrives back at the point it started from and then retracts, three moves at
+ * one XY that are not a hole and whose retract is real motion. Reducing those
+ * as well cost an engraved rectangle its lift-off and read as 22mm of "post
+ * bug" on a file that was right.
+ */
+function collapsePecks(points) {
+  const out = [];
+  for (let i = 0; i < points.length;) {
+    let j = i;
+    while (j + 1 < points.length
+      && Math.abs(points[j + 1][0] - points[i][0]) < SAME_XY
+      && Math.abs(points[j + 1][1] - points[i][1]) < SAME_XY) j++;
+    const deepest = pecked(points, i, j);
+    if (deepest < 0) {
+      for (let k = i; k <= j; k++) out.push(points[k]);
+    } else {
+      // The hole starts where the feeding starts, not where the run does: the
+      // file comes down to the R plane at rapid and the CL data says the R
+      // plane and nothing above it. Keeping the whole approach on one side and
+      // trimming it on the other made a through hole nine millimetres deeper in
+      // the file than in the path — which is the clearance height, not a fault.
+      // The rule is trimRapids', applied inside the run.
+      let start = i;
+      while (start < deepest && points[start + 1][3]) start++;
+      out.push(points[start], points[deepest]);
+    }
+    i = j + 1;
+  }
+  return out;
+}
+
+/**
+ * Is this run of same-XY points a peck cycle, and if so where is the bottom?
+ *
+ * A peck turns downward again after having come back up, which nothing else at
+ * a fixed XY does.
+ *
+ * @returns the index of the deepest point, or -1 when the run is not a peck
+ */
+function pecked(points, from, to) {
+  let deepest = from;
+  let rising = false;
+  let turned = false;
+  for (let k = from + 1; k <= to; k++) {
+    const dz = points[k][2] - points[k - 1][2];
+    if (dz > 1e-9) rising = true;
+    else if (dz < -1e-9) {
+      if (rising) turned = true;
+      rising = false;
+    }
+    if (points[k][2] < points[deepest][2]) deepest = k;
+  }
+  return turned && deepest > from ? deepest : -1;
+}
+
+/**
+ * Close enough to be the same hole. Coordinates are printed to three decimals,
+ * so two blocks that name one position can differ by half a thousandth.
+ */
+const SAME_XY = 1e-3;
 
 /** Drop the linking at either end, keeping the path through the metal. */
 function trimRapids(points) {
@@ -384,6 +493,33 @@ function alongPath(path, target) {
  * diameter, a lost modal word by the width of the part, a units slip by a
  * factor of twenty-five.
  *
+ * And hence the drift term, which the floor on its own was not: the comparison
+ * walks both paths by fraction of their own length, so a path the fitter has
+ * made `extra` millimetres longer puts its samples up to `extra` out of step —
+ * that is the metric's own noise, not a discrepancy in the file. A plate with
+ * fifteen ordinary operations on it had four of them over the floor on that
+ * alone, every one of which told the person holding the file "do not run this".
+ *
+ * There is a second slip and it is not the fitter's: a coordinate printed to
+ * three decimals moves by up to half a thousandth, so every segment in the file
+ * is a shade longer or shorter than the one it came from, at random. Those
+ * cancel — the *ends* of the two paths agree to a twentieth of a millimetre
+ * over a hundred and thirty metres — but they cancel by wandering, and the walk
+ * is furthest from zero somewhere in the middle. Measured on a slope: a 21,000
+ * move roughing pass ended 0.054mm apart and got 0.158mm apart on the way,
+ * which is the 0.144mm this check was calling a post bug. It grows with the
+ * square root of the moves, as a random walk does, so that is how it is
+ * allowed for — `extra` is the end of the walk and cannot see its excursion.
+ *
+ * The drift is forgiven, but only as much of it as refitting can account for.
+ * Refitting is a parts-per-million business — the worst legitimate case
+ * measured here was 4e-4 of the path, on a helix — while a post that has
+ * actually gone wrong changes the length by a *percent* or more: every one of
+ * the seven faults injected to check this (G2 swapped for G3, and the sign of
+ * I inverted) came back between 1.5e-2 and 8e-1. A cap at a thousandth of the
+ * path sits two orders of magnitude clear of both, and forgiving `extra` only
+ * up to it means a fault that does not lengthen the path is forgiven nothing.
+ *
  * @param ops [{ name, cl }] as they were posted
  * @param text the posted program
  * @param lineMap from buildGcode: line index → { op, move }
@@ -419,9 +555,11 @@ export function checkPost({
     if (op.wrap?.diameter > 0) {
       return { name: op.name, allowed: Infinity, over: -Infinity, worst: 0, wrapped: true };
     }
-    const allowed = Math.max(ARC_REFIT_FLOOR,
-      3 * Math.max(fitTolerance, op.cl?.resolution ?? 0) + ROUNDING);
     const result = comparePaths(op.cl, buckets[i]);
+    const allowed = Math.max(ARC_REFIT_FLOOR,
+      3 * Math.max(fitTolerance, op.cl?.resolution ?? 0) + ROUNDING)
+      + Math.min(result.extra, result.length * PLAUSIBLE_DRIFT)
+      + PRINTED_STEP * Math.sqrt(result.steps);
     return { name: op.name, allowed, over: result.worst - allowed, ...result };
   });
   let over = -Infinity;
@@ -439,6 +577,20 @@ const ROUNDING = 0.005;
 
 /** And what refitting a path into arcs and back costs, whatever the tolerance. */
 const ARC_REFIT_FLOOR = 0.1;
+
+/**
+ * How much longer refitting a path is allowed to have made it — a thousandth,
+ * where the measured worst case is four ten-thousandths and the smallest
+ * injected fault is fifteen thousandths. See `checkPost`.
+ */
+const PLAUSIBLE_DRIFT = 1e-3;
+
+/**
+ * And how much a single move's length can change in being printed: two ends,
+ * each rounded to three decimals. Multiplied by the square root of the moves,
+ * this is how far the two walks can have slipped apart in the middle.
+ */
+const PRINTED_STEP = 0.001;
 
 /**
  * A rapid that took metal, as the simulation counted them.

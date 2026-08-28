@@ -40,6 +40,43 @@ function boxSoup([x0, y0, z0], [x1, y1, z1]) {
   ];
 }
 
+/**
+ * A round boss standing on a square plate — the outside of a thread, which is
+ * the one round feature that is not a hole.
+ *
+ * The plate is what makes it a boss rather than a bar: below `plateHeight` the
+ * slice is the plate's square outline, and only above it does the circle stand
+ * on its own. A finder that looks for round loops of *material* has to see one
+ * feature here and not two, and has to put its base at the plate.
+ *
+ * @returns { mesh, cx, cy, diameter, base, top }
+ */
+export function makeBoss({
+  plate = 60, plateHeight = 10, diameter = 20, height = 12,
+  center = [0, 0], segments = 64,
+} = {}) {
+  const [cx, cy] = center;
+  const r = diameter / 2;
+  const base = plateHeight;
+  const top = plateHeight + height;
+  const soup = [...boxSoup([cx - plate / 2, cy - plate / 2, 0],
+    [cx + plate / 2, cy + plate / 2, base])];
+  const ring = (i) => {
+    const a = (i / segments) * Math.PI * 2;
+    return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  };
+  for (let i = 0; i < segments; i++) {
+    const [x0, y0] = ring(i);
+    const [x1, y1] = ring(i + 1);
+    soup.push(x0, y0, base, x1, y1, base, x1, y1, top);
+    soup.push(x0, y0, base, x1, y1, top, x0, y0, top);
+    soup.push(cx, cy, top, x0, y0, top, x1, y1, top);
+  }
+  return {
+    mesh: meshFromSoup(new Float32Array(soup)), cx, cy, diameter, base, top,
+  };
+}
+
 /** Axis-aligned box mesh from (0,0,0) to (w,d,h). */
 export function makeBox(w, d, h) {
   return meshFromSoup(new Float32Array(boxSoup([0, 0, 0], [w, d, h])));

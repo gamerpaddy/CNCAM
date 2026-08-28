@@ -22,6 +22,40 @@
 /** Millimetres per inch, for a program in G20. */
 const INCH = 25.4;
 
+/**
+ * What an X word means on a lathe.
+ *
+ * A turning control is told the *diameter* it should be at, not the radius —
+ * `X40` on a ⌀40 bar is the tool touching the skin, and the slide is 20mm off
+ * the spindle centreline. G7 turns that reading on and G8 turns it off, and
+ * every lathe post in this app writes G7 in its header (see post/lathe.js,
+ * where the radius the CL data holds is doubled).
+ *
+ * Read as a plain coordinate instead and a lathe program comes back at twice
+ * its real radius: the backplot draws it off the bar, the simulation cuts air,
+ * the travel check measures the wrong envelope, and the post round-trip reports
+ * every single operation as out by half a diameter — which is what it did.
+ *
+ * Only the X *position* is a diameter. Arc centre offsets are radii in both
+ * modes on every control that has the pair, so I is left alone.
+ */
+const DIAMETER_MODE = 7;
+const RADIUS_MODE = 8;
+
+/**
+ * A lathe's T word is two numbers written as one: `T0909` is turret station 9
+ * carrying offset 9, which is what post/lathe.js writes and what every turning
+ * control expects. Read as a single number it is tool 909, and the read-back
+ * then reports "the file asks for T909 and there is no T909 here" about a file
+ * that asked for station 9 — and simulates it with whatever the widest cutter
+ * in the library happens to be.
+ *
+ * Only in diameter mode, which is the one word that says "this is a lathe
+ * program" out loud, and only for a word actually written with four digits: a
+ * mill's `T909` is tool 909 and must stay that.
+ */
+const LATHE_T_DIGITS = 4;
+
 const WORD = /([A-Za-z])\s*(-?\d*\.?\d+)/g;
 
 /** The G codes that set state and produce no motion of their own. */
@@ -46,13 +80,16 @@ const KNOWN_M = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30]);
 /**
  * @param text a G-code program
  * @param options.arcTolerance chord tolerance when expanding arcs (mm)
- * @returns {{ motion, points, cycles, events, unsupported, units, blocks }}
+ * @returns {{ motion, points, cycles, events, unsupported, units, xWords, blocks }}
  *   motion:  every move and cycle in program order, the one authoritative list
  *   points:  the moves alone, one entry per resolved endpoint (arcs expanded)
  *   cycles:  the canned cycles alone, unexpanded — a G81 hole is one move
  *   events:  tool changes, spindle, coolant and feed changes, in order
  *   unsupported: [{ code, line }] words that were not understood
  *   units:   'mm' or 'inch' — what the program was written in
+ *   xWords:  'radius' or 'diameter' — how the file spelled X. Every coordinate
+ *            that comes back is a radius either way; this says which the file
+ *            said. See DIAMETER_MODE.
  */
 export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
   const motion = [];
@@ -64,6 +101,7 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
   let plane = 17;                    // G17 XY, G18 ZX, G19 YZ
   let scale = 1;                     // 25.4 in a G20 program
   let units = 'mm';
+  let xScale = 1;                    // 0.5 in a G7 program — see DIAMETER_MODE
   let absolute = true;               // G90 / G91
   let arcAbsolute = false;           // G90.1 / G91.1 — incremental by default
   let retractMode = 98;              // G98 initial plane / G99 R plane
@@ -93,7 +131,9 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
     if (!code || code === '%') return;
 
     const words = [];
-    for (const m of code.matchAll(WORD)) words.push([m[1].toUpperCase(), Number(m[2])]);
+    // the digits as they were written are kept too: a lathe's T word means one
+    // thing at four digits and another at two — see LATHE_T_DIGITS
+    for (const m of code.matchAll(WORD)) words.push([m[1].toUpperCase(), Number(m[2]), m[2]]);
     if (words.length === 0) return;
     blocks++;
     const value = (letter) => {
@@ -117,6 +157,8 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
           cycleZ = null; cycleR = null; cycleQ = null; cycleP = null;
         }
         else if (n >= 73 && n <= 89 && n !== 80) { cycle = n; move = null; }
+        else if (n === DIAMETER_MODE) xScale = 0.5;
+        else if (n === RADIUS_MODE) xScale = 1;
         else if (n === 17 || n === 18 || n === 19) plane = n;
         else if (n === 20) { scale = INCH; units = 'inch'; }
         else if (n === 21) { scale = 1; units = 'mm'; }
@@ -131,13 +173,13 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
           spindle = { rpm: value('S') ?? spindle?.rpm ?? 0, dir: n === 3 ? 'cw' : 'ccw' };
           events.push({ type: 'spindle', ...spindle, line });
         } else if (n === 5) events.push({ type: 'spindle', rpm: 0, dir: 'off', line });
-        else if (n === 6) events.push({ type: 'tool', tool: value('T') ?? tool, line });
+        else if (n === 6) events.push({ type: 'tool', tool: toolNumber(words, xScale) ?? tool, line });
         else if (n === 7 || n === 8) events.push({ type: 'coolant', mode: n === 7 ? 'mist' : 'flood', line });
         else if (n === 9) events.push({ type: 'coolant', mode: 'off', line });
         else if (n === 2 || n === 30) events.push({ type: 'end', line });
         else if (!KNOWN_M.has(n)) unsupported.push({ code: `M${n}`, line });
       } else if (letter === 'T') {
-        tool = n;
+        tool = toolNumber(words, xScale);
       } else if (letter === 'F') {
         const mm = n * scale;
         if (mm !== feed) { feed = mm; events.push({ type: 'feed', feed: mm, line }); }
@@ -147,13 +189,15 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
     }
     if (endsCycle) return;
 
-    // Coordinates, in millimetres and absolute, whatever the program said.
-    const axis = (letter, from) => {
+    // Coordinates, in millimetres and absolute, whatever the program said —
+    // and in radii, whatever the lathe said. `per` is 1 on every axis but X,
+    // and a half on X while the control is in diameter mode.
+    const axis = (letter, from, per = 1) => {
       const v = value(letter);
       if (v == null) return null;
-      return absolute ? v * scale : from + v * scale;
+      return absolute ? v * scale * per : from + v * scale * per;
     };
-    const x = axis('X', at.x);
+    const x = axis('X', at.x, xScale);
     const y = axis('Y', at.y);
     const z = axis('Z', at.z);
 
@@ -250,8 +294,21 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
     events,
     unsupported,
     units,
+    // 'diameter' when the program ended in G7 — said out loud because every
+    // X in `motion` has already been halved, and a caller comparing against a
+    // file's own text needs to know which of the two numbers it is looking at.
+    xWords: xScale === 1 ? 'radius' : 'diameter',
     blocks,
   };
+}
+
+/** The station a T word names, unpicking the lathe's station+offset pairing. */
+function toolNumber(words, xScale) {
+  const found = words.find(([l]) => l === 'T');
+  if (!found) return null;
+  const [, n, raw] = found;
+  const lathe = xScale !== 1;
+  return lathe && raw.length === LATHE_T_DIGITS ? Math.floor(n / 100) : n;
 }
 
 /**
