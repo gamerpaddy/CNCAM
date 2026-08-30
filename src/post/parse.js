@@ -56,6 +56,39 @@ const RADIUS_MODE = 8;
  */
 const LATHE_T_DIGITS = 4;
 
+/**
+ * The axes this reader cannot draw.
+ *
+ * A rotary word is motion — the part turns under the tool — and there is no
+ * honest way to plot it against a billet that is not turning. Dropping the word
+ * and keeping the X on the same block is not a small error either: a wrapped
+ * program (see engine/wrap.js) is *mostly* rotary, so the whole pattern
+ * collapses onto one line and the file reads as though the tool sat still. That
+ * is a picture of a program nobody wrote, so the letters are reported instead
+ * — once each, because there is one on nearly every block.
+ */
+const ROTARY_AXES = new Set(['A', 'B', 'C']);
+
+/**
+ * What an F word means, which is not always millimetres a minute.
+ *
+ * G94 is a rate and is what a mill uses. G95 is millimetres *per revolution* —
+ * what a lathe uses, what this app's own lathe post writes, and the figure on
+ * the side of an insert box — so the rate depends on the spindle. G93 is
+ * inverse time: the F is how many of that block fit in a minute, which is not a
+ * speed at all and is what a wrapped program is written in.
+ *
+ * Read as a rate whatever the mode, a lathe file comes back at the feed it
+ * would have at one rev per minute: a program this app estimates at eight
+ * minutes read back as seventy-one hours.
+ */
+const PER_MINUTE = 94;
+const PER_REV = 95;
+const INVERSE_TIME = 93;
+
+/** Surface speed is quoted in metres a minute, or in feet a minute under G20. */
+const SURFACE_UNIT = { mm: 1000, inch: 304.8 };
+
 const WORD = /([A-Za-z])\s*(-?\d*\.?\d+)/g;
 
 /** The G codes that set state and produce no motion of their own. */
@@ -119,12 +152,45 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
   let tool = null;
   let spindle = null;
   let blocks = 0;
+  // What an F word and an S word mean right now. Both are modal, and both are
+  // read wrongly by default on a lathe file — see PER_REV.
+  let feedMode = PER_MINUTE;
+  let css = false;          // G96: S is a surface speed and the rpm follows the diameter
+  let surfaceSpeed = 0;     // mm/min of skin, under G96
+  let rpmCap = 0;           // the D word on a G96 line — the control's own clamp
+  let rpm = 0;              // the speed in force, when it is knowable
+  // Modes and axes already reported as unreadable. A wrapped program has a
+  // rotary word on nearly every block, so these are said once each rather than
+  // once per line.
+  const reported = new Set();
+  const unread = (code, line) => {
+    if (reported.has(code)) return;
+    reported.add(code);
+    unsupported.push({ code, line });
+  };
 
   const at = { x: 0, y: 0, z: 0 };
   let started = false;
   // The height the tool was at when the first cycle of a run began, which is
   // where G98 sends it back to between holes.
   let initialZ = 0;
+
+  /**
+   * The spindle speed in force.
+   *
+   * Under G97 that is the S word. Under G96 the control holds a *surface* speed
+   * and works the rpm out from where the tool is, so the answer moves with X —
+   * v/(π·D), clamped by the D word, and on the centreline it is that clamp. It
+   * is read at the moment it is asked for rather than per move, which is all a
+   * feed rate written once at the top of a pass is worth anyway.
+   */
+  const spindleNow = () => {
+    if (!css) return rpm;
+    const r = Math.abs(at.x);
+    const free = r > 1e-6 ? surfaceSpeed / (2 * Math.PI * r) : Infinity;
+    if (rpmCap > 0) return Math.min(rpmCap, free);
+    return Number.isFinite(free) ? free : 0;
+  };
 
   text.split('\n').forEach((raw, line) => {
     const code = raw.replace(/\([^)]*\)/g, '').replace(/;.*$/, '').trim();
@@ -167,10 +233,35 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
         else if (n === 90.1) arcAbsolute = true;
         else if (n === 91.1) arcAbsolute = false;
         else if (n === 98 || n === 99) retractMode = n;
+        else if (n === PER_MINUTE || n === PER_REV) feedMode = n;
+        else if (n === INVERSE_TIME) {
+          // Not a rate at all: the F on the block says how many of that block
+          // would fit in a minute. There is nothing to convert it to without
+          // walking the block, and a wrapped program's rotary words are already
+          // unread, so the mode is reported and its F words are left out.
+          feedMode = n;
+          unread('G93 (inverse time)', line);
+        } else if (n === 96) {
+          css = true;
+          const d = value('D');
+          if (d != null) rpmCap = d;
+          const sw = value('S');
+          if (sw != null) surfaceSpeed = sw * (SURFACE_UNIT[units] ?? SURFACE_UNIT.mm);
+        } else if (n === 97) css = false;
         else if (!MODAL_G.has(n)) unsupported.push({ code: `G${n}`, line });
+      } else if (ROTARY_AXES.has(letter)) {
+        // Motion this reader cannot draw — see ROTARY_AXES. The block's linear
+        // words are still read, because half a move drawn is what the rest of
+        // the checks below are built on; what must not happen is silence.
+        unread(`${letter} (rotary axis)`, line);
       } else if (letter === 'M') {
         if (n === 3 || n === 4) {
-          spindle = { rpm: value('S') ?? spindle?.rpm ?? 0, dir: n === 3 ? 'cw' : 'ccw' };
+          const sw = value('S');
+          if (sw != null) {
+            if (css) surfaceSpeed = sw * (SURFACE_UNIT[units] ?? SURFACE_UNIT.mm);
+            else rpm = sw;
+          }
+          spindle = { rpm: spindleNow(), dir: n === 3 ? 'cw' : 'ccw' };
           events.push({ type: 'spindle', ...spindle, line });
         } else if (n === 5) events.push({ type: 'spindle', rpm: 0, dir: 'off', line });
         else if (n === 6) events.push({ type: 'tool', tool: toolNumber(words, xScale) ?? tool, line });
@@ -181,10 +272,23 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
       } else if (letter === 'T') {
         tool = toolNumber(words, xScale);
       } else if (letter === 'F') {
-        const mm = n * scale;
+        // Millimetres a minute, whatever the file spelled it as — see PER_REV.
+        // Under inverse time there is no such number, and under feed-per-rev
+        // there is none until the spindle has been told a speed.
+        if (feedMode === INVERSE_TIME) continue;
+        const speed = feedMode === PER_REV ? spindleNow() : 1;
+        if (feedMode === PER_REV && !(speed > 0)) {
+          unread('G95 (feed per rev, before any spindle speed)', line);
+          continue;
+        }
+        const mm = n * scale * speed;
         if (mm !== feed) { feed = mm; events.push({ type: 'feed', feed: mm, line }); }
       } else if (letter === 'S') {
-        if (!words.some(([l]) => l === 'M')) events.push({ type: 'speed', rpm: n, line });
+        if (css) surfaceSpeed = n * (SURFACE_UNIT[units] ?? SURFACE_UNIT.mm);
+        else rpm = n;
+        if (!words.some(([l]) => l === 'M')) {
+          events.push({ type: 'speed', rpm: spindleNow(), line });
+        }
       }
     }
     if (endsCycle) return;
@@ -272,7 +376,8 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
     }
 
     if (move === 2 || move === 3) {
-      const centre = arcCentre(at, target, words, value, plane, scale, arcAbsolute);
+      const centre = arcCentre(at, target, words, value, plane, scale, arcAbsolute,
+        move === 3);
       if (!centre) {
         unsupported.push({ code: `G${move} without I/J/K or R`, line });
         motion.push({ kind: 'move', ...target, rapid: false, line, feed, tool });
@@ -334,8 +439,16 @@ const PLANES = {
  * long. Getting that backwards puts the tool through the part on the far side
  * of the circle, which is exactly the sort of thing reading the file back is
  * supposed to catch.
+ *
+ * Which of the two centres gives the short way depends on which way the tool is
+ * going round, and that is why `ccw` is an argument rather than a detail of the
+ * caller. The minor arc keeps its centre to the left of the direction of travel
+ * for a G3 and to the right for a G2 — so reading the sign of R alone is right
+ * for half of all arcs and the complement of the arc for the other half. A
+ * `G2 X10 Y10 R10` from the origin is a quarter circle; read without `ccw` it
+ * came back as the three quarters that go round the other side.
  */
-function arcCentre(from, to, words, value, plane, scale, arcAbsolute) {
+function arcCentre(from, to, words, value, plane, scale, arcAbsolute, ccw) {
   const { a, b, ca, cb } = PLANES[plane] ?? PLANES[17];
   const i = value(ca);
   const j = value(cb);
@@ -356,8 +469,10 @@ function arcCentre(from, to, words, value, plane, scale, arcAbsolute) {
   const h = Math.sqrt(Math.max(0, r * r - (d / 2) * (d / 2)));
   // Which side of the chord the centre sits on is the sign of R crossed with
   // the direction of travel; both candidates are the same distance from both
-  // ends, and only the sweep they produce tells them apart.
-  const sign = r < 0 ? -1 : 1;
+  // ends, and only the sweep they produce tells them apart. +1 puts it to the
+  // left of the chord, which is where a counter-clockwise minor arc turns
+  // about.
+  const sign = (r < 0) === !!ccw ? -1 : 1;
   return {
     a: (x0 + x1) / 2 - sign * h * (dy / d),
     b: (y0 + y1) / 2 + sign * h * (dx / d),

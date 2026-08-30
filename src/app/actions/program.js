@@ -21,7 +21,7 @@ import { transformMesh } from '../../engine/setup.js';
 import { turningProfile, barFromStock } from '../../engine/lathe.js';
 import { estimateSeconds } from '../../engine/toolpath.js';
 import { orientationFor, indexingWarnings } from '../../engine/indexing.js';
-import { wrapFor, wrapWarnings, wrapExtent } from '../../engine/wrap.js';
+import { wrapFor, wrapWarnings, wrapExtent, linearExtent } from '../../engine/wrap.js';
 import { buildGcode, postsFor, defaultPostFor } from '../../post/index.js';
 import { renderGcodePanel } from '../gcode-panel.js';
 import { opStatus, formatTime, opFingerprint, toolNumberClashes } from '../op-status.js';
@@ -152,17 +152,27 @@ export function makeProgramActions(ctx, space) {
       const notes = [];
       if (disabled) notes.push(`${disabled} disabled`);
       if (unusable) notes.push(`${unusable} missing a tool`);
-      // an operation that generated nothing is the failure most worth saying
-      // out loud: it looks identical to one that was never generated
-      const barren = [...doc.allOperations()]
+      // An operation that generated nothing is the failure most worth saying
+      // out loud: it looks identical to one that was never generated.
+      //
+      // Which is not the same question as whether it had anything to say. A
+      // status is `warn` for any note the strategy raised — "3 of these holes
+      // are wider than the cutter", "4 are too small to orbit in" — and reading
+      // that as "cut nothing" reported a spot drill that spotted seven holes
+      // and a thread mill that cut three threads as having done nothing at all.
+      // The two are counted apart and said apart.
+      const generated = [...doc.allOperations()]
         .filter(({ op }) => op.enabled && doc.toolpaths.has(op.id))
-        .filter(({ op }) => opStatus(doc, op)?.level === 'warn')
+        .map(({ op }) => ({ op, status: opStatus(doc, op) }));
+      const barren = generated.filter(({ status }) => status?.empty).map(({ op }) => op.name);
+      const flagged = generated
+        .filter(({ status }) => !status?.empty && status?.warnings?.length)
         .map(({ op }) => op.name);
       // Does the program fit the machine it is for? Travel and spindle range
       // are checked here rather than at the machine, which is where they were
       // being found: a soft-limit alarm halfway through a program is an hour of
       // setup wasted for something the app already knew.
-      const limits = machineWarnings(doc.machineRecord(), programExtent(cls),
+      const limits = machineWarnings(doc.machineRecord(), travelExtent(cls),
         programSpeeds());
       // A clamp taller than the plane the job traverses at is a crash the
       // backplot draws as a straight orange line over the part. The operation
@@ -215,14 +225,16 @@ export function makeProgramActions(ctx, space) {
       const more = limits.length > 1 ? ` (+${limits.length - 1} more)` : '';
       const suffix = (notes.length ? `, ${notes.join(' and ')}` : '')
         + (limits.length ? ` — ${limits[0].text}${more}` : '');
-      if (barren.length) {
-        ctx.ui.setStatus(
-          `Generated ${plural(jobs.length, 'toolpath')} — est. ${formatTime(seconds)}${suffix}. `
-          + `${barren.length} cut nothing: ${barren.join(', ')} — see Result in the panel`, true);
-      } else {
-        ctx.ui.setStatus(`Generated ${plural(jobs.length, 'toolpath')} — est. ${formatTime(seconds)}${suffix}`,
-          limits.length > 0);
+      const said = [];
+      if (barren.length) said.push(`${barren.length} cut nothing: ${barren.join(', ')}`);
+      if (flagged.length) {
+        said.push(`${plural(flagged.length, 'operation')} cut, but with something to `
+          + `say about it: ${flagged.join(', ')}`);
       }
+      const tail = said.length ? `. ${said.join('; ')} — see Result in the panel` : '';
+      ctx.ui.setStatus(
+        `Generated ${plural(jobs.length, 'toolpath')} — est. ${formatTime(seconds)}${suffix}${tail}`,
+        limits.length > 0 || said.length > 0);
     } catch (err) {
       console.error(err);
       ctx.ui.setStatus(`Generation failed: ${err.message}`, true);
@@ -287,6 +299,41 @@ export function makeProgramActions(ctx, space) {
       }
     }
     return Number.isFinite(min[0]) ? { min, max } : null;
+  }
+
+  /**
+   * The same, as the machine's *linear* axes will see it.
+   *
+   * A wrapped setup's developed axis is not a linear axis at all: that
+   * direction is round the bar, the file has no word for it, and the table does
+   * not move there. Measured flat, a pattern that goes right round a ⌀100 bar
+   * asked for 314mm of Y — and every machine in the rack was told it had not
+   * got it. See engine/wrap.js linearExtent.
+   */
+  function travelExtent(programs) {
+    const machine = doc.machineRecord();
+    const wrapped = doc.setups()
+      .map((setup) => ({ setup, wrap: wrapFor(setup, machine) }))
+      .filter(({ wrap }) => wrap);
+    if (wrapped.length === 0) return programExtent(programs);
+
+    const of = (setup) => programs.filter((cl) => setup.operations
+      .some((o) => doc.toolpaths.get(o.id) === cl));
+    const taken = new Set(wrapped.flatMap(({ setup }) => of(setup)));
+    const parts = [programExtent(programs.filter((cl) => !taken.has(cl)))];
+    for (const { setup, wrap } of wrapped) parts.push(linearExtent(wrap, programExtent(of(setup))));
+
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (const part of parts) {
+      if (!part) continue;
+      for (let k = 0; k < 3; k++) {
+        if (part.min[k] < min[k]) min[k] = part.min[k];
+        if (part.max[k] > max[k]) max[k] = part.max[k];
+      }
+    }
+    return Number.isFinite(min[0]) || Number.isFinite(min[1]) || Number.isFinite(min[2])
+      ? { min, max } : null;
   }
 
   /**

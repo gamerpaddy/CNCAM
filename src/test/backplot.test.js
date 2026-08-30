@@ -439,3 +439,96 @@ test('and a closed profile keeps the retract that ends it', () => {
   const r = checked(cl.finish(), 'engrave');
   assert.ok(r.over <= 0, `nothing to say: ${r.worst.toFixed(3)}mm`);
 });
+
+// --- what a word means depends on the modes in force ---
+
+/** The length of everything the reader drew after the first move. */
+function pathLength(text) {
+  const { points } = parseGcode(text);
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    total += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y,
+      points[i].z - points[i - 1].z);
+  }
+  return total;
+}
+
+test('the R form of an arc turns the way the G word says', () => {
+  // Two arcs pass through the same two points at the same radius and the sign
+  // of R picks between them — but *which* of the two is the short way depends
+  // on the direction of travel, so reading the sign alone is right for G3 and
+  // the complement of the arc for G2. A quarter circle came back as the three
+  // quarters that go round the other side of the part.
+  const quarter = (Math.PI * 10) / 2;              // 15.71mm
+  const three = 3 * quarter;                       // 47.12mm
+  const arc = (g, r) => program('G21 G90', 'G0 X0 Y0', `G${g} X10 Y10 R${r} F100`);
+  assert.close(pathLength(arc(2, 10)), quarter, 0.05, 'G2 R+ is the short way');
+  assert.close(pathLength(arc(3, 10)), quarter, 0.05, 'and so is G3 R+');
+  assert.close(pathLength(arc(2, -10)), three, 0.05, 'G2 R− is the long way');
+  assert.close(pathLength(arc(3, -10)), three, 0.05, 'and so is G3 R−');
+  // I/J is unambiguous, and is what the R form has to agree with
+  assert.close(pathLength(program('G21 G90', 'G0 X0 Y0', 'G2 X10 Y10 I10 J0 F100')),
+    quarter, 0.05, 'the same arc spelled I10 J0');
+});
+
+test('G95 is millimetres per revolution, not per minute', () => {
+  // Every lathe file this app writes says G95 in its header and F0.2 in its
+  // passes. Read as a rate, a program the app estimates at eight minutes comes
+  // back as seventy-one hours, and the machine's feed limit is checked against
+  // a number three orders of magnitude out.
+  const { events } = parseGcode(program('G21 G90 G18 G7 G95', 'G97 S1000 M3',
+    'G0 X43 Z1', 'G1 X40 F0.2'));
+  const feed = events.find((e) => e.type === 'feed');
+  assert.close(feed.feed, 200, 1e-9, '0.2mm a rev at 1000 rpm is 200mm a minute');
+});
+
+test('and under G96 the speed follows the diameter', () => {
+  // Constant surface speed: S is metres a minute and the rpm is whatever gives
+  // it at the diameter the tool is at. Read as an rpm, a 200 m/min pass came
+  // back as a spindle turning 200 times a minute.
+  const { events } = parseGcode(program('G21 G90 G18 G7 G95', 'G96 D2500 S200 M3',
+    'G0 X40 Z1', 'G1 X40 F0.2'));
+  const spun = events.find((e) => e.type === 'spindle');
+  assert.eq(spun.rpm, 2500, 'on the centreline it is the clamp the D word set');
+  const feed = events.find((e) => e.type === 'feed');
+  // ⌀40 is a 20mm radius: 200000mm/min of skin ÷ (2π×20) = 1591 rpm
+  assert.close(feed.feed, 0.2 * (200000 / (2 * Math.PI * 20)), 1e-6,
+    'and the feed is the rev rate at the diameter the tool is at');
+});
+
+test('a rotary word is said to be unread, not silently dropped', () => {
+  // A wrapped program (engine/wrap.js) is mostly rotary: its Y is an angle and
+  // its blocks say A. Dropped, the whole pattern collapses onto one line and
+  // the file reads as though the tool never moved — which is exactly the sort
+  // of confident wrong picture reading a file back is supposed to prevent.
+  const r = readGcode(program('G21 G90 G93', 'G0 X0 Z5 A0', 'G1 Z-1 F100',
+    'A90 F20', 'X20 A180 F20', 'G94'));
+  const codes = r.parsed.unsupported.map((u) => u.code);
+  assert.ok(codes.some((c) => /^A\b/.test(c)), `the A axis is named: ${codes.join(', ')}`);
+  assert.ok(codes.some((c) => /G93/.test(c)), `and so is inverse time: ${codes.join(', ')}`);
+  assert.eq(codes.length, 2, 'once each, not once a block');
+  const said = reviewProgram({
+    cl: r.cl, parsed: r.parsed, machine: null, extent: r.extent, speeds: r.speeds,
+  });
+  assert.ok(said.some((s) => /went unread/.test(s.text)), JSON.stringify(said));
+});
+
+test('an inverse-time F is not reported as a feed rate', () => {
+  // Under G93 the F says how many of that block fit in a minute. A wrapped
+  // program's 1.9 is half a minute of cutting, not a spindle crawling at
+  // 1.9mm/min.
+  const r = readGcode(program('G21 G90', 'G0 X0 Y0 Z1', 'G1 Z-1 F300', 'X10',
+    'G93', 'G1 X20 F1.9', 'G94'));
+  assert.close(r.speeds.maxFeed, 300, 1e-9, 'only the rates the file stated as rates');
+});
+
+test('an ordinary milling program still reads clean', () => {
+  // The guard on all of the above: none of these modes exists in a three-axis
+  // file, and a check that fires on a correct program is a check nobody reads.
+  const r = readGcode(program('G21 G90 G94 G17', 'T1 M6', 'M3 S9000',
+    'G0 X0 Y0 Z5', 'G1 Z-1 F250', 'X20 F700', 'Y20', 'G0 Z5', 'M5', 'M2'));
+  assert.eq(r.parsed.unsupported.length, 0,
+    `nothing went unread: ${JSON.stringify(r.parsed.unsupported)}`);
+  assert.close(r.speeds.maxFeed, 700, 1e-9, 'and the feeds are the feeds');
+  assert.eq(r.speeds.maxRpm, 9000, 'and the speed is the speed');
+});

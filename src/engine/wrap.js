@@ -33,6 +33,8 @@
 //     it should take, computed from the real surface distance — which is the
 //     distance on the unrolled sheet, exactly the thing the flat program has.
 
+import { orientationFor } from './indexing.js';
+
 /** Is this setup's program wrapped round a rotary axis? */
 export function isWrapped(setup) {
   return !!setup?.wrap?.enabled && (setup.wrap.diameter ?? 0) > 0;
@@ -72,6 +74,23 @@ export function wrapFor(setup, machine) {
   // engine/indexing.js needs. Reading the wrong one of the two is a wrap that
   // silently believes every machine can make it.
   const has = (machine?.rotary ?? []).some((r) => (r.letter ?? r) === axis);
+  // Indexing and wrapping are the two things a fourth axis does and they are
+  // opposites: indexing swings the rotary to an angle and *locks* it under a
+  // tilted work plane, wrapping turns it while the tool cuts. Asked for both,
+  // the post wrote a G68.2 holding the plane and then commanded the same axis
+  // round the bar underneath it — a program that alarms at best, and at worst
+  // cuts a pattern into a face that is no longer where it was declared. There
+  // is no order of the two that means anything, so the wrap is refused rather
+  // than posted.
+  const tilted = orientationFor(setup, machine);
+  const clash = !!tilted && !tilted.identity;
+  const reachable = has && !clash;
+  let reason = null;
+  if (!has) reason = `${machine?.name ?? 'this machine'} has no ${axis} axis to wrap around`;
+  else if (clash) {
+    reason = `this setup is also indexed, and ${axis} cannot both hold the tilted `
+      + 'plane and turn under the cutter — index it or wrap it, not both';
+  }
   return {
     axis,
     developed: DEVELOPED[axis],
@@ -81,10 +100,32 @@ export function wrapFor(setup, machine) {
     // 360/(π·D) degrees. Every coordinate and every feed goes through this one
     // number.
     degPerMm: 360 / circumference,
-    reachable: has,
-    reason: has ? null
-      : `${machine?.name ?? 'this machine'} has no ${axis} axis to wrap around`,
+    reachable,
+    reason,
   };
+}
+
+/**
+ * The travel a wrapped program actually asks of the machine's linear axes.
+ *
+ * The developed axis is not one of them. A pattern that goes right round a
+ * ⌀100 bar is 314mm of Y on the unrolled sheet and no Y at all in the file —
+ * the tool stands still there and the bar turns — so measuring the flat extent
+ * against the table's travel says "this program needs 314mm of Y and the
+ * machine has 250" about the one program for which that number means nothing.
+ * That is the ordinary case for a wrap, not an edge of it.
+ *
+ * The axis is dropped rather than zeroed, so the extent still unions correctly
+ * with the other setups' — which do move it.
+ */
+export function linearExtent(wrap, extent) {
+  if (!wrap || !extent) return extent;
+  const i = wrap.developed === 'y' ? 1 : 0;
+  const min = [...extent.min];
+  const max = [...extent.max];
+  min[i] = Infinity;
+  max[i] = -Infinity;
+  return { min, max };
 }
 
 /**

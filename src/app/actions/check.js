@@ -21,6 +21,7 @@ import { openFile, ACCEPT } from '../../io/files.js';
 import { readGcode, reviewProgram, rapidCutFinding } from '../../engine/backplot.js';
 import { renderGcodePanel } from '../gcode-panel.js';
 import { SimulationPlayback } from '../../engine/simulate.js';
+import { turningProfile, barFromStock } from '../../engine/lathe.js';
 import { mergeMeshes } from '../../geom/mesh.js';
 import { getSetting, SIM_CELLS } from '../settings.js';
 import { plural } from '../../engine/text.js';
@@ -121,28 +122,43 @@ export function makeCheckActions(ctx, space) {
     });
 
     const { tool, why } = toolForProgram(parsed, doc.project.tools ?? []);
+    // A turning program is not a milling program with different numbers in it:
+    // the part spins, X is a radius off the centreline, and there is no Y. Run
+    // through the milling simulator it is drawn against a stationary billet and
+    // every pass back to the start of the next cut reads as a rapid through
+    // metal — which is what reading back this app's own lathe file reported.
+    // The generated-program path has always branched here; this one did not.
+    const turning = (setup?.mode ?? 'mill') === 'turn';
     let simulated = false;
     if (stock && tool) {
       try {
         ctx.ui.setBusy(true);
-        const sim = await ctx.pool.run('simulate', {
-          setups: [{
-            stock,
-            frame: { matrix: space_.matrix, offset: space_.offset },
+        const sim = turning
+          ? await ctx.pool.run('simulateTurn', {
+            bar: barFromStock(stock, turningProfile(mergeMeshes(meshes))),
             ops: [{ cl, tool }],
-          }],
-          active: 0,
-          maxCells: SIM_CELLS[getSetting('simQuality')] ?? SIM_CELLS.high,
-          rapidFeed: doc.rapidFeed(),
-          record: Number(getSetting('simRecord')) || 1,
-          // The same question as for a program of our own, and a better one
-          // here: this file was written somewhere else, and whether it makes
-          // *this* part is exactly what cannot be told by reading it.
-          verify: getSetting('verify') && meshes.length ? {
-            mesh: mergeMeshes(meshes),
-            tolerance: Number(getSetting('verifyTolerance')) || undefined,
-          } : null,
-        });
+            samples: Number(getSetting('turnSamples')) || 1600,
+            rapidFeed: doc.rapidFeed(),
+            record: Number(getSetting('simRecord')) || 1,
+          })
+          : await ctx.pool.run('simulate', {
+            setups: [{
+              stock,
+              frame: { matrix: space_.matrix, offset: space_.offset },
+              ops: [{ cl, tool }],
+            }],
+            active: 0,
+            maxCells: SIM_CELLS[getSetting('simQuality')] ?? SIM_CELLS.high,
+            rapidFeed: doc.rapidFeed(),
+            record: Number(getSetting('simRecord')) || 1,
+            // The same question as for a program of our own, and a better one
+            // here: this file was written somewhere else, and whether it makes
+            // *this* part is exactly what cannot be told by reading it.
+            verify: getSetting('verify') && meshes.length ? {
+              mesh: mergeMeshes(meshes),
+              tolerance: Number(getSetting('verifyTolerance')) || undefined,
+            } : null,
+          });
         const ops = [{ name: file.name, cl, tool }];
         ctx.simulation = { sim, ops, playback: new SimulationPlayback(sim) };
         ctx.viewport.simulation.setSimulation(sim);

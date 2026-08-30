@@ -14,7 +14,7 @@ import {
   ORIGIN_MODES, ORIGIN_LABELS, ORIENTATION_PRESETS, resolveSetup,
 } from '../../engine/setup.js';
 import { orientationFor, indexKind } from '../../engine/indexing.js';
-import { wrapFor, WRAP_AXES, WRAP_AXIS_LABELS } from '../../engine/wrap.js';
+import { wrapFor, linearExtent, WRAP_AXES, WRAP_AXIS_LABELS } from '../../engine/wrap.js';
 import { setupModelIds } from '../actions/setup-space.js';
 import { boreProfile } from '../../engine/lathe.js';
 import { computeBounds, mergeMeshes } from '../../geom/mesh.js';
@@ -230,14 +230,18 @@ function machineFitRows(doc, setup) {
     if (fastest > maxFeed) { maxFeed = fastest; at.maxFeed = op.name; }
   }
 
-  const warnings = machineWarnings(machine, { min, max }, {
+  // A wrapped setup's developed axis is not travel: that direction is round the
+  // bar, the file has no word for it, and the table does not move there. See
+  // engine/wrap.js linearExtent.
+  const travel = linearExtent(wrapFor(setup, machine), { min, max });
+  const warnings = machineWarnings(machine, travel, {
     maxRpm, minRpm: Number.isFinite(minRpm) ? minRpm : 0, maxFeed, at,
   });
+  const used = (k) => (Number.isFinite(travel.min[k])
+    ? `${(travel.max[k] - travel.min[k]).toFixed(0)}` : '—');
   if (warnings.length === 0) {
     return [el('div', { class: 'prop-note' }, [
-      `Fits ${machine.name}: `
-      + `${(max[0] - min[0]).toFixed(0)} × ${(max[1] - min[1]).toFixed(0)} × `
-      + `${(max[2] - min[2]).toFixed(0)} mm of travel used.`,
+      `Fits ${machine.name}: ${used(0)} × ${used(1)} × ${used(2)} mm of travel used.`,
     ])];
   }
   return warnings.map((w) => el('div', { class: 'prop-note warn' }, [`${machine.name}: ${w.text}.`]));

@@ -1,7 +1,8 @@
 import { test, assert } from './runner.js';
 import {
-  isWrapped, wrapFor, wrapPoint, inverseTime, wrapExtent, wrapWarnings,
+  isWrapped, wrapFor, wrapPoint, inverseTime, wrapExtent, wrapWarnings, linearExtent,
 } from '../engine/wrap.js';
+import { machineWarnings } from '../doc/machines.js';
 import { buildGcode } from '../post/index.js';
 import { CLBuilder, FEED } from '../engine/cl.js';
 
@@ -146,4 +147,47 @@ test('an unwrapped operation is posted exactly as it always was', () => {
   assert.eq(flat, nulled, 'a null wrap changes nothing');
   assert.ok(!/G93/.test(flat), 'and no inverse time appears');
   assert.ok(/Y15\.708/.test(flat), 'Y is still Y');
+});
+
+// --- what a wrap is not ---
+
+test('the developed axis is not travel, and is dropped from the extent', () => {
+  // A pattern that goes right round a ⌀100 bar is 314mm of Y on the unrolled
+  // sheet and no Y at all in the file: the tool stands still there and the bar
+  // turns. Measured flat against the table, every machine in the rack was told
+  // it had not got the travel for the ordinary case of a wrap.
+  const w = wrapFor(setup({ enabled: true, axis: 'A', diameter: 100 }),
+    { ...MACHINE, travel: [400, 250, 180] });
+  const flat = { min: [-34, -148, -1], max: [34, 148, 10] };
+  const seen = linearExtent(w, flat);
+  assert.close(seen.max[0] - seen.min[0], 68, 1e-9, 'X is still X');
+  assert.ok(!Number.isFinite(seen.min[1]), 'and Y is not an axis this program moves');
+  assert.close(seen.max[2] - seen.min[2], 11, 1e-9, 'Z is untouched');
+  assert.eq(machineWarnings({ ...MACHINE, travel: [400, 250, 180] }, seen).length, 0,
+    'so nothing is said about 250mm of Y travel');
+  // and a B axis eats X instead
+  const b = wrapFor(setup({ enabled: true, axis: 'B', diameter: 100 }),
+    { ...MACHINE, rotary: [{ letter: 'B', axis: [0, 1, 0], min: -360, max: 360 }] });
+  assert.ok(!Number.isFinite(linearExtent(b, flat).min[0]), 'X, for a B axis');
+  assert.eq(linearExtent(null, flat), flat, 'and an unwrapped setup is left alone');
+});
+
+test('a setup cannot be indexed and wrapped at once', () => {
+  // The two things a fourth axis does, and they are opposites: indexing swings
+  // the rotary and locks it under a tilted plane, wrapping turns it while the
+  // tool cuts. Asked for both, the post wrote a G68.2 holding the plane and
+  // then commanded the same axis round the bar underneath it.
+  const both = {
+    ...setup({ enabled: true, axis: 'A', diameter: 20 }),
+    index: { enabled: true },
+    orientation: { rotationDeg: [30, 0, 0] },
+  };
+  const w = wrapFor(both, MACHINE);
+  assert.ok(!w.reachable, 'refused');
+  assert.ok(/also indexed/.test(w.reason), w.reason);
+  const { text } = buildGcode('linuxcnc', [{ name: 'wrapped', cl: flatPass(), wrap: w }]);
+  assert.ok(/do not run this/.test(text), 'and the file says so');
+  // the identity orientation is the face that is already up: no swing, no clash
+  const flatFace = { ...both, orientation: { rotationDeg: [0, 0, 0] } };
+  assert.ok(wrapFor(flatFace, MACHINE).reachable, 'an unswung indexed setup still wraps');
 });

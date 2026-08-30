@@ -29,8 +29,9 @@ const WORKFLOW = [
     + 'finish. Drag rows in the tree to reorder — the order is the program. '
     + 'Double-click a row to rename it.'],
   ['Generate and look at it', 'Ctrl+G. Each operation reports what it cut; an "!" '
-    + 'means it cut nothing and says why. The setup panel says whether the whole '
-    + 'program fits the machine.'],
+    + 'means it has something to say — it cut nothing, or it cut but skipped '
+    + 'something — and hovering it says what. The setup panel says whether the '
+    + 'whole program fits the machine.'],
   ['Simulate', 'S. Watch the stock come off, scrub back and forth. Detail and '
     + 'what the viewport draws are in Options (Ctrl+,).'],
   ['Post and export', 'Ctrl+E. The dialect comes from the machine you chose.'],
