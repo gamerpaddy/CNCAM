@@ -127,6 +127,8 @@ export function solveRotary(rotationDeg, machine) {
     angles = solveSingleTilt(k, tiltAxis);
   } else if (tiltAxis && turnAxis) {
     angles = solveTiltAndTurn(k, tiltAxis, turnAxis);
+  } else if (axes.length === 2 && !turnAxis) {
+    angles = solveTwoTilts(k, axes);
   } else if (axes.length === 1 && turnAxis) {
     // a lone turntable about Z spins a face round but never tips it up
     return {
@@ -181,6 +183,42 @@ function solveSingleTilt(k, axis) {
   // about Y
   if (Math.abs(k[1]) > 1e-6) return null;             // tips only in the X-Z plane
   return { [axis.letter]: wrap(Math.atan2(-k[0], k[2]) * DEG) };
+}
+
+/**
+ * Two tilt axes and no turntable — an A/B head.
+ *
+ * The commonest 3+2 machines pair a tilt with a turntable about Z, and that was
+ * the only pair with a solution here: an A+B machine was told, of every face on
+ * every part, that its "A+B rotary axes cannot orient this face". Two
+ * perpendicular tilts span the sphere exactly as a tilt and a turn do, so that
+ * sentence was a statement about the solver dressed up as one about the
+ * geometry, and it made a whole class of machine unable to index at all.
+ *
+ * Which angle is which follows from the order: `applyRotary` turns the
+ * innermost axis — the last in the machine's base→part list — first. So the
+ * inner axis takes out the component it can reach (Y for a tilt about X, X for
+ * a tilt about Y), which leaves the vector in the outer axis's own plane, and
+ * the outer one stands it up. `finishSolve` then checks the arithmetic against
+ * `applyRotary` rather than trusting it.
+ */
+function solveTwoTilts(k, axes) {
+  const inner = axes[axes.length - 1];
+  const outer = axes[0];
+  // one about X and one about Y. Two axes about the same line, or a head
+  // swivelling about something oblique, is not a pair this closed form
+  // describes — and saying so is better than answering it wrongly.
+  if (aboutX(inner) === aboutX(outer)) return null;
+  if (!aboutX(inner) && !aboutY(inner)) return null;
+  if (!aboutX(outer) && !aboutY(outer)) return null;
+  if (aboutX(inner)) {
+    const a = wrap(Math.atan2(k[1], k[2]) * DEG);          // Y out, about X
+    const b = wrap(Math.atan2(-k[0], Math.hypot(k[1], k[2])) * DEG);
+    return { [inner.letter]: a, [outer.letter]: b };
+  }
+  const b = wrap(Math.atan2(-k[0], k[2]) * DEG);           // X out, about Y
+  const a = wrap(Math.atan2(k[1], Math.hypot(k[0], k[2])) * DEG);
+  return { [inner.letter]: b, [outer.letter]: a };
 }
 
 /** A tilt axis plus a turntable about Z: the turntable makes any face reachable. */
@@ -292,6 +330,9 @@ function isZAxis(a) {
 }
 function aboutX(a) {
   return Math.abs(a.axis[0]) > 0 && Math.abs(a.axis[1]) < 1e-9 && Math.abs(a.axis[2]) < 1e-9;
+}
+function aboutY(a) {
+  return Math.abs(a.axis[1]) > 0 && Math.abs(a.axis[0]) < 1e-9 && Math.abs(a.axis[2]) < 1e-9;
 }
 
 function outsideLimits(axis, angle) {

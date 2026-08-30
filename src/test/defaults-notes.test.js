@@ -1124,3 +1124,101 @@ test('and every strategy has a card to be chosen by', () => {
     assert.ok(card?.summary && card?.when && card?.cutter, `${type} has no card`);
   }
 });
+
+test('the chamfer sentence names the depth the chamfer pass actually reaches', () => {
+  // The panel's "what this will cut" line is a claim about how far under the
+  // edge the tip goes, and it is the number a machinist checks against what is
+  // under the part. Worked out again here rather than asked of the strategy, it
+  // came out wrong twice over: the tip clearance was left off — 0.5mm promised
+  // on a pass that goes 0.8mm down — and the raw `tipAngle` was read instead of
+  // `tipAngleOf`, so a chamfer mill with the angle left blank got a sentence
+  // with no depth in it at all, on a cutter the strategy plans as 90°.
+  const s = scene(makePocketBlock({ size: 40, pocketSize: 20, height: 10, depth: 6 }).mesh);
+  for (const angle of [90, 45, 0]) {
+    const tool = toolFor('chamfer', 10);
+    tool.tipAngle = angle;
+    const op = createOperation('chamfer');
+    Object.assign(op.params, defaultParamsFor('chamfer', { ...s, tool }));
+    const cut = build('chamfer', s, tool);
+    let deepest = Infinity;
+    eachMove(cut, (o, x, y, z) => { if (o !== OP.RAPID && z < deepest) deepest = z; });
+    assert.ok(Number.isFinite(deepest), `the ${angle}° cutter cut something`);
+
+    const said = describeIntent(op, tool);
+    const drop = Number(/reaches ([\d.]+)mm below/.exec(said)?.[1]);
+    assert.ok(Number.isFinite(drop), `it says how far below the edge: ${said}`);
+    assert.close(op.params.topZ - drop, deepest, 0.005,
+      `${angle}°: it says Z${(op.params.topZ - drop).toFixed(3)} and cuts to Z${deepest.toFixed(3)}`);
+  }
+});
+
+test('a rest-machining pass goes out of date when the pass it follows does', () => {
+  // Rest machining is the one strategy whose path is made from *another
+  // operation's* — it deducts what the passes above it actually cut (see
+  // regions-ui.js clearedByEarlier). None of that appeared in its fingerprint,
+  // so disabling the roughing pass it cleans up after left it reporting itself
+  // current on a path that skips stock the roughing was going to take, and
+  // `staleOperations` — which is what decides whether Simulate regenerates —
+  // called the whole program up to date. Measured: 3545 moves to 3020, in
+  // silence.
+  const doc = new Document();
+  const setup = createSetup();
+  doc.addSetup(setup);
+  const rough = createOperation('clear2d');
+  rough.name = 'rough';
+  doc.addOperation(setup, rough);
+  const rest = createOperation('clear2d');
+  rest.name = 'rest';
+  rest.params.restMachining = true;
+  doc.addOperation(setup, rest);
+
+  const fp = () => opFingerprint(doc, rest, setup);
+  const before = fp();
+
+  doc.updateItem(rough.params, { stepdown: (rough.params.stepdown ?? 2) / 2 }, 'stepdown');
+  assert.ok(fp() !== before, 'the pass above changed how deep it steps');
+  doc.undo();
+  assert.eq(fp(), before, 'and putting it back puts this one back');
+
+  doc.updateItem(rough, { enabled: false }, 'disable');
+  assert.ok(fp() !== before, 'the pass above is not going to run at all');
+  doc.undo();
+  assert.eq(fp(), before, 'enabled again');
+
+  doc.reorderOperation(setup, 1, 0);
+  assert.ok(fp() !== before, 'it now runs first, so there is nothing above it');
+  doc.reorderOperation(setup, 0, 1);
+  assert.eq(fp(), before, 'and back');
+
+  // An ordinary pass has no such dependency, and must not acquire one — every
+  // fingerprint in the setup changing whenever any of them does would mean
+  // every edit regenerates the whole program.
+  const plainBefore = opFingerprint(doc, rough, setup);
+  doc.updateItem(rest.params, { stepdown: 0.4 }, 'stepdown');
+  assert.eq(opFingerprint(doc, rough, setup), plainBefore,
+    'a pass above is not affected by the one below it');
+});
+
+test('the panel says so before Generate when the cutter has no side', () => {
+  // The message exists in engine/tool-match.js; this is the wire from it to the
+  // place a user reads it. Without the wire, a pocket holding a tap generates a
+  // full toolpath and nothing anywhere says why that is a tap left in the part.
+  const doc = new Document();
+  const setup = createSetup();
+  doc.addSetup(setup);
+  const tap = createTool('tap');
+  tap.number = 1;
+  doc.addTool(tap);
+  const op = createOperation('pocket');
+  op.toolId = tap.id;
+  doc.addOperation(setup, op);
+  assert.ok(opPreflight(doc, op).some((n) => /only cuts down its own axis/.test(n)),
+    `preflight says it: ${JSON.stringify(opPreflight(doc, op))}`);
+
+  const flat = createTool('flat');
+  flat.number = 2;
+  doc.addTool(flat);
+  doc.updateItem(op, { toolId: flat.id }, 'end mill');
+  assert.ok(!opPreflight(doc, op).some((n) => /only cuts down its own axis/.test(n)),
+    'and stops saying it once there is an end mill on the pass');
+});

@@ -88,6 +88,22 @@ const NOT_TURNING = new Set(['parting', 'threading', 'boring']);
  */
 const DOWN_THE_AXIS = new Set(['drill', 'spot', 'tap', 'threadmill']);
 
+/**
+ * Strategies that feed the cutter sideways through metal.
+ *
+ * Which is nearly all of them — a pocket drives a cutter through the work
+ * exactly as a slot does, and the sentence above about the tap left in the part
+ * is true of every one of these. It was written for `slot` and `bore` and
+ * applied to only those two, so with a drill as the only tool in the rack a new
+ * pocket, contour, adaptive or finishing pass arrived holding it: a cutter with
+ * no side to cut with, on a pass that is nothing but side cutting.
+ *
+ * Spotting and chamfering are the two that are *not* here, and deliberately:
+ * both are a point sunk into the work, which is what a drill point is for.
+ */
+const SIDE_CUTTING = ['face', 'contour2d', 'pocket', 'clear2d', 'adaptive',
+  'engrave', 'parallel3d', 'waterline'];
+
 const UNUSABLE = {
   // through tipAngleOf, because a drill with the angle left blank is a 118° one
   // everywhere else in the app — including in the chamfer strategy, which is
@@ -113,6 +129,30 @@ const UNUSABLE = {
   turnBore: (t) => t.type !== 'boring' && t.type !== 'turning',
 };
 
+for (const type of SIDE_CUTTING) UNUSABLE[type] = (t) => DOWN_THE_AXIS.has(t.type);
+
+/**
+ * "This pass feeds the cutter sideways and that cutter has no side."
+ *
+ * The picker prefers its way past this whenever the rack holds anything else,
+ * but it is a preference and it falls back — so with a drill or a tap as the
+ * only cutter in the project, a new pocket or contour arrives holding one and
+ * generates a complete toolpath that drives it through metal edgeways. Nothing
+ * downstream refuses it: a pocket asks the tool for its diameter, and a tap has
+ * one.
+ *
+ * @returns why this pairing cannot cut, or null when it can
+ */
+export function noSideToCutWith(type, tool) {
+  if (!tool || !DOWN_THE_AXIS.has(tool.type)) return null;
+  if (!SIDE_CUTTING.includes(type) && type !== 'slot' && type !== 'bore') return null;
+  return tool.type === 'threadmill'
+    ? 'The side of a thread mill is a thread form, so this pass would cut a threaded '
+      + 'groove rather than a plain one. Use an end mill.'
+    : `A ${tool.type === 'spot' ? 'spot drill' : tool.type} only cuts down its own axis, `
+      + 'and this pass feeds it sideways through the metal. Use an end mill.';
+}
+
 /**
  * Cutters the machine running this strategy can actually hold.
  *
@@ -137,6 +177,11 @@ export function pickToolFor(type, tools) {
   if (!tools || tools.length === 0) return null;
   const held = heldBy(type, tools);
   if (held.length === 0) return null;
+  // A preference that cannot be met still falls back to whatever is in the
+  // rack, so the operation is editable rather than blank — see the note at the
+  // top of this file. That is why `noSideToCutWith` exists as a separate,
+  // exported answer: what the picker cannot refuse, the panel has to say out
+  // loud before Generate. See app/op-status.js opPreflight.
   const usable = held.filter((t) => !UNUSABLE[type]?.(t));
   const pool = usable.length ? usable : held;
 

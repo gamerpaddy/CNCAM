@@ -23,6 +23,7 @@ import { plural, pluralEs } from '../engine/text.js';
 // and an engraved mark's depth was the whole height between Top Z and Bottom Z.
 import { threadFormDepth, threadInfeed, grooveBites } from '../engine/strategies/turning.js';
 import { grooveGeometry } from '../engine/strategies/engrave.js';
+import { chamferGeometry } from '../engine/strategies/chamfer.js';
 // Same rule for the three hole operations: the tapping drill a tap looks for
 // and the cone a spot drill sinks are worked out by the strategy, so the panel
 // asks the strategy rather than restating the arithmetic.
@@ -436,10 +437,22 @@ export function describeIntent(op, tool) {
       return `Spirals ${cutter} down ${p.boreDiameter > 0 ? `⌀${p.boreDiameter} holes` : 'every hole it fits inside'}, `
         + `${mm(p.stepdown ?? 1)} per turn, ${mm(depth)} deep.`;
     case 'chamfer': {
-      const angle = tool?.tipAngle > 0 ? tool.tipAngle : null;
-      const drop = angle ? (p.chamferWidth ?? 0) / Math.tan(((angle / 2) * Math.PI) / 180) : null;
+      // Asked of `chamferGeometry`, the way the engrave case below asks
+      // `grooveGeometry`, and for the same reason: this sentence is a claim
+      // about how far under the edge the tip goes, and the strategy already
+      // answers it. Worked out again here it came out twice wrong — the tip
+      // clearance was left off, so the panel promised 0.5mm under a Z-1 edge
+      // on a pass that goes to Z-1.8; and the raw `tipAngle` was read instead
+      // of `tipAngleOf`, so a chamfer mill with the angle left blank — a 90°
+      // cutter everywhere else in the app, icon, simulator and strategy alike
+      // — had no depth in the sentence at all.
+      const angle = tipAngleOf(tool);
+      const g = chamferGeometry(tool, {
+        width: Math.max(0, p.chamferWidth ?? 0),
+        clearance: Math.max(0, p.chamferClearance ?? 0),
+      });
       return `Breaks the edges at Z${p.topZ} with a ${mm(p.chamferWidth ?? 0)} chamfer`
-        + (angle ? `, which a ${angle}° cutter reaches ${mm(drop)} below them.` : '.');
+        + (g.pointed ? `, which a ${angle}° cutter reaches ${mm(g.drop)} below them.` : '.');
     }
     case 'engrave': {
       // A mark's depth is `engraveDepth`, not Top Z minus Bottom Z. Bottom Z is

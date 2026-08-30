@@ -15,7 +15,7 @@ import { OP_CATALOG, OP_GROUPS, strategyCard } from '../app/op-catalog.js';
 import { shortcuts, shortcutGroups, matchesShortcut, firesWhileTyping } from '../app/shortcuts.js';
 import { Document } from '../doc/document.js';
 import { createSetup, createOperation, createTool, OP_TYPES } from '../doc/schema.js';
-import { pickToolFor } from '../engine/tool-match.js';
+import { pickToolFor, noSideToCutWith } from '../engine/tool-match.js';
 
 const inBrowser = typeof document !== 'undefined';
 
@@ -321,4 +321,39 @@ test('every strategy icon draws something', async () => {
     assert.ok(svg.children.length > 0, `${type} drew an empty icon`);
     assert.ok(svg.getAttribute('viewBox') === '0 0 24 24');
   }
+});
+
+test('a cutter with no side is not silently given a pass that feeds it sideways', () => {
+  // `pickToolFor` prefers its way past a drill for anything that mills, and
+  // there is a test above that says so — but it is a *preference* and it falls
+  // back to whatever is held so a new operation is editable rather than blank.
+  // With a drill or a tap as the only cutter in the project, a new pocket
+  // therefore arrives holding one and generates a complete toolpath that drives
+  // it through metal edgeways. Nothing downstream refuses it: a pocket asks the
+  // tool for its diameter, and a tap has one.
+  const drill = { id: 'e', number: 5, name: '6mm drill', type: 'drill', diameter: 6, tipAngle: 118 };
+  const tap = { id: 't', number: 6, name: 'M6 tap', type: 'tap', diameter: 6, pitch: 1, tipAngle: 0 };
+  const flat = { id: 'a', number: 1, name: '6mm flat', type: 'flat', diameter: 6, tipAngle: 0 };
+  const sideCutting = ['face', 'contour2d', 'pocket', 'clear2d', 'adaptive',
+    'slot', 'bore', 'engrave', 'parallel3d', 'waterline'];
+
+  for (const type of sideCutting) {
+    // it is still assigned — an operation with no tool cannot even be looked at
+    assert.ok(pickToolFor(type, [tap]), `${type} still arrives holding something`);
+    for (const tool of [drill, tap]) {
+      assert.ok(noSideToCutWith(type, tool), `${type} with a ${tool.type} says nothing`);
+    }
+    assert.eq(noSideToCutWith(type, flat), null, `${type} with an end mill is fine`);
+  }
+
+  // and the two that sink a point into the work on purpose are not caught by it
+  for (const type of ['drill', 'spot', 'chamfer']) {
+    assert.eq(noSideToCutWith(type, drill), null, `${type} is a point going down`);
+  }
+  // a thread mill has a side, and it is a thread
+  assert.ok(/thread form/.test(noSideToCutWith('pocket', { type: 'threadmill', diameter: 6 }) ?? ''),
+    'a slot cut with a thread mill comes out threaded');
+
+  // with an end mill in the rack as well, the preference never gets here
+  assert.eq(pickToolFor('pocket', [drill, flat]).type, 'flat', 'the end mill wins');
 });

@@ -553,3 +553,54 @@ test('a post that cannot tilt refuses every operation the same way', () => {
     assert.ok(/NOT indexed|cannot orient a tilted/i.test(text), `${type}: and a warning`);
   }
 });
+
+test('a head with two tilt axes reaches every face, in either order', () => {
+  // Two perpendicular tilts span the sphere exactly as a tilt and a turntable
+  // do — an A/B head is a 3+2 machine. The solver had a case for a tilt with a
+  // turn and none for a tilt with a tilt, so it fell through to "A+B rotary
+  // axes cannot orient this face" for every face on every part: a statement
+  // about the solver dressed up as one about the geometry, and it left a whole
+  // class of machine unable to index at all.
+  const head = (order) => createMachine({
+    name: order.join('+'), kind: 'mill',
+    rotary: order.map((letter) => ({
+      letter,
+      axis: letter === 'A' ? [1, 0, 0] : [0, 1, 0],
+      min: -120,
+      max: 120,
+    })),
+  });
+  for (const machine of [head(['A', 'B']), head(['B', 'A'])]) {
+    assert.eq(indexKind(machine), '3+2', `${machine.name} has two rotaries`);
+    for (const rot of [[30, 0, 0], [0, 30, 0], [25, -40, 0], [-15, 70, 35], [90, 0, 0], [0, -90, 0]]) {
+      const s = solveRotary(rot, machine);
+      assert.ok(s.reachable, `${machine.name} reaches ${rot}: ${s.reason}`);
+      // the check that matters: swing the axes to those angles and the face
+      // normal has to land on +Z, which is what "indexed" means
+      closeVec(applyRotary(rotaryAxes(machine), s.angles, toolAxis(rot)), [0, 0, 1], 1e-9,
+        `${machine.name} at ${rot}`);
+    }
+    // the face that is already up still needs no swing
+    const flat = solveRotary([0, 0, 0], machine);
+    assert.ok(flat.reachable && flat.tilt < 1e-9, 'the top face is the identity');
+  }
+
+  // and travel is still travel: a head that only nods 15° cannot reach 60°
+  const stiff = createMachine({
+    name: 'stiff head', kind: 'mill',
+    rotary: [{ letter: 'A', axis: [1, 0, 0], min: -15, max: 15 },
+      { letter: 'B', axis: [0, 1, 0], min: -15, max: 15 }],
+  });
+  const far = solveRotary([60, 0, 0], stiff);
+  assert.ok(!far.reachable, 'refused');
+  assert.ok(/past the axis travel/.test(far.reason ?? ''), far.reason);
+
+  // two axes about the same line are not a pair of tilts, and saying so is
+  // better than answering it wrongly
+  const doubled = createMachine({
+    name: 'two A axes', kind: 'mill',
+    rotary: [{ letter: 'A', axis: [1, 0, 0], min: -120, max: 120 },
+      { letter: 'U', axis: [1, 0, 0], min: -120, max: 120 }],
+  });
+  assert.ok(!solveRotary([25, -40, 0], doubled).reachable, 'still refused');
+});

@@ -10,6 +10,7 @@ import { chamferGeometry, maxWidthFor } from '../engine/strategies/chamfer.js';
 import { grooveGeometry } from '../engine/strategies/engrave.js';
 import { reachCheck, latheReachOf, tipAngleOf } from '../engine/tool-geometry.js';
 import { isLatheTool } from '../engine/insert.js';
+import { noSideToCutWith } from '../engine/tool-match.js';
 import { chuckLimit, fixtureTop } from '../engine/fixtures.js';
 import { setupModelIds } from './actions/setup-space.js';
 
@@ -149,7 +150,42 @@ export function opFingerprint(doc, op, setup = null) {
     // that has to read as out of date. See actions/setup-space.js.
     setup && [setup.stock, setup.orientation, setup.fixtures,
       setupModelIds(setup, doc.project)],
+    // And what the passes above it left, when this one is cleaning up after
+    // them. Rest machining reads every enabled earlier operation's toolpath
+    // (see regions-ui.js clearedByEarlier), so those passes are part of what
+    // this path is made from — and none of it appears in anything above.
+    //
+    // Disabling the roughing pass a rest pass follows changed that path from
+    // 3545 moves to 3020 while the operation went on reporting itself up to
+    // date, and `staleOperations` — which is what decides whether Simulate
+    // regenerates — called the whole program current. So Simulate animated,
+    // and Export posted, a pass that skipped stock on the grounds that a
+    // roughing pass which is no longer going to run had already taken it.
+    // Reordering the two does the same thing and was equally silent.
+    op.params?.restMachining && setup ? earlierFingerprints(doc, op, setup) : null,
   ]);
+}
+
+/**
+ * The fingerprints of the passes a rest-machining operation cleans up after.
+ *
+ * The same walk `clearedByEarlier` makes — enabled operations above this one in
+ * this setup — so the two cannot disagree about which passes count. Their
+ * *fingerprints* rather than their toolpaths, because what matters is whether
+ * the pass above is still going to cut what it cut; that is the same question
+ * this function answers, one operation up.
+ *
+ * It only ever looks backwards, so the recursion ends at the first operation in
+ * the setup, and it is only entered for an operation with rest machining on.
+ */
+function earlierFingerprints(doc, op, setup) {
+  const out = [];
+  for (const previous of setup.operations ?? []) {
+    if (previous.id === op.id) break;
+    if (!previous.enabled) continue;
+    out.push(opFingerprint(doc, previous, setup));
+  }
+  return out;
 }
 
 /**
@@ -188,6 +224,17 @@ export function opPreflight(doc, op) {
   const p = op.params ?? {};
   const tool = doc.project.tools.find((t) => t.id === op.toolId);
   const setup = doc.findSetupOf(op.id);
+
+  // The cutter has no side and this pass is nothing but side cutting.
+  //
+  // `pickToolFor` prefers its way past this whenever the rack holds anything
+  // else, but it falls back so that a new operation is editable rather than
+  // blank — so with a drill or a tap as the only cutter in the project, a new
+  // pocket arrives holding one and generates a complete toolpath that drives it
+  // through metal edgeways. Nothing downstream refuses it: a pocket asks the
+  // tool for its diameter, and a tap has one. See engine/tool-match.js.
+  const sideways = noSideToCutWith(op.type, tool);
+  if (sideways) notes.push(sideways);
 
   // A chamfer is the exception to both of the checks below: its Bottom Z is a
   // limit rather than a floor, and its depth comes from the cone, not a
