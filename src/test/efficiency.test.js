@@ -502,14 +502,40 @@ test('a region nowhere near the work does not change what is cut', () => {
   // engine/regions.js grows one
   const faraway = { avoid: [[500, 500, 510, 500, 510, 510, 500, 510]] };
 
-  for (const type of ['face', 'contour2d', 'slot', 'clear2d', 'pocket', 'parallel3d', 'waterline']) {
+  for (const type of ['face', 'contour2d', 'slot', 'clear2d', 'pocket', 'adaptive', 'parallel3d', 'waterline']) {
     const args = { type, name: type, tool: FLAT, mesh: part.mesh, stock, params };
     const plain = generateToolpath(args);
     const withRegion = generateToolpath({ ...args, regions: faraway });
     assert.eq(cutDistance(withRegion).toFixed(3), cutDistance(plain).toFixed(3),
       `${type} cuts a different distance when an irrelevant region is present`);
+    // How far it cuts is not the whole claim, and measuring only that is what
+    // let the next one of these through for three weeks: a loop cut the other
+    // way round is exactly as long. `applyRegionsToPaths` handed back the
+    // clipper's copy of an untouched loop, and an open-path clip makes no
+    // promise about where a surviving path starts or which way it runs — so a
+    // hole came back wound the other way, `resolveLead` read the pocket wall as
+    // a boss, and every ring of the pocket was cut conventional instead of
+    // climb. So: the same cut, in the same order, move for move.
+    //
+    // clear2d is the exception and is left saying only the first: its area is
+    // rebuilt by the closed-loop clipper, which starts the outline at a corner
+    // of its own choosing, and the ramp that opens the top level then goes in
+    // at a different point on the same loop. Same levels, same cut length, a
+    // different entry.
+    if (type === 'clear2d') continue;
+    assert.eq(cutPoints(withRegion).join('|'), cutPoints(plain).join('|'),
+      `${type} cuts the same geometry in a different order or direction`);
   }
 });
+
+/** Every cutting move in order — the claim that a length cannot make. */
+function cutPoints(cl) {
+  const out = [];
+  eachMove(cl, (op, x, y, z) => {
+    if (op !== OP.RAPID) out.push(`${x.toFixed(4)},${y.toFixed(4)},${z.toFixed(4)}`);
+  });
+  return out;
+}
 
 /** How far the tool travels while cutting — the claim that must not move. */
 function cutDistance(cl) {

@@ -20,7 +20,7 @@
 // as an area would return the region it encloses, which is a different curve.
 
 import {
-  diffLoops, intersectLoops, clipOpenPaths, loopToOpenPath, offsetLoops,
+  diffLoops, intersectLoops, clipOpenPaths, loopToOpenPath, offsetLoops, loopArea,
 } from '../geom/clipper.js';
 import { pointInLoops } from '../geom/inside.js';
 
@@ -226,14 +226,55 @@ export function applyRegionsToPaths(loops, regions, {
   //
   // `loopToOpenPath` marks a loop by repeating its first point, so a path that
   // still ends where it began is one that survived whole. It goes back as the
-  // closed loop it always was, with that repeat removed again.
+  // loop it *was* — not the clipper's copy of it.
+  //
+  // That distinction is the whole of the second half of this bug. An open-path
+  // clip makes no promise about where a surviving path starts or which way
+  // round it runs, and for a path it did not cut it hands back the same corners
+  // rotated and, for a hole, reversed. The shape is identical and the winding
+  // is not — and the winding is what says whether the metal is inside or
+  // outside the loop (contour.js resolveLead reads `loopArea(loop) < 0`). So a
+  // pocket wall came back reading as a boss: climb milling became conventional
+  // and the lead curled the wrong way, on every ring of every pocket, because a
+  // clamp was declared half a metre from the part.
+  //
+  // Returning the original array also restores the start point, so a pass that
+  // nothing clipped is the same pass down to the byte.
   const closed = [];
   const open = [];
+  let byKey = null;
   for (const path of paths) {
-    if (isClosedPath(path)) closed.push(path.slice(0, -2));
-    else open.push(path);
+    if (!isClosedPath(path)) { open.push(path); continue; }
+    const survivor = path.slice(0, -2);
+    // built on the first survivor, because a clip that cut everything into
+    // spans never needs it
+    if (!byKey) {
+      byKey = new Map();
+      for (const loop of loops) {
+        const k = loopKey(loop);
+        if (k) byKey.set(k, loop);
+      }
+    }
+    closed.push(byKey.get(loopKey(survivor) ?? '') ?? survivor);
   }
   return { closed, open };
+}
+
+/**
+ * Vertex count, centroid and enclosed area — invariant under rotation and
+ * reversal, which is what makes it a key the clipper's copy and the original
+ * both hash to. Anything the clip actually cut comes back as an open path and
+ * never reaches here, so the only question is which untouched loop this is, and
+ * two loops agreeing on all three to a hundredth of a micron are the same loop.
+ */
+function loopKey(loop) {
+  const n = loop.length / 2;
+  if (n < 3) return null;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < n; i++) { cx += loop[i * 2]; cy += loop[i * 2 + 1]; }
+  const round = (v) => Math.round(v * 1e5);
+  return `${n}|${round(cx / n)}|${round(cy / n)}|${round(Math.abs(loopArea(loop)))}`;
 }
 
 /**
