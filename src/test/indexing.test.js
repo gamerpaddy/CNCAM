@@ -19,6 +19,7 @@ import {
   orientationFor, orientationKey, indexingWarnings, isIndexed,
 } from '../engine/indexing.js';
 import { createMachine, defaultMachines } from '../doc/machines.js';
+import { rotationMatrix, applyMatrix, transposeMatrix } from '../engine/setup.js';
 import { createSetup } from '../doc/schema.js';
 import { generateToolpath, MILLING_OPS } from '../engine/toolpath.js';
 import { defaultParamsFor } from '../engine/op-defaults.js';
@@ -145,11 +146,14 @@ test('indexKind counts the rotary axes', () => {
   assert.eq(indexKind(TRUNNION), '3+2');
 });
 
-test('the tilted-plane Euler angles are the rotation the mesh was turned through', () => {
-  // One description of the tilt: the controller rotates the programming frame
-  // exactly the way engine/setup.js rotated the mesh, so the coordinates land.
-  assert.eq(eulerFor([90, 0, 0]).join(), '90,0,0');
-  assert.eq(eulerFor([45, 0, 30]).join(), '45,0,30');
+test('the tilted-plane Euler angles undo the rotation the mesh was turned through', () => {
+  // One description of the tilt, stated backwards: engine/setup.js turned the
+  // part until the face pointed up, and G68.2 turns the programmed coordinates
+  // the other way, back out to the datum.
+  assert.eq(eulerFor([90, 0, 0]).join(), '-90,0,0');
+  // and the other way is not three minus signs — Rz·Ry·Rx transposed is
+  // Rx·Ry·Rz, a different order, so a mixed turn comes back on all three axes
+  assert.eq(eulerFor([45, 0, 30]).join(), '-40.893,-20.705,-22.208');
 });
 
 test('orientationFor describes an indexed setup and ignores a plain one', () => {
@@ -250,7 +254,7 @@ test('an indexed setup on the face that is up posts byte-for-byte like a plain o
 
 test('a tilted face is posted as a tilted work plane', () => {
   const { text } = buildGcode('linuxcnc', [contourOp('front', indexedSetup('Front', [90, 0, 0]), TRUNNION)]);
-  assert.ok(/G68\.2 X0 Y0 Z0 I90 J0 K0/.test(text), `plane declared, got:\n${text}`);
+  assert.ok(/G68\.2 X0 Y0 Z0 I-90 J0 K0/.test(text), `plane declared, got:\n${text}`);
   assert.ok(/G53\.1/.test(text), 'and the tool is oriented to it');
   assert.ok(/index 3\+2: tool axis 0 1 0 — A90 C0/.test(text), 'with a human-readable note');
   assert.ok(/G69/.test(text), 'and the plane is cancelled before the program ends');
@@ -273,7 +277,7 @@ test('a work plane is stated once for a face and cancelled once when it changes'
   // two indexed faces on one fixturing swing automatically: no operator stop
   assert.ok(!/^M0$/m.test(text), `no re-fixture stop between indexed faces, got:\n${text}`);
   // the second face cancels the first before declaring itself
-  const secondPlane = text.indexOf('I0 J90 K0');
+  const secondPlane = text.indexOf('I0 J-90 K0');
   const cancelBefore = text.lastIndexOf('G69', secondPlane);
   assert.ok(cancelBefore >= 0 && cancelBefore < secondPlane, 'G69 before the new plane');
 });
@@ -340,7 +344,7 @@ test('every milling operation runs and posts inside a tilted frame', () => {
       orientation: orientationFor(front, TRUNNION),
     };
     const { text } = buildGcode('linuxcnc', [op]);
-    assert.ok(/G68\.2 X0 Y0 Z0 I45 J0 K0/.test(text), `${c.type} posts in the tilted plane`);
+    assert.ok(/G68\.2 X0 Y0 Z0 I-45 J0 K0/.test(text), `${c.type} posts in the tilted plane`);
     // the first cut is a G1 (face/pocket) or a canned cycle (drill); either way
     // the plane must be declared before it. The header's own G80 is mid-line, so
     // anchoring the search to a line start keeps it out of the way.
@@ -603,4 +607,62 @@ test('a head with two tilt axes reaches every face, in either order', () => {
       { letter: 'U', axis: [1, 0, 0], min: -120, max: 120 }],
   });
   assert.ok(!solveRotary([25, -40, 0], doubled).reachable, 'still refused');
+});
+
+
+// --- the tilted work plane the post declares ---------------------------------
+
+// The post writes a comment saying which way the tool axis points and, on the
+// next line, a G68.2 declaring the work plane; G53.1 then stands the spindle
+// normal to that plane. So the plane's normal *is* the tool axis — two
+// statements of one direction, and the only way to catch them disagreeing is to
+// read the angles the post actually writes and rebuild the plane from them.
+//
+// They disagreed. G68.2 rotates the programmed coordinates the way G68 R does,
+// so its matrix is the setup rotation *undone*, and the file carried the
+// rotation repeated instead: normal along −Y under a comment reading +Y. Every
+// orientation that is not its own inverse swung 180° off the face.
+test('the plane the post declares has its normal along the tool axis', () => {
+  // the plane a G68.2 I/J/K declares, in the same XYZ convention rotationMatrix
+  // states — its +Z is the third column
+  const planeNormal = (euler) => {
+    const m = rotationMatrix(euler);
+    return [m[2], m[5], m[8]];
+  };
+  const orientations = [
+    [0, 0, 0], [180, 0, 0], [0, 0, 90],          // their own inverse — always passed
+    [90, 0, 0], [0, 90, 0], [-90, 0, 0],         // the "on its side" presets
+    [45, 0, 0], [90, 0, 45], [30, 20, 0], [25, -40, 65],
+  ];
+  for (const r of orientations) {
+    closeVec(planeNormal(eulerFor(r)), toolAxis(r), 1e-4, `plane normal for ${r}`);
+  }
+});
+
+// The same fault stated as the machinist sees it: a point the strategies wrote
+// in the tilted frame has to end up on the face, not on the far side of it.
+//
+// Truth is built the long way round, from the two facts nothing here shares —
+// the mesh rotation R (setup.js) and the solved rotary set (checked separately
+// against applyRotary). A programmed q is the part-frame point Rᵀq, which the
+// table then swings. What the controller does is the same thing with the post's
+// own angles in place of Rᵀ. The two agree only if those angles are Rᵀ.
+test('an indexed point lands where the toolpath put it', () => {
+  for (const r of [[90, 0, 0], [0, 90, 0], [45, 0, 0], [30, 20, 0], [25, -40, 65]]) {
+    const solved = solveRotary(r, TRUNNION);
+    assert.ok(solved.reachable, `trunnion reaches ${r}`);
+    const axes = rotaryAxes(TRUNNION);
+    for (const q of [[10, 5, 0], [-3, 12, -4], [0, 0, 25]]) {
+      const want = applyRotary(axes, solved.angles, applyMatrix(transposeMatrix(rotationMatrix(r)), q));
+      const got = applyRotary(axes, solved.angles, applyMatrix(rotationMatrix(eulerFor(r)), q));
+      closeVec(got, want, 1e-3, `point ${q} at ${r}`);
+    }
+  }
+});
+
+// A turn about Z of 90° and one of −270° are the same fixturing, and the post
+// should not cancel and re-declare a plane between two operations that share it.
+test('the same orientation written two ways gets one plane', () => {
+  assert.eq(orientationKey({ euler: eulerFor([0, 0, 90]) }),
+    orientationKey({ euler: eulerFor([0, 0, -270]) }), 'one plane, not two');
 });

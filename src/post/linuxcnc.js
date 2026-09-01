@@ -26,11 +26,18 @@ export const linuxcnc = {
     w.line(`${spindleWord(dir)} S${Math.round(rpm)}`);
   },
 
-  // Indexed 3+1 / 3+2: a tilted work plane. G68.2 declares the plane by the
-  // same XYZ Euler angles the CAM turned the mesh through (see engine/indexing.js),
-  // and G53.1 swings the rotary axes so the spindle stands normal to it. From
-  // there the operation's own X/Y/Z are read in the tilted frame — which is why
-  // the strategies need no idea any of this happened. G69 cancels it.
+  // Indexed 3+1 / 3+2: a tilted work plane. G68.2 declares the plane by XYZ
+  // Euler angles, and G53.1 swings the rotary axes so the spindle stands normal
+  // to it. From there the operation's own X/Y/Z are read in the tilted frame —
+  // which is why the strategies need no idea any of this happened. G69 cancels
+  // it.
+  //
+  // The angles are the *inverse* of the turn the CAM put the mesh through, and
+  // they are computed there rather than here: G68.2 rotates the programmed
+  // coordinates back out to the datum, where `rotationDeg` rotated the part in.
+  // See `eulerFor` in engine/indexing.js, which is also where the comment
+  // written just above these words gets its tool axis — the two have to agree,
+  // and for a while they did not.
   tiltedPlane: {
     set(w, modal, orientation) {
       const [i, j, k] = orientation.euler;

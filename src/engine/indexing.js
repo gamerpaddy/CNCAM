@@ -28,7 +28,7 @@
 // this module computes. One description of the tilt, in one place — because two
 // descriptions of the same geometry is where this codebase's bugs come from.
 
-import { rotationMatrix } from './setup.js';
+import { rotationMatrix, eulerFromMatrix, transposeMatrix } from './setup.js';
 
 const TAU = Math.PI * 2;
 const DEG = 180 / Math.PI;
@@ -255,13 +255,33 @@ export function applyRotary(axes, angles, v) {
 
 /**
  * The work plane as XYZ Euler angles in degrees, for a post that speaks tilted
- * work planes (LinuxCNC G68.2, Fanuc G68.2). It is the setup's own `rotationDeg`
- * unchanged: the controller rotates the programming frame the same way the CAM
- * rotated the mesh, so the coordinates the strategies wrote land on the tilted
- * face. Stated here so the post never has to know how the mesh was turned.
+ * work planes (LinuxCNC G68.2, Fanuc G68.2) — the *inverse* of the setup's own
+ * `rotationDeg`.
+ *
+ * It was the rotationDeg itself, and that is a turn in the wrong direction. The
+ * two rotations go opposite ways because they act on opposite things. The CAM
+ * turns the *part*: `rotationMatrix(rotationDeg)` carries the face to be
+ * machined round until it points up, and the strategies then write ordinary
+ * top-down coordinates in that turned frame. A tilted work plane turns the
+ * *programmed coordinates* — G68.2 is the 3D form of G68, where `R90` puts a
+ * programmed X10 Y0 at X0 Y10 — so the matrix it declares maps what the
+ * strategies wrote back out to the datum. That is `R` undone, not `R` repeated.
+ *
+ * The contradiction was visible without leaving this module: the post writes
+ * `tool axis 0 1 0` in a comment and `G68.2 … I90` on the next line, and the
+ * plane those angles declare has its normal along −Y. `G53.1` stands the
+ * spindle normal to the declared plane, so the swing came out 180° from the
+ * face for every orientation that is not its own inverse.
+ *
+ * Which is why it survived: the identity, a 180° flip about X, and a pure turn
+ * about Z all *are* their own inverse, and those are three of the six fixturing
+ * presets — including the two anyone tries first. "On its side" is the one that
+ * would have cut the far side of the part.
+ *
+ * Stated here so the post never has to know how the mesh was turned.
  */
 export function eulerFor(rotationDeg = [0, 0, 0]) {
-  return [rotationDeg[0] ?? 0, rotationDeg[1] ?? 0, rotationDeg[2] ?? 0];
+  return eulerFromMatrix(transposeMatrix(rotationMatrix(rotationDeg))).map(round);
 }
 
 /**

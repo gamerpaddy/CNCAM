@@ -140,6 +140,46 @@ test('scale, rotation and mirror all act about the same anchor', () => {
   assert.close(t.max[1] - t.min[1], 20, 1e-6);
 });
 
+// Mirroring a stamp or a mould half is a gesture that changes which way round
+// the drawing reads. It is not a gesture that moves it off the part — and in
+// corner mode it did, because the corner being pinned was the one the drawing
+// had *before* the transform. Reflected about its own left edge, all 20mm of a
+// corner-pinned drawing landed at −20…0.
+//
+// Stated as the property rather than as coordinates: whatever the transform,
+// the placed drawing's own reference point is the one the mode promises.
+test('a turned or mirrored drawing keeps the corner it is pinned by', () => {
+  const { paths, bounds } = parseDXF(dxf(SQUARE));
+  const at = (placement) => boundsOfPaths(placedPaths({ paths, bounds, placement }, STOCK));
+
+  for (const move of [{}, { mirrorX: true }, { rotationDeg: 90 }, { rotationDeg: -35 },
+    { scale: 2 }, { mirrorX: true, rotationDeg: 90, scale: 1.5 }]) {
+    const corner = at({ origin: 'stock-corner', ...move });
+    assert.close(corner.min[0], STOCK.min[0], 1e-6, `pinned in X under ${JSON.stringify(move)}`);
+    assert.close(corner.min[1], STOCK.min[1], 1e-6, `pinned in Y under ${JSON.stringify(move)}`);
+
+    // the other mode was always right, and has to stay right
+    const middle = at({ origin: 'stock-center', ...move });
+    assert.close((middle.min[0] + middle.max[0]) / 2, 0, 1e-6,
+      `centred in X under ${JSON.stringify(move)}`);
+    assert.close((middle.min[1] + middle.max[1]) / 2, 0, 1e-6,
+      `centred in Y under ${JSON.stringify(move)}`);
+  }
+
+  // a mirror is a reflection, not a move: same box, reversed contents
+  const plain = at({ origin: 'stock-corner' });
+  const flipped = at({ origin: 'stock-corner', mirrorX: true });
+  assert.close(flipped.max[0] - flipped.min[0], plain.max[0] - plain.min[0], 1e-9, 'same width');
+  assert.eq(overhangOf(placedPaths({ paths, bounds,
+    placement: { origin: 'stock-corner', mirrorX: true } }, STOCK), STOCK), null,
+  'and it is still on the billet');
+
+  // 'as-drawn' means the file's own coordinates, so it turns about the file's
+  // origin and is not re-pinned to anything
+  const drawn = at({ origin: 'as-drawn', rotationDeg: 90 });
+  assert.close(drawn.min[0], -bounds.max[1], 1e-6, 'as-drawn turns about 0,0');
+});
+
 test('a drawing bigger than the billet says so', () => {
   const { paths, bounds } = parseDXF(dxf(SQUARE));
   const fits = placedPaths({ paths, bounds, placement: {} }, STOCK);

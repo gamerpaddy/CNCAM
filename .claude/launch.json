@@ -4,8 +4,11 @@
     {
       "name": "cncam",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["serve.py", "8500"],
-      "port": 8500
+      "runtimeArgs": [
+        "serve.py",
+        "16000"
+      ],
+      "port": 16000
     }
   ]
 }

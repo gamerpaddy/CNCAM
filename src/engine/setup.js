@@ -55,6 +55,33 @@ export function rotationMatrix([rx = 0, ry = 0, rz = 0] = []) {
   ];
 }
 
+/**
+ * `rotationMatrix` read backwards: the XYZ degrees that build this matrix.
+ *
+ * Needed because the inverse of a fixturing rotation is *not* its angles
+ * negated — Rz·Ry·Rx transposed is Rx·Ry·Rz, a different order — so anything
+ * that has to state the opposite turn has to decompose it rather than flip
+ * three signs. Kept beside `rotationMatrix` so the convention is written down
+ * once and read back by the same rules it was written by.
+ */
+export function eulerFromMatrix(m) {
+  const d = 180 / Math.PI;
+  const sy = Math.min(1, Math.max(-1, -m[6]));
+  const cy = Math.sqrt(Math.max(0, 1 - sy * sy));
+  if (cy < 1e-9) {
+    // Straight up or straight down in Y: X and Z turn about the same line and
+    // only their sum is determined. Give it all to X.
+    const rx = sy > 0 ? Math.atan2(m[1], m[4]) : Math.atan2(-m[1], m[4]);
+    return [rx * d, Math.asin(sy) * d, 0];
+  }
+  return [Math.atan2(m[7], m[8]) * d, Math.asin(sy) * d, Math.atan2(m[3], m[0]) * d];
+}
+
+/** A rotation matrix's inverse — for a pure rotation, its transpose. */
+export function transposeMatrix(m) {
+  return [m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]];
+}
+
 export function applyMatrix(m, [x, y, z]) {
   return [
     m[0] * x + m[1] * y + m[2] * z,

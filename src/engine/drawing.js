@@ -66,22 +66,57 @@ export function placedPaths(drawing, stock) {
   const [ax, ay] = anchorOf(p.origin, bounds);
   const [tx, ty] = targetOf(p.origin, stock, bounds, scale);
 
-  return paths.map(({ points, closed }) => {
+  // Turn everything about the anchor first, and only then decide where it goes.
+  const turned = paths.map(({ points, closed }) => {
     const out = new Array(points.length);
     for (let i = 0; i < points.length; i += 2) {
-      // about the anchor: mirror, scale, rotate, then move to where it goes
+      // about the anchor: mirror, scale, rotate
       const dx = (points[i] - ax) * scale * mirror;
       const dy = (points[i + 1] - ay) * scale;
-      out[i] = tx + dx * cos - dy * sin + (p.offset?.[0] ?? 0);
-      out[i + 1] = ty + dx * sin + dy * cos + (p.offset?.[1] ?? 0);
+      out[i] = dx * cos - dy * sin;
+      out[i + 1] = dx * sin + dy * cos;
     }
     return { points: out, closed: !!closed };
   });
+
+  // Where the *turned* drawing is held.
+  //
+  // It used to be where the un-turned one was held, and that is only the same
+  // point while the transform leaves it alone. Centring survives a mirror, a
+  // rotation and a scale, so 'stock-center' was always right; a corner does
+  // not. Mirroring a corner-pinned drawing reflected it about its own left
+  // edge, putting all of it to the *left* of the billet's corner — a 20mm
+  // drawing landing at −20…0 with "runs 20.00mm off the billet" underneath it,
+  // for a gesture that should not have moved it at all. A quarter turn did the
+  // same. The corner that gets pinned has to be the corner it ends up with.
+  const [rx, ry] = refOf(p.origin, boundsOfPaths(turned));
+  const ox = tx - rx + (p.offset?.[0] ?? 0);
+  const oy = ty - ry + (p.offset?.[1] ?? 0);
+  for (const { points } of turned) {
+    for (let i = 0; i < points.length; i += 2) {
+      points[i] += ox;
+      points[i + 1] += oy;
+    }
+  }
+  return turned;
 }
 
 /** Which point of the drawing is held. */
 function anchorOf(origin, bounds) {
   if (origin === 'as-drawn') return [0, 0];
+  if (origin === 'stock-corner') return [bounds.min[0], bounds.min[1]];
+  return [(bounds.min[0] + bounds.max[0]) / 2, (bounds.min[1] + bounds.max[1]) / 2];
+}
+
+/**
+ * The same choice of point, asked of the drawing after it has been turned.
+ *
+ * 'as-drawn' is the one mode with no reference point of its own: the file's
+ * coordinates are used as they are, so the origin it turns about is the origin
+ * it keeps, whatever the transform did to its extents.
+ */
+function refOf(origin, bounds) {
+  if (origin === 'as-drawn' || !bounds) return [0, 0];
   if (origin === 'stock-corner') return [bounds.min[0], bounds.min[1]];
   return [(bounds.min[0] + bounds.max[0]) / 2, (bounds.min[1] + bounds.max[1]) / 2];
 }
