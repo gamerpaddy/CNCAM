@@ -328,3 +328,55 @@ test('the time estimate and the post agree about a shallow ramp', () => {
   const plunge = (10 / TOOL.feedPlunge) * 60;
   assert.close(seconds, ramp + plunge, 0.6, 'the estimate counts the ramp as a cut');
 });
+
+// Under G96 the control sets the rpm itself, from the surface speed and the
+// diameter it is at. A post writing feed per revolution has to divide by *that*
+// number, not by the nominal figure on the tool — and when the operation says
+// constant surface speed there may not be a figure on the tool at all, because
+// the operator has already said what they want held.
+//
+// Both ways of getting it wrong were live. With an rpm on the tool the feed was
+// out by the ratio of the two speeds; with none, there was nothing to divide by
+// and the mm/min figure went out unconverted — F120, read by a control in G95
+// as 120 millimetres per revolution.
+function cssProgram({ rpm }) {
+  const cl = new CLBuilder();
+  cl.toolChange(1);
+  cl.spindle(rpm, 'cw', { mode: 'css', surfaceSpeed: 180, maxRpm: 2500 });
+  cl.event('feeds', { cut: 120, plunge: 60 });
+  cl.rapid(25, 0, 5);
+  cl.cut(20, 0, 0, FEED.CUT);         // ⌀40
+  cl.cut(20, 0, -30, FEED.CUT);
+  return buildGcode('lathe', [{ name: 'rough', cl: cl.finish() }], { feedMode: 'perRev' }).text;
+}
+
+test('a lathe in constant surface speed feeds at the rpm the control will hold', () => {
+  // 180 m/min on a ⌀40 bar is 180000 / (pi x 40) = 1432 rpm, so 120 mm/min is
+  // 120 / 1432 = 0.0838 mm/rev.
+  const expected = 120 / ((180 * 1000) / (Math.PI * 40));
+  for (const rpm of [1200, 0]) {
+    const text = cssProgram({ rpm });
+    assert.ok(text.includes('G96'), 'constant surface speed is stated');
+    const feeds = [...text.matchAll(/F([\d.]+)/g)].map((m) => Number(m[1]));
+    assert.ok(feeds.length > 0, `the pass writes a feed, got:\n${text}`);
+    assert.ok(feeds.every((f) => f < 1),
+      `an F word here is mm/rev and must never be a mm/min figure, got ${feeds.join(' ')}`);
+    assert.close(feeds[0], expected, 1e-4,
+      `at ⌀40 and 180m/min, 120mm/min is ${expected.toFixed(4)} mm/rev — with `
+      + `${rpm === 0 ? 'no rpm on the tool' : 'a 1200rpm tool'} it wrote ${feeds[0]}`);
+  }
+});
+
+test('and a fixed-rpm lathe still divides by the S word it wrote', () => {
+  const cl = new CLBuilder();
+  cl.toolChange(1);
+  cl.spindle(1200, 'cw');
+  cl.event('feeds', { cut: 120, plunge: 60 });
+  cl.rapid(25, 0, 5);
+  cl.cut(20, 0, 0, FEED.CUT);
+  cl.cut(20, 0, -30, FEED.CUT);
+  const { text } = buildGcode('lathe', [{ name: 'rough', cl: cl.finish() }], { feedMode: 'perRev' });
+  assert.ok(text.includes('G97 S1200'), 'a plain rpm is stated');
+  const feeds = [...text.matchAll(/F([\d.]+)/g)].map((m) => Number(m[1]));
+  assert.close(feeds[0], 0.1, 1e-6, `120 mm/min at 1200 rpm is 0.1 mm/rev, not ${feeds[0]}`);
+});

@@ -21,7 +21,7 @@ import { applyRegionsToArea } from '../regions.js';
 import {
   cutLoopPass, orderLoopForEntry, loopEntryPoint, loopExitPoint, resolveLead,
 } from './contour.js';
-import { pointInLoops } from '../../geom/inside.js';
+import { pointInLoops, loopEnclosesAny } from '../../geom/inside.js';
 import { applyCutting } from '../cutting.js';
 import { crossingPlane, goHome, entryGapOf } from '../heights.js';
 
@@ -67,7 +67,7 @@ export function generatePocket({
     const found = pocketArea(shadow, regions,
       { radius: r, tolerance, stockToLeave, z, minClearedWidth: step });
     if (found.raw) sawRegion = true;
-    levels.push({ z, zEntry, area: found.area, clearedAbove });
+    levels.push({ z, zEntry, area: found.area, clearedAbove, shadow });
     // Both of these only move when this level actually emptied something.
     // `zEntry` is the height the *next* level's ramp starts from, and a level
     // that found no region has taken nothing off: the pocket on the step plate
@@ -109,7 +109,7 @@ export function generatePocket({
   let fromZ = params.topZ;
   let slotLength = 0;         // how far the tool runs full width opening levels
   for (const level of levels) {
-    const { z, zEntry: above, area } = level;
+    const { z, zEntry: above, area, shadow } = level;
     if (area.length === 0) continue;
 
     // Concentric passes inward from the pocket wall, spaced to divide the
@@ -138,7 +138,7 @@ export function generatePocket({
         // a surface. Which side the metal is on is a separate question and both
         // passes need it, because it also decides which way round climb milling
         // runs. See pocketSide.
-        const passLead = pocketSide(loop, isWall ? lead : { type: 'none', radius: 0 });
+        const passLead = pocketSide(loop, isWall ? lead : { type: 'none', radius: 0 }, shadow);
         // Already down and stepping across from the ring beside this one — see
         // the note on `atDepth` below, and engine/linking.js startNearestSlide
         // for why the step is spread along the loop rather than taken square.
@@ -215,7 +215,7 @@ export function generatePocket({
         { radius: r, tolerance, stockToLeave: remaining, z: params.bottomZ, minClearedWidth: step });
       for (const loop of pass.area) {
         if (cutLoopPass(cl, loop, params.bottomZ, params.bottomZ, {
-          clearance, direction, params, lead: pocketSide(loop, lead), crossAt,
+          clearance, direction, params, lead: pocketSide(loop, lead, lastShadow), crossAt,
         })) cutAnything = true;
       }
     }
@@ -378,10 +378,27 @@ function boxWithin(inner, outer, eps = 1e-3) {
  * The region's outer boundaries are the pocket walls (metal outside); its holes
  * are islands standing in the pocket (metal inside), which is the ordinary
  * boss case again.
+ *
+ * **A hole is not an island just because it is a hole.** Rest machining
+ * subtracts what an earlier pass already took (see pocketArea), and every
+ * deduction leaves a hole in the region that is *air* — ground the first cutter
+ * emptied — not a boss. Read off the winding alone those came back as bosses:
+ * the leftover ribbon against the wall ran conventional and its lead arc swung
+ * **out through the pocket wall**, 1.94mm past finished size with a ⌀3 cutter,
+ * ten millimetres deep, on a pass whose whole purpose was to clean that wall
+ * up. Nothing said a word, because with rest machining off the same operation
+ * is clean and the ribbon only exists when it is on.
+ *
+ * So the question is put to the part rather than to the loop: a hole holds
+ * metal when the part's own shadow at this depth is standing in it. That is the
+ * same silhouette the pocket was found from, so there is no second description
+ * of where the metal is.
  */
-function pocketSide(loop, lead) {
-  return { ...lead, materialOutside: loopArea(loop) > 0 };
+function pocketSide(loop, lead, shadow = null) {
+  if (loopArea(loop) > 0) return { ...lead, materialOutside: true };
+  return { ...lead, materialOutside: !loopEnclosesAny(loop, shadow) };
 }
+
 
 /**
  * The tool-centre region to clear at this level.

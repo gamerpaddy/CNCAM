@@ -425,6 +425,61 @@ test('but a hole drilled to the wrong depth is still caught, however it is spell
 });
 
 
+/** A real tapping pass — the operation whose return leg is fed, not rapided. */
+function tappedHole() {
+  return generateToolpath({
+    type: 'tap',
+    name: 'tap',
+    tool: {
+      ...TOOL, type: 'tap', diameter: 6, pitch: 1, leadThreads: 2, flutes: 3,
+      spindleRpm: 350, feedCut: 350, feedPlunge: 350,
+    },
+    mesh: makeTube(20, 20, 18, 2.5, 20),
+    stock: { kind: 'box', min: [0, 0, 0], max: [40, 40, 20] },
+    params: {
+      topZ: 20, bottomZ: -1, clearanceHeight: 30, tolerance: 0.01,
+      diameterTol: 0.5, entryGap: 1,
+    },
+  });
+}
+
+// The same fault as the pecked hole above, one door further along, and it hid
+// behind an accident. A drill's return to the retract plane is a *rapid*, so
+// `trimRapids` threw it off the end of the path and the two sides matched
+// without anyone deciding they should. A tap has to be driven back out under
+// power with the spindle reversed — that is what the long-hand idiom is — so on
+// a control with no G33.1 the return was a feed, survived the trim, and was
+// walked against a CL that states a hole as the R plane and the depth and
+// nothing else. Every correctly posted GRBL tapping program read as 19mm of
+// post bug.
+test('a hole tapped long-hand is the same hole as one tapped by cycle', () => {
+  const cl = tappedHole();
+  assert.ok(!/G33\.1/.test(buildGcode('grbl', [{ name: 'tap', cl }]).text),
+    'GRBL feeds the tap in and back out');
+  assert.ok(/G33\.1/.test(buildGcode('linuxcnc', [{ name: 'tap', cl }]).text),
+    'and LinuxCNC writes the synchronised cycle');
+  for (const post of ['linuxcnc', 'grbl']) {
+    const r = checked(cl, 'tap', post);
+    assert.ok(r.over <= 0, `${post}: nothing to say, worst ${r.worst.toFixed(3)}mm`);
+  }
+});
+
+// And the false positive was not merely noisy: it was so much larger than any
+// real fault that a tap taken to the wrong depth scored exactly the same as a
+// correct one. The check had stopped being a check.
+test('but a tap taken to the wrong depth is still caught, however it is spelled', () => {
+  const cl = tappedHole();
+  for (const post of ['linuxcnc', 'grbl']) {
+    const ops = [{ name: 'tap', cl }];
+    const { text, lineMap } = buildGcode(post, ops);
+    // the tap bottoms at Z1 — a 2-thread lead stops it 2mm short of Z−1
+    const shallow = text.replace(/Z1\b/g, 'Z6');
+    assert.ok(shallow !== text, `${post}: the depth was there to break`);
+    const r = checkPost({ ops, text: shallow, lineMap, fitTolerance: 0.01 });
+    assert.ok(r.over > 0, `${post}: five millimetres short is a fault, not noise`);
+  }
+});
+
 test('and a closed profile keeps the retract that ends it', () => {
   // A loop arrives back where it started and lifts: three moves at one XY that
   // are not a hole. Reduced as though they were, an engraved rectangle lost its

@@ -89,6 +89,10 @@ export function buildProgram(dialect, ops, options = {}) {
   // to divide by it, and the number lives in an event rather than in the move
   // array. Zero means nothing has been asked for yet.
   let spindleRpm = 0;
+  // And whether it is holding a *surface speed* rather than an rpm. Under G96
+  // the control works the rpm out from the diameter, so a post writing feed per
+  // revolution has to work it out the same way — see rpmAt in post/lathe.js.
+  let spindleCss = null;
   // Pitch of the synchronised run in force, 0 when there is not one. A
   // threading pass is not a G1 at a cleverly chosen feed: the carriage is
   // locked to the spindle encoder, and only the control can do that.
@@ -180,6 +184,9 @@ export function buildProgram(dialect, ops, options = {}) {
         activeSpindle = spindleKey(e);
         spindleOn = true;
         spindleRpm = e.rpm > 0 ? e.rpm : spindleRpm;
+        spindleCss = e.mode === 'css' && e.surfaceSpeed > 0
+          ? { surfaceSpeed: e.surfaceSpeed, maxRpm: e.maxRpm ?? 0 }
+          : null;
       }
       if (e.type === 'coolant' && e.mode !== coolant) {
         (dialect.coolant ?? defaultCoolant)(w, e, options);
@@ -374,7 +381,8 @@ export function buildProgram(dialect, ops, options = {}) {
           // worth trusting, so a hole in a wrapped operation is written out in
           // full. It is a hole round a shaft either way.
           endCycle();
-          expandDrill(w, modal, move, feeds, emit, { rpm: spindleRpm, feedMode: options.feedMode });
+          expandDrill(w, modal, move, feeds, emit,
+            { rpm: spindleRpm, css: spindleCss, feedMode: options.feedMode });
         } else if (tapPitch > 0) {
           // A tapped hole never joins a drilling cycle: the modal state a
           // canned cycle leaves behind is not what a tapping block expects, and
@@ -382,7 +390,8 @@ export function buildProgram(dialect, ops, options = {}) {
           endCycle();
           const tap = { ...move, pitch: tapPitch, hand: tapHand };
           if (dialect.tap) dialect.tap(w, modal, tap, feeds);
-          else expandTap(w, modal, tap, motion, { rpm: spindleRpm, feedMode: options.feedMode });
+          else expandTap(w, modal, tap, motion,
+            { rpm: spindleRpm, css: spindleCss, feedMode: options.feedMode });
         } else if (dialect.drill) {
           // A setting that cannot be honoured has to say so.
           //
@@ -416,7 +425,7 @@ export function buildProgram(dialect, ops, options = {}) {
           // read by the control as 120mm per rev, which at 1200 rpm is the
           // drill going into the bar at a hundred metres a minute.
           expandDrill(w, modal, move, feeds, motion,
-            { rpm: spindleRpm, feedMode: options.feedMode });
+            { rpm: spindleRpm, css: spindleCss, feedMode: options.feedMode });
         }
       } else {
         endCycle();
@@ -429,6 +438,7 @@ export function buildProgram(dialect, ops, options = {}) {
           // neither of those is synchronised to anything
           threadPitch: rapid ? 0 : threadPitch,
           rpm: spindleRpm,
+          css: spindleCss,
           feedMode: options.feedMode,
         });
       }

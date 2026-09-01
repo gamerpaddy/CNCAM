@@ -10,6 +10,7 @@
 import { el } from '../layout.js';
 import { plural, pluralEs } from '../../engine/text.js';
 import { cuttingReport } from '../../engine/cutting.js';
+import { isRoundStock } from '../../engine/stock.js';
 import { chamferGeometry, maxWidthFor } from '../../engine/strategies/chamfer.js';
 import { tipAngleOf } from '../../engine/tool-geometry.js';
 import { grooveGeometry } from '../../engine/strategies/engrave.js';
@@ -159,20 +160,41 @@ export function engraveReportRow(doc, op) {
   ]);
 }
 
-/** Read-out of derived cutting numbers so the user can see if their picks are sane. */
+/**
+ * Read-out of derived cutting numbers so the user can see if their picks are sane.
+ *
+ * The work diameter goes in because on a lathe it is the workpiece that spins:
+ * the surface speed is set by what is being cut, not by anything about the
+ * tool. See `cuttingReport` — taken off the insert instead, every turning
+ * operation in the app reported a speed six times slower than the truth.
+ */
 export function cuttingReportRow(doc, op) {
   const tool = doc.project.tools.find((t) => t.id === op.toolId);
-  const report = cuttingReport(op, tool);
+  const setup = doc.findSetupOf(op.id);
+  const stock = setup?.stock;
+  const workDiameter = isRoundStock(stock) ? (stock.cylinder?.diameter ?? 0) : 0;
+  const report = cuttingReport(op, tool, { workDiameter });
   if (!report) return el('div', { class: 'prop-note' }, ['Assign a tool to see cutting speeds.']);
 
   const fmt = (v, unit, digits = 0) => (v == null ? '—' : `${v.toFixed(digits)} ${unit}`);
-  const lines = [
-    ['Surface speed', `${fmt(report.surfaceSpeed, 'm/min', 1)} (${fmt(report.surfaceSpeedSfm, 'sfm', 0)})`],
-    ['Feed per tooth', fmt(report.feedPerTooth, 'mm', 3)],
-    ['At', `⌀${report.diameter}mm · ${report.flutes ?? '?'} flutes`],
-  ];
-  return el('div', { class: 'cutting-report' }, lines.map(([k, v]) =>
-    el('div', { class: 'cutting-row' }, [el('span', {}, [k]), el('span', {}, [v])])));
+  const speed = `${fmt(report.surfaceSpeed, 'm/min', 1)} (${fmt(report.surfaceSpeedSfm, 'sfm', 0)})`;
+  const lines = report.lathe
+    ? [
+      ['Surface speed', report.constantSurfaceSpeed ? `${speed} — held (G96)` : speed],
+      // one edge on an insert, and the box it came in is marked in mm/rev
+      ['Feed per rev', fmt(report.feedPerRev, 'mm', 3)],
+      ['At', report.diameter == null
+        // round stock is what a diameter can be read from; without one the
+        // speed above is a dash rather than a number nobody can act on
+        ? 'no round stock on this setup to take a diameter from'
+        : `⌀${report.diameter}mm of work`],
+    ]
+    : [
+      ['Surface speed', speed],
+      ['Feed per tooth', fmt(report.feedPerTooth, 'mm', 3)],
+      ['At', `⌀${report.diameter}mm · ${report.flutes ?? '?'} flutes`],
+    ];
+  return reportRows(lines);
 }
 
 /**
@@ -249,9 +271,16 @@ export function resultSection(doc, op) {
 export function turnReportRow(doc, op) {
   const tool = doc.project.tools.find((t) => t.id === op.toolId);
   const p = op.params;
-  const lines = [
-    ['Along the bar', `Z${p.topZ} to Z${p.bottomZ} (${Math.abs(p.topZ - p.bottomZ).toFixed(2)} mm)`],
-  ];
+  // Parting is the one operation with a single height: the blade goes in at
+  // Bottom Z from whatever diameter the bar happens to be, and nothing in the
+  // strategy reads Top Z. The panel already knows that and hides the field
+  // (see op-params.js) — but this line went on building a span out of it, so a
+  // part-off that is one plunge at Z−58 reported "Z0 to Z−58 (58.00 mm)"
+  // travelled along the bar. The same fabricated number the hidden field was
+  // removed for, printed as a fact one panel over.
+  const lines = op.type === 'turnPart'
+    ? [['Parts at', `Z${p.bottomZ} — the finished length of the part`]]
+    : [['Along the bar', `Z${p.topZ} to Z${p.bottomZ} (${Math.abs(p.topZ - p.bottomZ).toFixed(2)} mm)`]];
   // Not turnFinish: it takes one pass down the profile and has no depth of cut,
   // so the line was reporting the schema's untouched 2mm — as a fact, in
   // diameters, on the one operation whose job is to hold a size. The field went

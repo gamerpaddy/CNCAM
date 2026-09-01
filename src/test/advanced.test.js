@@ -138,6 +138,41 @@ test('cuttingReport surfaces the derived numbers a machinist reads', () => {
   assert.eq(r.flutes, 2);
 });
 
+// On a lathe the *work* spins, so the surface speed is set by the diameter
+// being cut. Read off the tool the way a mill's is, a CCMT with a 6mm inscribed
+// circle reported 22.6 m/min for a 40mm bar actually running at 150.8 — the one
+// number a machinist checks against the insert box, six times too slow, and too
+// slow is the direction that reads as "there is room to go faster".
+test('a lathe reads its surface speed off the work, not off the insert', () => {
+  const insert = {
+    number: 5, type: 'turning', name: 'CCMT', diameter: 6, noseRadius: 0.4,
+    spindleRpm: 1200, feedCut: 120, feedPlunge: 80,
+  };
+  const op = createOperation('turnRough');
+  const r = cuttingReport(op, insert, { workDiameter: 40 });
+  assert.ok(r.lathe, 'it knows a lathe tool when it sees one');
+  // 1200rpm * pi * 40mm = 150.8 m/min
+  assert.close(r.surfaceSpeed, 150.8, 0.1);
+  assert.eq(r.diameter, 40, 'and says which diameter it took it at');
+  // one edge on an insert: the box it came in is marked in mm per revolution
+  assert.close(r.feedPerRev, 0.1, 1e-9);
+  assert.eq(r.feedPerTooth, null, 'feed per tooth is a milling idea');
+  assert.eq(r.flutes, null, 'and so are flutes');
+
+  // With no round stock to take a diameter from there is no honest answer, and
+  // a dash is the honest way to say so.
+  assert.eq(cuttingReport(op, insert).surfaceSpeed, null);
+
+  // Constant surface speed is the operation stating the number outright: the
+  // control varies the rpm to hold it, so the nominal figure is not part of it.
+  const css = createOperation('turnRough');
+  css.params.spindleMode = 'css';
+  css.params.surfaceSpeed = 180;
+  const held = cuttingReport(css, insert, { workDiameter: 40 });
+  assert.close(held.surfaceSpeed, 180, 1e-9);
+  assert.ok(held.constantSurfaceSpeed, 'and says it is held');
+});
+
 test('generated toolpath uses the effective speed on the wire', () => {
   const op = createOperation('contour2d');
   op.params.topZ = 10; op.params.bottomZ = 0; op.params.stepdown = 5;

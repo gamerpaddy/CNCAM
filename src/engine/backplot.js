@@ -391,12 +391,31 @@ function collapsePecks(points) {
 }
 
 /**
- * Is this run of same-XY points a peck cycle, and if so where is the bottom?
+ * Is this run of same-XY points a hole, and if so where is the bottom?
  *
- * A peck turns downward again after having come back up, which nothing else at
- * a fixed XY does.
+ * A hole goes down and comes back up. A peck does it several times over, which
+ * is the case this was written for — but a plain single-plunge hole is the same
+ * shape with one bite, and it has to be recognised too.
  *
- * @returns the index of the deepest point, or -1 when the run is not a peck
+ * Requiring the *turn* — down after having risen — meant only a peck counted,
+ * and a single-plunge hole came through with its return leg still on it. That
+ * looked harmless for years because `trimRapids` runs next and a drill's return
+ * is a **rapid**, so it was thrown away at the end of the path by accident
+ * rather than by decision.
+ *
+ * A tap's is not a rapid. A control with no rigid tapping cycle is fed back out
+ * of the hole under power with the spindle reversed — that is what the
+ * long-hand idiom *is* (see expandTap in post/core.js) — so the return survived
+ * the trim on the file's side while the CL side, which states a hole as the R
+ * plane and the depth and nothing else, had never had one. `checkPost` then
+ * walked a 38mm path against a 19mm one and reported every correctly posted
+ * GRBL tapping program as **19mm off the path it planned**.
+ *
+ * Collapsing to the bottom on both sides is the same decision `pathPoints`
+ * already takes for the CL: where the tool ends up after a hole is the
+ * control's business, not a path this program wrote down.
+ *
+ * @returns the index of the deepest point, or -1 when the run is not a hole
  */
 function pecked(points, from, to) {
   let deepest = from;
@@ -411,7 +430,10 @@ function pecked(points, from, to) {
     }
     if (points[k][2] < points[deepest][2]) deepest = k;
   }
-  return turned && deepest > from ? deepest : -1;
+  if (deepest <= from) return -1;
+  // came back up out of the hole, however many bites it took to get down
+  const returned = points[to][2] > points[deepest][2] + 1e-9;
+  return turned || returned ? deepest : -1;
 }
 
 /**

@@ -106,20 +106,31 @@ test('what has been cleared depends on the depth it is asked about', () => {
     name: 'r',
     tool: BIG,
     mesh: step.mesh,
-    stock: { kind: 'box', min: [0, 0, 0], max: [40, 40, 20] },
+    // The billet is a millimetre proud of the part, which is what the sentence
+    // above means by "the margin outside it" and what a box-margin stock gives
+    // you. It used to be exactly the part's own 40×40, so there was no margin
+    // at all and nothing to clear below the boss — and the test passed anyway,
+    // on a hairline of region left by a square-cornered stock outline meeting a
+    // round-joined keep-out. Removing that sliver (see clear2d stockOutline)
+    // took the floor slice with it.
+    stock: { kind: 'box', min: [-1, -1, 0], max: [41, 41, 20] },
     params: { ...params, topZ: 20, bottomZ: 0, stepdown: 4 },
   });
   const stack = clearedStack([{ cl: rough, tool: BIG }], [16, 10, 4, 0]);
   assert.ok(stack.length >= 2, `a slice per level: ${stack.length}`);
   assert.ok(stack[0].z < stack[stack.length - 1].z, 'deepest first');
 
+  // Signed, so a hole subtracts. Summing the absolute area of every loop counts
+  // the middle of a frame as ground that has been cleared, which is the exact
+  // opposite of what it is — and it made the ring round the outside of the part
+  // measure *larger* than the whole area outside the boss.
   const area = (loops) => loops.reduce((sum, loop) => {
     let a = 0;
     for (let i = 0; i < loop.length; i += 2) {
       const j = (i + 2) % loop.length;
       a += loop[i] * loop[j + 1] - loop[j] * loop[i + 1];
     }
-    return sum + Math.abs(a) / 2;
+    return sum + a / 2;
   }, 0);
   const deep = area(stack[0].loops);
   const shallow = area(stack[stack.length - 1].loops);
@@ -199,4 +210,147 @@ test('facing goes round an avoided island instead of straight over it', () => {
     if (op === OP.LINE && feed !== FEED.RAPID) cuts++;
   });
   assert.ok(cuts > 20, `only ${cuts} cutting moves — the pass gave up rather than routing round`);
+});
+
+// The leftover a rest pass is aimed at is a ribbon against the pocket wall, and
+// its inner edge is a hole in the region that is *air* — the ground the first
+// cutter emptied. `pocketSide` read the winding alone and called that a boss, so
+// the wall pass ran conventional and swung its lead arc out through the wall it
+// had been sent in to clean up: measured 1.94mm past finished size with a ⌀3
+// cutter, ten millimetres deep. With rest machining off the same operation is
+// clean, which is what kept it hidden.
+test('a rest pass leads into the pocket, never out through its wall', () => {
+  const SIZE = 60;
+  const POCKET = 40;
+  const big = { ...BIG, diameter: 12, name: '12mm flat' };
+  const small = { ...BIG, number: 2, diameter: 3, name: '3mm flat' };
+  const plate = makePocketBlock({ size: SIZE, pocketSize: POCKET, height: 20, depth: 10 });
+  const stock = { kind: 'box', min: [0, 0, 0], max: [SIZE, SIZE, 20] };
+  const shared = {
+    clearanceHeight: 30, entryGap: 1, tolerance: 0.02, stockToLeave: 0,
+    stepdown: 3, stepover: 0.4, direction: 'climb',
+    // an arc lead is the thing that swung out; without one there is nothing to catch
+    leadType: 'arc', leadRadius: 2,
+    topZ: 19, bottomZ: plate.floorZ,
+  };
+  const make = (tool, regions) => generateToolpath({
+    type: 'pocket', name: 'p', tool, mesh: plate.mesh, stock, params: shared, regions,
+  });
+
+  const rough = make(big, null);
+  const cleared = clearedStack([{ cl: rough, tool: big }],
+    [shared.topZ, 16, 13, shared.bottomZ], { tolerance: shared.tolerance });
+  assert.ok(cleared.length > 0, 'the first pass cleared something to deduct');
+
+  // the pocket walls, in model space
+  const lo = (SIZE - POCKET) / 2;
+  const hi = lo + POCKET;
+  const outside = (cl) => {
+    const r = small.diameter / 2;
+    let worst = 0;
+    let prev = null;
+    eachMove(cl, (op, x, y, z, i, j, k, feed) => {
+      if (op === OP.DRILL) { prev = null; return; }
+      if (prev && feed !== FEED.RAPID && z < shared.topZ - 1e-6) {
+        for (const [px, py] of [[prev[0], prev[1]], [x, y]]) {
+          worst = Math.max(worst, lo - (px - r), (px + r) - hi, lo - (py - r), (py + r) - hi);
+        }
+      }
+      prev = [x, y, z];
+    });
+    return worst;
+  };
+
+  const off = make(small, null);
+  const on = make(small, { cleared });
+  assert.ok(outside(off) <= 1e-6,
+    `without rest machining the pass stays inside: ${outside(off).toFixed(3)}mm past the wall`);
+  assert.ok(outside(on) <= 1e-6,
+    `and with it: ${outside(on).toFixed(3)}mm past the wall`);
+
+  // and it is still doing its job — a "fix" that switched rest machining off
+  // would pass the check above and be no fix at all
+  assert.ok(cutLength(on) < cutLength(off) * 0.6,
+    `the rest pass is still shorter: ${cutLength(on).toFixed(0)}mm against ${cutLength(off).toFixed(0)}mm`);
+});
+
+// A boss standing in the pocket is a hole in the region too, and that one really
+// is metal: the answer for it must not change.
+test('and an island in the pocket is still an island', () => {
+  const stepped = makeStepped({ base: 40, top: 16, baseHeight: 6, topHeight: 8 });
+  const stock = { kind: 'box', min: [0, 0, 0], max: [40, 40, 14] };
+  const cl = generateToolpath({
+    type: 'pocket', name: 'p', tool: BIG, mesh: stepped.mesh, stock,
+    params: {
+      clearanceHeight: 25, entryGap: 1, tolerance: 0.05, stockToLeave: 0,
+      stepdown: 2, stepover: 0.4, direction: 'climb', leadType: 'arc', leadRadius: 2,
+      topZ: 14, bottomZ: 6,
+    },
+    regions: null,
+  });
+  // whatever it cuts, it must not cut into the boss
+  let worst = 0;
+  eachMove(cl, (op, x, y, z, i, j, k, feed) => {
+    if (op === OP.DRILL || feed === FEED.RAPID) return;
+    const inBoss = Math.max(Math.abs(x - 20), Math.abs(y - 20)) < 8 - BIG.diameter / 2 - 1e-6;
+    if (inBoss && z < 14 - 1e-6) worst = Math.max(worst, 14 - z);
+  });
+  assert.close(worst, 0, 1e-6, `the pass cut ${worst.toFixed(2)}mm into the boss`);
+});
+
+// The same fault with the shapes the other way round. Clearing runs between the
+// stock edge and the part, so its outer boundary is a wall only where the part
+// is beyond it — and rest machining adds a third kind that is neither the stock
+// edge nor a wall: the rim of the hole the earlier pass emptied. "Not the stock
+// edge" called that a pocket wall, and the ring took its lead off the wrong
+// side and cut 1.9mm into the boss it had been sent in to clear round.
+test('a rest pass clearing round a boss leads away from it, not into it', () => {
+  const BASE = 40;
+  const TOP = 20;
+  const stepped = makeStepped({ base: BASE, top: TOP, baseHeight: 10, topHeight: 10 });
+  const stock = { kind: 'box', min: [0, 0, 0], max: [BASE, BASE, 20] };
+  const big = { ...BIG, diameter: 10, name: '10mm flat' };
+  const small = { ...BIG, number: 2, diameter: 3, name: '3mm flat' };
+  const shared = {
+    clearanceHeight: 30, entryGap: 1, tolerance: 0.005, stockToLeave: 0,
+    stepdown: 3, stepover: 0.5, direction: 'climb',
+    leadType: 'arc', leadRadius: 2, topZ: 20, bottomZ: 10,
+  };
+  const make = (tool, regions) => generateToolpath({
+    type: 'clear2d', name: 'c', tool, mesh: stepped.mesh, stock, params: shared, regions,
+  });
+
+  const rough = make(big, null);
+  const cleared = clearedStack([{ cl: rough, tool: big }], [20, 17, 14, 10],
+    { tolerance: shared.tolerance });
+  assert.ok(cleared.length > 0, 'the first pass cleared something to deduct');
+
+  // how far the cutter reaches inside the boss footprint, below the boss top
+  const centre = BASE / 2;
+  const half = TOP / 2;
+  const intoBoss = (cl) => {
+    const r = small.diameter / 2;
+    let worst = 0;
+    let prev = null;
+    eachMove(cl, (op, x, y, z, i, j, k, feed) => {
+      if (op === OP.DRILL) { prev = null; return; }
+      if (prev && feed !== FEED.RAPID && z < 20 - 1e-6) {
+        for (const [px, py] of [[prev[0], prev[1]], [x, y]]) {
+          worst = Math.max(worst, Math.min(half - Math.abs(px - centre),
+            half - Math.abs(py - centre)) + r);
+        }
+      }
+      prev = [x, y, z];
+    });
+    return worst;
+  };
+
+  // The boss corners are chorded, so a pass tangent to them reads a few tenths
+  // inside the square footprint whatever it does — which is why this compares
+  // the two runs rather than either against zero.
+  const off = intoBoss(make(small, null));
+  const on = intoBoss(make(small, { cleared }));
+  assert.ok(on <= off + 0.02,
+    `rest machining brought the cutter ${(on - off).toFixed(3)}mm further into the boss `
+    + `(${on.toFixed(3)}mm against ${off.toFixed(3)}mm)`);
 });

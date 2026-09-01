@@ -11,6 +11,8 @@
 // low RPM with a fast feed loads it beyond what it can chew. The panel shows
 // them so a user can adjust with feedback rather than by guessing.
 
+import { isLatheTool } from './insert.js';
+
 /**
  * Merge an op's own speeds/feeds with the tool's, op winning where set.
  * @returns { spindleRpm, feedCut, feedPlunge, spindleDir }
@@ -37,20 +39,46 @@ function numberOr(override, fallback) {
  * material-specific target. Feed per tooth (mm) is feed / (rpm · flutes), the
  * bite each edge takes, which determines chip load. Reported as null when the
  * inputs are missing, so the UI can show a dash rather than a nonsense zero.
+ *
+ * **D is not the same diameter on the two machines.** On a mill the cutter
+ * spins, so the surface speed is set by the cutter's own diameter. On a lathe
+ * the *work* spins and the tool is held still, so it is set by the diameter
+ * being cut — and an insert has no meaningful diameter of its own at all. Read
+ * off `tool.diameter` regardless, a CCMT with a 6mm inscribed circle at 1200rpm
+ * reported 22.6 m/min for a ⌀40 bar actually running at 150.8: the one number a
+ * machinist checks against the insert box, wrong by a factor of six, and wrong
+ * *low*, which is the direction that reads as "there is room to go faster".
+ *
+ * Feed per *tooth* is a milling idea for the same reason. A lathe insert has
+ * one edge, and the figure on its box is millimetres per revolution — the same
+ * arithmetic, named the thing it actually is.
+ *
+ * @param workDiameter the diameter being cut, on a lathe. Without one there is
+ *   no honest surface speed to report, so none is.
  */
-export function cuttingReport(op, tool) {
+export function cuttingReport(op, tool, { workDiameter = 0 } = {}) {
   if (!tool) return null;
   const { spindleRpm, feedCut, feedPlunge } = effectiveCutting(op, tool);
-  const d = tool.diameter;
+  const lathe = isLatheTool(tool.type);
+  const p = op?.params ?? {};
+  const d = lathe ? workDiameter : tool.diameter;
 
   const rpm = spindleRpm > 0 ? spindleRpm : null;
-  const surfaceMmPerMin = rpm ? Math.PI * d * rpm : null;
-  const feedPerTooth = rpm && tool.flutes > 0 && feedCut > 0
+  // Constant surface speed is the operation *stating* the number this report
+  // otherwise derives: the control varies the rpm to hold it, so what the user
+  // typed is the answer and the nominal rpm is not part of it.
+  const css = lathe && p.spindleMode === 'css' && p.surfaceSpeed > 0;
+  const surfaceMmPerMin = css ? p.surfaceSpeed * 1000
+    : (rpm && d > 0 ? Math.PI * d * rpm : null);
+  const feedPerTooth = !lathe && rpm && tool.flutes > 0 && feedCut > 0
     ? feedCut / (rpm * tool.flutes) : null;
+  const feedPerRev = lathe && rpm && feedCut > 0 ? feedCut / rpm : null;
 
   return {
-    diameter: d,
-    flutes: tool.flutes ?? null,
+    lathe,
+    constantSurfaceSpeed: css,
+    diameter: d > 0 ? d : null,
+    flutes: lathe ? null : (tool.flutes ?? null),
     spindleRpm: rpm,
     feedCut: feedCut > 0 ? feedCut : null,
     feedPlunge: feedPlunge > 0 ? feedPlunge : null,
@@ -59,6 +87,7 @@ export function cuttingReport(op, tool) {
     // imperial equivalent for shops that read sfm
     surfaceSpeedSfm: surfaceMmPerMin != null ? (surfaceMmPerMin / 304.8) : null,
     feedPerTooth,
+    feedPerRev,
   };
 }
 

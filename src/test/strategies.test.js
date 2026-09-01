@@ -393,3 +393,57 @@ test('a slot narrower than the cutter is refused, not silently widened', () => {
   const warned = cl.notes.filter((n) => n.level === 'warn').map((n) => n.text).join(' ');
   assert.ok(/never narrower/.test(warned), `expected a refusal, got "${warned}"`);
 });
+
+// A part machined out of stock its own size — no margin — is the case where the
+// clearing region's outer boundary and the part's keep-out are the *same* line,
+// and they have to cancel exactly. They did not: the stock outline was a
+// rectangle with square corners and the keep-out a round-joined offset, so a
+// hairline of "region" survived along every edge, 0.03mm wide and the length of
+// the billet. Being a piece of its own it came back as a ring of its own, took
+// a lead-in arc, and the arc plunged the cutter 2mm inside the finished edge of
+// the part and seven millimetres deep — on a program that is clean the moment
+// the lead is set to anything else.
+test('clearing a part the size of its billet leaves no hairline to cut', async () => {
+  const { makePocketBlock } = await import('./fixtures.js');
+  const SIZE = 60;
+  const mesh = makePocketBlock({ size: SIZE, pocketSize: 40, height: 20, depth: 10 }).mesh;
+  const stock = { kind: 'box', min: [0, 0, 0], max: [SIZE, SIZE, 22] };
+  const tool = { ...TOOL, type: 'flat', diameter: 6, flutes: 2, fluteLength: 30 };
+
+  for (const leadType of ['none', 'arc', 'tangent']) {
+    const cl = generateToolpath({
+      type: 'clear2d',
+      name: 'c',
+      tool,
+      mesh,
+      stock,
+      params: {
+        topZ: 22, bottomZ: 10, clearanceHeight: 40, tolerance: 0.02,
+        stepdown: 3, stepover: 0.5, stockToLeave: 0, direction: 'climb',
+        leadType, leadRadius: 2, entryGap: 1,
+      },
+    });
+    // Below the top of the part the only thing to clear is the pocket, whose
+    // tool centre lives in 13..47. Anything cutting outside that has gone into
+    // the frame the part is made of.
+    let worst = 0;
+    let prev = null;
+    eachMove(cl, (op, x, y, z, i, j, k, feed) => {
+      if (op === OP.DRILL) { prev = null; return; }
+      if (prev && feed !== FEED.RAPID && z < 19.5) {
+        for (const [px, py] of [[prev[0], prev[1]], [x, y]]) {
+          // how far the cutter's disc reaches into the 0..60 frame
+          const into = Math.min(
+            Math.min(px + 3, 60) - Math.max(px - 3, 0),
+            Math.min(py + 3, 60) - Math.max(py - 3, 0),
+          );
+          const inPocket = px > 12.9 && px < 47.1 && py > 12.9 && py < 47.1;
+          if (!inPocket && into > 0) worst = Math.max(worst, into);
+        }
+      }
+      prev = [x, y, z];
+    });
+    assert.close(worst, 0, 1e-6,
+      `leadType ${leadType}: the pass put ${worst.toFixed(2)}mm of cutter into the part frame`);
+  }
+});

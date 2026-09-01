@@ -339,7 +339,7 @@ export function cutPerimeter(cl, loop, z) {
  *   pass at target depth is walked. Defaults to plain cutPerimeter. Used by
  *   contour with tabs, which lifts the cutter for a few short spans as it goes.
  * @param options.alreadyThere the tool is already sitting on the loop at
- *   `zEntry` � do not drop to it again. Set by a pass that arrived along a
+ *   `zEntry` — do not drop to it again. Set by a pass that arrived along a
  *   lead-in.
  * @returns the loop as it was finally walked, which is *not* the loop passed in
  *   when the ramp reached depth partway round: the last lap then starts and ends
@@ -371,7 +371,7 @@ export function cutLoopWithRamp(cl, loop, zEntry, zTarget, rampAngleDeg = 0, opt
   const perimeter = loopPerimeter(loop);
   const { slope } = rampSlopeFor(zEntry - zTarget, perimeter, rampAngleDeg);
   const [sx, sy] = pt(0);
-  // down to the material top, where the ramp begins � unless a lead-in already
+  // down to the material top, where the ramp begins — unless a lead-in already
   // brought the tool there, in which case dropping again is a move to where it
   // is standing
   if (!options.alreadyThere) dropTo(sx, sy, zEntry);

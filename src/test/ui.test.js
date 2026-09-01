@@ -14,7 +14,7 @@ import { openToolWizard } from '../app/tool-wizard.js';
 import { renderGcodePanel } from '../app/gcode-panel.js';
 import { attachAutosave, loadSaved } from '../doc/autosave.js';
 import { Document } from '../doc/document.js';
-import { createModel } from '../doc/schema.js';
+import { createModel, createOperation } from '../doc/schema.js';
 import { makeBox } from './fixtures.js';
 import { buildFaces } from '../geom/faces.js';
 
@@ -394,4 +394,34 @@ test('an autosaved CAD model keeps its B-rep faces', async () => {
       if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v);
     }
   }
+});
+
+// A part-off has one height. The blade goes in at Bottom Z from whatever
+// diameter the bar happens to be, and nothing in the strategy reads Top Z —
+// which is why op-params.js hides the field. The read-out beside it went on
+// building a span out of the hidden field anyway, so a part-off that is a
+// single plunge at Z-58 reported "Z0 to Z-58 (58.00 mm)" travelled along the
+// bar: the same fabricated number the field was removed for, printed as a fact
+// one panel over.
+test('a part-off reports the one height it actually has', async () => {
+  if (!inBrowser) return;
+  const { turnReportRow } = await import('../app/props/reports.js');
+  const doc = new Document();
+  const read = (type, params) => {
+    const op = createOperation(type);
+    Object.assign(op.params, params);
+    return turnReportRow(doc, op).textContent;
+  };
+
+  const parting = read('turnPart', { topZ: 0, bottomZ: -58, partOffRadius: 0 });
+  assert.ok(/Z-58/.test(parting), `it says where the blade goes in: ${parting}`);
+  assert.ok(!/58\.00 mm/.test(parting),
+    `and does not claim 58mm of travel along the bar: ${parting}`);
+  assert.ok(!/Along the bar/.test(parting),
+    `a single plunge does not run along anything: ${parting}`);
+
+  // every other turning pass really does have two, and keeps them
+  const rough = read('turnRough', { topZ: 0, bottomZ: -30, stepdown: 1, stockToLeave: 0.3 });
+  assert.ok(/Along the bar/.test(rough), `roughing still spans the bar: ${rough}`);
+  assert.ok(/30\.00 mm/.test(rough), `and says how far: ${rough}`);
 });

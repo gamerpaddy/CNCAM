@@ -351,7 +351,17 @@ export function generateThreadMill({ mesh, tool, params, regions }) {
     // air, and every turn of the helix after that is cutting into metal that
     // is still supported. Coming down instead means the first turn is taken in
     // a hole that gets thinner underneath it as the pass goes on.
-    const turns = Math.max(1, Math.ceil(depth / pitch));
+    // One turn, one pitch — that is what a thread is, and it is the whole of
+    // what this strategy has to get right. The count is depth / pitch and it is
+    // not generally a whole number, so the last turn is a partial one.
+    //
+    // Rounding it up to a whole turn and then sharing the depth out over that
+    // instead cut a pitch of depth / ceil(depth / pitch): an M10×1.5 through a
+    // 20mm plate came out at 1.43mm, on a form tool ground for 1.5. The nut
+    // does not go on, and every turn drags the cutter's own flank 0.07mm along
+    // the thread it is cutting. It was invisible because the pass still ran
+    // from floor to topZ and still looked like a helix.
+    const turns = depth / pitch;
     const segments = Math.max(24, Math.ceil(Math.PI / Math.acos(
       Math.max(-1, 1 - tolerance / Math.max(orbit, tolerance)),
     )));
@@ -378,10 +388,13 @@ export function generateThreadMill({ mesh, tool, params, regions }) {
       cl.cut(h.cx + r * Math.cos(a), h.cy + r * Math.sin(a), floor, FEED.LEAD);
     }
     const start = dir * (Math.PI / 2);
-    const total = segments * turns;
+    // Chords no coarser than the tolerance asked for, and a whole number of
+    // them, so the pass lands exactly on `turns` and exactly on topZ.
+    const total = Math.max(1, Math.ceil(segments * turns));
     for (let i = 1; i <= total; i++) {
-      const a = start + dir * (i / segments) * Math.PI * 2;
-      const z = floor + (depth * i) / total;
+      const revs = (turns * i) / total;
+      const a = start + dir * revs * Math.PI * 2;
+      const z = floor + pitch * revs;
       cl.cut(h.cx + orbit * Math.cos(a), h.cy + orbit * Math.sin(a), z);
     }
     // and back off the thread before lifting, so the retract is up clear air

@@ -70,6 +70,30 @@ test('the coarse pitch is the one on the workshop wall', () => {
   assert.close(coarsePitch(3), 0.5, 1e-9, 'M3 is 0.5');
 });
 
+// The whole ISO 261 coarse series, because the table used to stop at M24 — and
+// stopping is not the same as ending. The nearest-row rule then handed every
+// larger size 3.0, so the wizard built an M30 tap as M30×3.0 where the standard
+// is 3.5, and an M48 as ×3.0 where it is 5.0. The number goes on to set the
+// tapping drill and the feed, so nobody finds out until the tap is in the hole.
+test('and it is the one on the wall all the way up the series', () => {
+  const iso = [
+    [1.6, 0.35], [2, 0.4], [2.5, 0.45], [3, 0.5], [3.5, 0.6], [4, 0.7], [5, 0.8],
+    [6, 1], [8, 1.25], [10, 1.5], [12, 1.75], [14, 2], [16, 2], [18, 2.5],
+    [20, 2.5], [22, 2.5], [24, 3], [27, 3], [30, 3.5], [33, 3.5], [36, 4],
+    [39, 4], [42, 4.5], [45, 4.5], [48, 5],
+  ];
+  for (const [diameter, pitch] of iso) {
+    assert.close(coarsePitch(diameter), pitch, 1e-9, `M${diameter} is ${pitch}`);
+  }
+  // a size that is not in the series takes the pitch of the one beside it,
+  // which is also what the standard says for M7 and M9
+  assert.close(coarsePitch(7), 1, 1e-9, 'M7 is 1.0, like the M6 beside it');
+  assert.close(coarsePitch(9), 1.25, 1e-9, 'M9 is 1.25');
+  // and the drill that follows from it
+  assert.close(tapDrillDiameter(30, coarsePitch(30)), 26.5, 1e-9,
+    'an M30 coarse goes in a ⌀26.5, not the ⌀27 a 3mm pitch asks for');
+});
+
 test('a tap is fed at its pitch, not at a chip load', () => {
   const s = suggestCutting({ type: 'tap', diameter: 6, pitch: 1 });
   assert.close(s.feedCut, s.spindleRpm * 1, 1, 'one turn, one millimetre');
@@ -303,4 +327,59 @@ test('an external pass over a part with no round outside says so, not "no holes"
   const cl = run('threadMill', MILL, makeBox(40, 40, 20), { threadInternal: false, bottomZ: 10 });
   assert.eq(cutMoves(cl), 0, 'nothing cut');
   assert.ok(/boss/.test(notes(cl)), notes(cl));
+});
+
+// A thread is one turn, one pitch. The count of turns is depth / pitch and it
+// is not generally a whole number, so the last turn is a partial one — and
+// rounding it up to a whole turn and sharing the depth out over *that* cut a
+// pitch of depth / ceil(depth / pitch) instead. An M10×1.5 through a 20mm plate
+// came out at 1.43mm on a form tool ground for 1.5: the nut does not go on.
+//
+// Measured as the slope of Z against the unwrapped swept angle, which is what a
+// pitch *is* and which does not care how the helix happens to be chorded.
+function milledPitch(cl) {
+  let previous = null;
+  let angle = 0;
+  const swept = [];
+  const heights = [];
+  eachMove(cl, (opcode, x, y, z, i, j, k, feed) => {
+    if (opcode === OP.DRILL || feed !== FEED.CUT) { previous = null; return; }
+    const a = Math.atan2(y - 20, x - 20);
+    if (previous !== null) {
+      let d = a - previous;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      if (Math.abs(d) > 1e-9) { angle += d; swept.push(angle); heights.push(z); }
+    }
+    previous = a;
+  });
+  const n = swept.length;
+  const mx = swept.reduce((s, v) => s + v, 0) / n;
+  const my = heights.reduce((s, v) => s + v, 0) / n;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) { num += (swept[i] - mx) * (heights[i] - my); den += (swept[i] - mx) ** 2; }
+  return Math.abs(num / den) * 2 * Math.PI;
+}
+
+test('a milled thread advances one pitch per turn, whatever the depth', () => {
+  for (const pitch of [1, 1.5, 0.7]) {
+    const tool = { ...MILL, pitch };
+    // 20mm of plate is not a whole number of turns at any of these pitches
+    for (const bottomZ of [0, 7, 9.5]) {
+      const cl = run('threadMill', tool, BORED, { threadPitch: pitch, bottomZ });
+      assert.ok(cutMoves(cl) > 0, `it cuts at P${pitch} to Z${bottomZ}: ${notes(cl)}`);
+      assert.close(milledPitch(cl), pitch, 1e-6,
+        `P${pitch} from Z${bottomZ}: the helix rises ${milledPitch(cl).toFixed(4)}mm per turn`);
+    }
+  }
+});
+
+test('and it still ends exactly at the top of the thread', () => {
+  const cl = run('threadMill', { ...MILL, pitch: 1.5 }, BORED, { threadPitch: 1.5, bottomZ: 0 });
+  let highest = -Infinity;
+  eachMove(cl, (opcode, x, y, z, i, j, k, feed) => {
+    if (opcode !== OP.DRILL && feed === FEED.CUT) highest = Math.max(highest, z);
+  });
+  assert.close(highest, 20, 1e-6, 'the last turn reaches topZ and does not overshoot it');
 });

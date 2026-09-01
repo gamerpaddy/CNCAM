@@ -55,7 +55,7 @@ export const lathe = {
    * in the units actually written — a radius that moves by 0.001 and a diameter
    * that moves by 0.002 are the same event, and only one of them is a word.
    */
-  motion(w, modal, { rapid, x, z, feed, threadPitch = 0, rpm = 0, feedMode = 'perRev' }) {
+  motion(w, modal, { rapid, x, z, feed, threadPitch = 0, rpm = 0, css = null, feedMode = 'perRev' }) {
     const wx = modal.word('X', x * 2);
     const wz = modal.word('Z', z);
     if (!wx && !wz) return;
@@ -66,7 +66,8 @@ export const lathe = {
       return w.line(modal.word('G', 33, 0), wx, wz, `K${num(threadPitch, 4)}`);
     }
     return w.line(modal.word('G', 1, 0), wx, wz,
-      modal.word('F', latheFeed(feed, rpm, feedMode), feedMode === 'perMinute' ? 1 : 4));
+      modal.word('F', latheFeed(feed, rpmAt(x, { rpm, css }), feedMode),
+        feedMode === 'perMinute' ? 1 : 4));
   },
 
   toolChange(w, modal, { tool }) {
@@ -122,6 +123,41 @@ export const lathe = {
     w.line('M2');
   },
 };
+
+/**
+ * The spindle speed the control will actually be holding for this move.
+ *
+ * Under G97 it is the S word and there is nothing to work out. Under G96 it is
+ * not: the control sets the rpm itself, from the surface speed and the diameter
+ * the tool is at, and *that* is the number an F word in mm/rev gets multiplied
+ * by. Dividing by the nominal figure on the tool instead described a spindle
+ * speed the machine was never going to be running at — a ⌀40 bar at 180m/min
+ * turns at 1432rpm, so a 120mm/min pass written as F0.1 against a tool marked
+ * 1200rpm came out at 143mm/min, and went on rising as the tool worked inward
+ * until the rpm cap caught it at more than double what was asked.
+ *
+ * With no rpm typed on the operation at all it was worse than inaccurate. There
+ * was nothing to divide by, so the mm/min figure went out unconverted: F120,
+ * read by a control in G95 as 120 millimetres per revolution. That is the same
+ * disaster long-hand drilling was fixed for (see expandDrill in post/core.js),
+ * arriving through the one door left open — and constant surface speed is the
+ * case where leaving the rpm blank is the natural thing to do, because the
+ * operator has already said what they want held.
+ *
+ * Working it out the way the control works it out is the only way the feed on
+ * the bar is the feed that was asked for.
+ */
+export function rpmAt(radius, { rpm = 0, css = null } = {}) {
+  if (!css || !(css.surfaceSpeed > 0)) return rpm;
+  // the same fallback chain the G96 D word is written with, above
+  const cap = css.maxRpm > 0 ? css.maxRpm : Math.max(200, Math.round(rpm || 2000));
+  const diameter = Math.abs(radius) * 2;
+  // on the centreline the surface speed asks for infinity; the cap is the whole
+  // reason G96 carries one
+  if (!(diameter > 1e-6)) return cap;
+  // surface speed is m/min, πD is millimetres of surface per revolution
+  return Math.min(cap, (css.surfaceSpeed * 1000) / (Math.PI * diameter));
+}
 
 /**
  * The feed as the control will read it.

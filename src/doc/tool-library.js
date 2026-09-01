@@ -486,10 +486,22 @@ const PLUNGE_IS_THE_CUT = new Set(['drill', 'spot', 'tap']);
  * filled in, and it is a starting point the field can be typed over.
  */
 export function coarsePitch(diameter) {
+  // ISO 261, M1.6 to M48. The nearest row wins, so a size that is not in the
+  // series gets the pitch of the one next to it — M7 is 1.0 like the M6 beside
+  // it, which is also what the standard says.
+  //
+  // The table used to stop at M24, and stopping is not the same as ending: the
+  // nearest-row rule then handed *every* larger size 3.0, so the wizard built an
+  // M30 tap as M30×3.0 where the standard is 3.5, and an M48 as ×3.0 where it is
+  // 5.0. That is not a coarse thread the shop has, and the number goes on to set
+  // the tapping drill (nominal − pitch) and the feed (rpm × pitch) — so a
+  // suggestion nobody looked at twice put a 27.0 hole under a thread that needs
+  // 26.5 and drove the tap in 14% slow.
   const table = [
     [1.6, 0.35], [2, 0.4], [2.5, 0.45], [3, 0.5], [3.5, 0.6], [4, 0.7], [5, 0.8],
     [6, 1], [8, 1.25], [10, 1.5], [12, 1.75], [14, 2], [16, 2], [18, 2.5],
-    [20, 2.5], [22, 2.5], [24, 3],
+    [20, 2.5], [22, 2.5], [24, 3], [27, 3], [30, 3.5], [33, 3.5], [36, 4],
+    [39, 4], [42, 4.5], [45, 4.5], [48, 5],
   ];
   let best = table[0];
   for (const row of table) {

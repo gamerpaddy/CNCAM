@@ -18,6 +18,7 @@ import {
 import { SilhouetteStack } from '../../geom/silhouette.js';
 import { depthLevelsFor, stockOutline } from '../stock.js';
 import { applyRegionsToArea, regionRefusal } from '../regions.js';
+import { loopBorderedBy } from '../../geom/inside.js';
 import { cutLoopPass } from './contour.js';
 import { applyCutting } from '../cutting.js';
 import { crossingPlane, goHome, entryPlane } from '../heights.js';
@@ -36,9 +37,26 @@ export function generateClear({
   // how high a ring has to go to reach the next one — see engine/heights.js
   const crossAt = crossingPlane(params, stock, fixtures);
 
-  // allowed tool-center region outer boundary: stock footprint grown by the
-  // radius, so the cutter fully clears the stock edges
-  const outer = stockOutline(stock, r);
+  // Allowed tool-centre region outer boundary: the stock footprint grown by the
+  // radius, so the cutter fully clears the stock edges.
+  //
+  // Grown the way the part's keep-out is grown — round joins — and not as a
+  // rectangle with square corners. The two are subtracted from one another
+  // below, so where the part's own footprint reaches the edge of the billet
+  // they have to cancel *exactly*; a square corner against a round offset
+  // leaves a hairline of region behind along the whole edge, 0.03mm wide and
+  // 66mm long on the test plate. That is not stock, it is the difference
+  // between two ways of drawing the same boundary — and it was cut: the sliver
+  // came back as a ring of its own, took a lead-in arc, and the arc plunged the
+  // cutter 2mm inside the finished edge of the part and 7mm deep.
+  //
+  // Rounding costs nothing in reach. A centre on the quarter-circle round a
+  // stock corner puts the cutter exactly on that corner; the square version
+  // takes it out to the diagonal, √2·r away, where it clears no more billet and
+  // only travels further through air.
+  const outer = r > 0
+    ? offsetLoops(stockOutline(stock, 0), r, tolerance)
+    : stockOutline(stock, 0);
   const stockEdge = boundsOf(outer);
 
   /**
@@ -51,11 +69,28 @@ export function generateClear({
    * with nothing but air beyond it — unless the part encloses a patch of stock,
    * which comes back as its own outer boundary sitting inside the billet with
    * walls all round it, and that one is a pocket.
+   *
+   * **Rest machining adds a third kind of outer boundary, and it is neither.**
+   * Deducting what an earlier pass already took (see engine/rest.js) leaves the
+   * remaining ribbon with an outer edge that is not the stock edge and not an
+   * enclosed patch of stock: it is the rim of the hole that pass emptied, with
+   * nothing beyond it but the air it left. "Not the stock edge" called that a
+   * pocket wall, so the ring took a lead-in arc off the wrong side and cut
+   * **1.9mm into the boss it had been sent in to clear round** — against 0.3mm
+   * with rest machining off, same part, same cutter.
+   *
+   * So an outer that carries a lead has to show the part on the far side of it.
+   * Asked only of the ring the lead is on, because that is the only one a wrong
+   * answer can gouge with — the inner rings cut stock and take no lead.
    */
-  const ringSide = (loop, base) => ({
-    ...base,
-    materialOutside: loopArea(loop) > 0 && !reaches(boundsOf([loop]), stockEdge),
-  });
+  const ringSide = (loop, base, keepout = null) => {
+    const outerSide = loopArea(loop) > 0 && !reaches(boundsOf([loop]), stockEdge);
+    if (outerSide && (base?.type ?? 'none') !== 'none' && (base?.radius ?? 0) > 0
+      && !loopBorderedBy(loop, keepout, Math.max(0.05, tolerance * 2))) {
+      return { ...base, materialOutside: false };
+    }
+    return { ...base, materialOutside: outerSide };
+  };
 
   const cl = new CLBuilder().simplify(mergeTolerance(tolerance));
   cl.toolChange(tool.number);
@@ -87,6 +122,11 @@ export function generateClear({
   let finalShadow = null;
   for (const z of depthLevelsFor(params, mesh, tool)) {
     finalShadow = silhouette.down(z);
+    // What the part occupies at this level, as the cutter sees it. The region
+    // is bounded by exactly this wherever the part bounds it, so a boundary
+    // lying against it is a wall and one that is not is an edge the earlier
+    // pass left — see ringSide.
+    const keepout = offsetLoops(finalShadow, r + (params.stockToLeave ?? 0), tolerance);
     const region = regionAt(finalShadow, params.stockToLeave ?? 0, z);
     if (region.length === 0) continue;
 
@@ -116,7 +156,7 @@ export function generateClear({
         const cut = closed
           ? cutLoopPass(cl, loop, zEntry, z, {
             clearance, direction, params, crossAt,
-            lead: ringSide(loop, k === 0 ? lead : { type: 'none', radius: 0 }),
+            lead: ringSide(loop, k === 0 ? lead : { type: 'none', radius: 0 }, keepout),
           })
           : cutSpanPass(cl, loop, zEntry, z, {
             clearance, params, crossAt, step,
@@ -148,6 +188,7 @@ export function generateClear({
   if (finishPasses > 0 && (params.stockToLeave ?? 0) > 0 && finalShadow) {
     for (let i = 1; i <= finishPasses; i++) {
       const remaining = params.stockToLeave * (1 - i / finishPasses);
+      const keepout = offsetLoops(finalShadow, r + remaining, tolerance);
       for (const loop of regionAt(finalShadow, remaining)) {
         // The region's boundary is the part on one side and the stock edge on
         // the other, and only one of them is a wall. Re-cutting the stock edge
@@ -156,7 +197,7 @@ export function generateClear({
         // nothing. The allowance stands against the part; peel it there.
         if (onStockEdge(loop, outer)) continue;
         if (cutLoopPass(cl, loop, params.bottomZ, params.bottomZ, {
-          clearance, direction, params, lead: ringSide(loop, lead), crossAt,
+          clearance, direction, params, lead: ringSide(loop, lead, keepout), crossAt,
         })) cutAnything = true;
       }
     }
