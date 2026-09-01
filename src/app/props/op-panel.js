@@ -14,8 +14,7 @@ import {
 } from '../regions-ui.js';
 import { toolIcon, describeTool } from '../tool-shape.js';
 import { machineCanHold } from '../../doc/tool-library.js';
-import { paramRow, hintStyle, propRow } from './fields.js';
-import { setSetting } from '../settings.js';
+import { paramRow, propRow } from './fields.js';
 import { resultSection } from './reports.js';
 
 /**
@@ -60,36 +59,6 @@ function intentRow(doc, op) {
   const text = describeIntent(op, tool);
   if (!text) return null;
   return el('div', { class: 'op-intent' }, [text]);
-}
-
-/**
- * How settings are explained, remembered between sessions.
- *
- * Three states, and the middle one is the default: hover a field and a bubble
- * beside it says what it does, with a drawing of it where the setting is a
- * distance on a picture — which most of them are. See props/hint-bubble.js.
- */
-const HINT_STYLES = [
-  ['bubble', 'On hover', 'A bubble beside the field, with a diagram where there is one'],
-  ['inline', 'Always', 'Printed under every field — thorough, and long'],
-  ['off', 'Off', 'No explanations anywhere'],
-];
-
-function helpToggleRow(app) {
-  const style = hintStyle(app);
-  const seg = el('div', { class: 'seg-control' }, HINT_STYLES.map(([key, text, why]) =>
-    el('button', {
-      class: key === style ? 'seg-on' : '',
-      title: why,
-      onclick: () => {
-        app.hintStyle = key;
-        setSetting('hintStyle', key);
-        app.rerenderProps?.();
-      },
-    }, [text])));
-  return el('div', { class: 'prop-row op-help-toggle' }, [
-    el('label', {}, ['Explain settings']), seg,
-  ]);
 }
 
 /**
@@ -151,7 +120,6 @@ export function opSections(doc, op, app) {
   if (current === 'result') { rows.push(...resultSection(doc, op)); return rows; }
   if (current === 'regions') { rows.push(...regionSection(doc, op, app)); return rows; }
 
-  rows.push(helpToggleRow(app));
   const activeGroups = OP_PARAM_GROUPS.filter((g) => g.tab === current);
   for (const group of activeGroups) {
     const fields = group.fields.filter((f) => paramApplies(f, op));

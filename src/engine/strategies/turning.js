@@ -391,15 +391,23 @@ const SHELF_MIN_LENGTH = 1;
  * plateau was dropped for being 0.2 away, and the finishing insert was handed
  * 0.5mm where 0.3 was asked for.
  *
- * So the plateau is kept and the nearby ladder level gives way to it. That
- * cannot cost a pass or deepen one: the plateau level is the deeper of the two,
- * so it cuts everything the level it replaced would have cut, and the pass
- * below it is left with less to take.
+ * So the plateau is kept, and the ladder is laid out *between* the plateaus
+ * rather than stepped down from the bar and then patched. Dropping the nearby
+ * ladder level instead is what the previous version did, on the claim that the
+ * plateau "cuts everything the level it replaced would have cut, so nothing
+ * gets deeper" — and that reads the wrong side of it. The plateau sits *inside*
+ * the level it displaces, so what grows is the gap **above** it: on this shaft
+ * ⌀31.00 gave way to ⌀30.60 and the pass at ⌀34.00 above it went from 1.5mm of
+ * depth to 1.7mm, on a cycle set to 1.5. Alternate passes came out at 1.7 and
+ * 1.3 the whole way down the bar.
+ *
+ * Spacing solved rather than assumed, which is the same answer engine/rings.js
+ * reaches for the same reason: every plateau and the finishing radius are fixed
+ * points, and each gap between two of them is divided into equal steps no
+ * deeper than the one asked for. It can add a pass — nine here where eight left
+ * two of them 13% over — and it can never deepen one.
  */
 export function roughLevels(profile, { barRadius, finishR, step, allowance, zLo, zHi }) {
-  const ladder = [];
-  for (let radius = barRadius - step; radius > finishR + 1e-9; radius -= step) ladder.push(radius);
-
   // plateaus: runs of the profile at one radius, long enough to turn along
   const shelves = [];
   const samples = profileRange(profile, zLo, zHi);
@@ -416,9 +424,19 @@ export function roughLevels(profile, { barRadius, finishR, step, allowance, zLo,
     runStart = i;
   }
 
-  const near = (l) => shelves.some((s) => Math.abs(l - s) <= step * 0.2);
-  // finishR is the deepest the cycle goes and is nobody's to give up
-  return [...ladder.filter((l) => !near(l)), ...shelves, finishR].sort((a, b) => b - a);
+  // The radii the cycle *must* stop at, outside in: the bar it starts from,
+  // every plateau, and the depth the finishing pass wants to find.
+  const fixed = [barRadius, ...shelves.sort((a, b) => b - a), finishR];
+  const levels = [];
+  for (let i = 1; i < fixed.length; i++) {
+    const from = fixed[i - 1];
+    const to = fixed[i];
+    const span = from - to;
+    if (!(span > 1e-9)) continue;
+    const n = Math.max(1, Math.ceil(span / step - 1e-9));
+    for (let k = 1; k <= n; k++) levels.push(from - (span * k) / n);
+  }
+  return levels;
 }
 
 /**

@@ -58,6 +58,17 @@ export function generateFace({
     return cl.finish();
   }
 
+  // A billet flush with the top of the part has nothing above it to face. The
+  // pass is still emitted — one cut at that height, which is what Top Z equal
+  // to Bottom Z asks for — but silence here reads as an operation that did
+  // nothing for no reason.
+  if (!(params.topZ > params.bottomZ + 1e-6)) {
+    cl.info('nothing to face — the billet is already level with the top of the '
+      + 'part here, so this pass runs on the finished face without cutting. '
+      + 'Give the stock some margin above the part, or lower Bottom Z to take '
+      + 'a skim off the part itself.');
+  }
+
   // How far a row runs past the edge of the stock, so the cutter comes right
   // off it rather than stopping with its centre on the corner.
   const overrun = r + 1;

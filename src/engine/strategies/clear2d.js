@@ -16,7 +16,7 @@ import {
   offsetLoops, diffLoops, offsetNormalized, loopArea, unionWithHoles,
 } from '../../geom/clipper.js';
 import { SilhouetteStack } from '../../geom/silhouette.js';
-import { depthLevelsFor, stockOutline } from '../stock.js';
+import { depthLevelsFor, depthRefusal, stockOutline } from '../stock.js';
 import { applyRegionsToArea, regionRefusal } from '../regions.js';
 import { loopBorderedBy } from '../../geom/inside.js';
 import { cutLoopPass } from './contour.js';
@@ -120,7 +120,8 @@ export function generateClear({
   let zEntry = params.topZ;
   let cutAnything = false;
   let finalShadow = null;
-  for (const z of depthLevelsFor(params, mesh, tool)) {
+  const levels = depthLevelsFor(params, mesh, tool);
+  for (const z of levels) {
     finalShadow = silhouette.down(z);
     // What the part occupies at this level, as the cutter sees it. The region
     // is bounded by exactly this wherever the part bounds it, so a boundary
@@ -140,8 +141,16 @@ export function generateClear({
       // Spaced to divide the band rather than stepped off its edges — see
       // engine/rings.js for what the remainder costs when they are not.
       const rings = concentricRings(loops, step, tolerance, r);
-      const passes = orderRings(rings, onStockEdge(piece.outer, outer),
-        { air: [piece.outer], part: piece.holes }, step);
+      // The two sides named by the geometry they came from, not by how the
+      // region's loops happen to nest: `outer` is the locus where the cutter
+      // touches the billet and `keepout` is where it touches the part, and a
+      // ring point belongs to whichever of them it is nearer. Reading them off
+      // the piece instead — outer boundary is air, holes are part — is right
+      // only while the part sits wholly inside the billet. Where it runs out to
+      // an edge, the piece has no holes at all, so every ring came back "all
+      // air" and the march had nothing to turn round at.
+      const passes = orderRings(rings, touchesStockEdge(piece.outer, outer),
+        { air: outer, part: keepout }, step);
       // Everything cut so far at this level, as the rings it was cut along.
       // A span may drop straight to depth anywhere in here, because the pass
       // that cleared it has already run.
@@ -207,7 +216,7 @@ export function generateClear({
     // see engine/regions.js regionRefusal: a picked face that leaves the cutter
     // nowhere to go is not a heights problem, and saying it is wastes the user's
     // time in the wrong tab
-    const why = regionRefusal(regions, r, tolerance);
+    const why = regionRefusal(regions, r, tolerance) ?? depthRefusal(params, levels);
     cl.warn(why
       ? `Z-level clearing removed nothing — ${why}`
       : 'Z-level clearing removed nothing — the stock may already match the part, '
@@ -500,16 +509,34 @@ function entryBeside(pts, step, cleared) {
 }
 
 /**
+ * Is there air outside this piece anywhere — is any of its boundary the stock
+ * edge?
+ *
+ * The question `orderRings` needs, and one touch is enough: what the march in
+ * from the stock edge needs is somewhere to start, and what turns it round at
+ * the far side is `splitBySide` telling the two stretches of the boundary
+ * apart. Asking for the *whole* boundary instead is what a part that runs out
+ * to an edge fails — a ramp off the side of the plate is stock edge on three
+ * sides and part wall on the fourth — and the piece then took the order meant
+ * for a pocket: innermost ring first, which is the band's medial axis, which is
+ * a full-width slot the depth of the level. Measured on the 40×40×10 wedge with
+ * a ⌀6 at a 0.5×D stepover: 125mm of cutting past three quarters of the
+ * diameter, against 4mm marching across.
+ */
+function touchesStockEdge(loop, outer, eps = 1e-4) {
+  for (let i = 0; i < loop.length; i += 2) {
+    if (distanceToLoops(loop[i], loop[i + 1], outer) <= eps) return true;
+  }
+  return false;
+}
+
+/**
  * Is the whole of this boundary the stock edge, with air on the far side of all
  * of it?
  *
- * The question `orderRings` needs, and it has to be all of it. A boundary that
- * is stock edge along one stretch and part wall along another is one loop and
- * one pass: marching in from it clears the band beside the stock edge properly
- * and drives the same pass into the part along the rest. Where the part comes
- * out to the edge — a ramp running off the side of the plate — that is most of
- * the boundary, so those pieces keep the innermost-first order, where the wall
- * stretch is cut last with the band beside it already gone.
+ * The finish passes' question: a loop that is nothing but the stock edge has no
+ * allowance standing against it to peel, so re-cutting it is a lap of the
+ * billet perimeter taking off nothing.
  */
 function onStockEdge(loop, outer, eps = 1e-4) {
   for (let i = 0; i < loop.length; i += 2) {

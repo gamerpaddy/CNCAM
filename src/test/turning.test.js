@@ -645,3 +645,29 @@ test('a groove no wider than the blade puts the allowance on the floor alone', (
   assert.close(Number([...zs][0]), 48.5, 0.01, 'centred in the groove, not shuffled along it');
   assert.close(deepest, 5.4, 0.01, 'with the allowance on the floor');
 });
+
+test('every roughing pass takes the depth of cut it was set, plateaus and all', () => {
+  // Every plateau in the profile gets a level of its own, at the radius the
+  // finishing pass wants to find there. The old layout stepped a ladder down
+  // from the bar and then dropped whichever rung a plateau landed near — which
+  // reads the wrong side of it. The plateau sits *inside* the rung it displaces,
+  // so the gap that grows is the one **above** it: alternate passes on this
+  // shaft came out at 1.7mm and 1.3mm on a cycle set to 1.5.
+  const cl = generateToolpath({
+    type: 'turnRough', name: 'rough', tool: INSERT, mesh: shaft.mesh, stock: BAR,
+    params: { ...base, stepdown: 1.5, stockToLeave: 0.3 },
+  });
+  // the radii the passes run at, insert nose taken back off
+  const radii = [...new Set(cutPoints(cl).map(([x]) => Math.round((x - INSERT.noseRadius) * 1e4) / 1e4))]
+    .sort((a, b) => b - a);
+  assert.ok(radii.length >= 8, `only ${radii.length} passes`);
+  let previous = BAR.cylinder.diameter / 2;
+  for (const r of radii) {
+    assert.ok(previous - r <= 1.5 + 1e-6,
+      `a pass from ⌀${(previous * 2).toFixed(2)} to ⌀${(r * 2).toFixed(2)} takes `
+      + `${(previous - r).toFixed(2)}mm where 1.5 was asked for`);
+    previous = r;
+  }
+  // and the plateaus are still landed on exactly, which is what they are for
+  assert.ok(radii.some((r) => Math.abs(r - 15.3) < 1e-6), 'the ⌀30 plateau + 0.3');
+});

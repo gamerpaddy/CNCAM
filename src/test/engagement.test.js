@@ -28,10 +28,10 @@
 
 import { test, assert } from './runner.js';
 import { generateToolpath } from '../engine/toolpath.js';
-import { eachMove, OP, FEED } from '../engine/cl.js';
+import { eachMove, OP, FEED, descentOf } from '../engine/cl.js';
 import { clearanceProfile, cuttingRadiusOf } from '../engine/tool-geometry.js';
 import { ClearingMap } from '../geom/coverage.js';
-import { makeBox, makePocketBlock, makeStepped } from './fixtures.js';
+import { makeBox, makePocketBlock, makeStepped, makeRamp } from './fixtures.js';
 
 const FLAT = {
   number: 1, type: 'flat', name: '6mm flat', diameter: 6, flutes: 2,
@@ -523,5 +523,84 @@ test('and a pass never takes more than its stepdown at full width', () => {
     assert.ok(depth <= stepdown + 0.3,
       `${type} takes a full-width cut ${depth.toFixed(2)}mm deep at a ${stepdown}mm `
       + `stepdown, at ${JSON.stringify(depthAt)}`);
+  }
+});
+
+// --- a part that runs out to the edge of its billet ------------------------
+
+test('clearing a slope marches in from the billet edge instead of slotting its middle', () => {
+  // A wedge running off the side of the plate is stock edge on three sides of
+  // every level's region and part wall on the fourth. Asking whether the
+  // *whole* boundary was the stock edge answered no, so the piece took the
+  // order meant for a pocket — innermost ring first, which on a band is its
+  // medial axis, which is a full-width slot the depth of the level.
+  //
+  // The two halves of the fix are one claim: the march needs somewhere to start
+  // (any touch of the stock edge) and something to turn round at (the part
+  // side of the boundary, told apart by which of the two it is nearer).
+  const mesh = makeRamp(40, 40, 10);
+  const stock = { kind: 'box', min: [0, 0, 0], max: [40, 40, 10] };
+  const cl = generateToolpath({
+    type: 'clear2d',
+    name: 'rough',
+    tool: FLAT,
+    mesh,
+    stock,
+    params: {
+      topZ: 10, bottomZ: 0, stepdown: 2.5, stepover: 0.5, clearanceHeight: 20,
+      entryGap: 1, tolerance: 0.05, stockToLeave: 0.3, rampAngle: 3,
+      direction: 'climb', leadType: 'none',
+    },
+  });
+  const { buried, run, runAt } = load(cl, { tool: FLAT, stock, stepdown: 2.5 });
+  // 125mm buried and a 5mm unbroken full-width run before; 4mm and 1mm after.
+  assert.ok(buried < 30,
+    `${buried.toFixed(1)}mm of cutting past three quarters of the diameter on a `
+    + '0.5xD stepover');
+  assert.ok(run < 3,
+    `a ${run.toFixed(1)}mm unbroken full-width run at ${JSON.stringify(runAt)}`);
+});
+
+test('no cutting move descends faster than the cutter may be driven downward', () => {
+  // A raster follows the surface, and a wall followed is a plunge. Every other
+  // strategy says so with FEED.RAMP, which is how feedRate holds the vertical
+  // component to the plunge feed; parallel3d emitted every sample as a plain
+  // cut, so a ball nose went down a 9mm pocket wall at 800mm/min against a
+  // plunge feed of 250.
+  const parts = [
+    ['pocket', makePocketBlock({ size: 40, pocketSize: 20, height: 20, depth: 12 }).mesh,
+      { min: [0, 0, 0], max: [40, 40, 20] }, 20],
+    ['step', makeStepped().mesh, { min: [0, 0, 0], max: [40, 40, 20] }, 20],
+  ];
+  const ball = { ...FLAT, type: 'ball', name: '6mm ball' };
+  for (const [name, mesh, stock, top] of parts) {
+    for (const type of ['parallel3d', 'waterline', 'contour2d', 'clear2d', 'pocket']) {
+      const cl = generateToolpath({
+        type,
+        name: type,
+        tool: ball,
+        mesh,
+        stock: { kind: 'box', ...stock },
+        params: {
+          topZ: top, bottomZ: 0, stepdown: 1, stepover: 0.1, clearanceHeight: top + 10,
+          entryGap: 1, tolerance: 0.05, stockToLeave: 0, rampAngle: 3,
+          direction: 'climb', leadType: 'none',
+        },
+      });
+      let prev = null;
+      let worst = 0;
+      let at = null;
+      eachMove(cl, (op, x, y, z, i, j, k, feed, index) => {
+        if (prev && op !== OP.RAPID && feed === FEED.CUT) {
+          const d = descentOf(prev, [x, y, z]);
+          const down = ball.feedCut * d;
+          if (down > worst) { worst = down; at = [x, y, z, index]; }
+        }
+        prev = [x, y, z];
+      });
+      assert.ok(worst <= ball.feedPlunge + 1e-6,
+        `${type} on the ${name} drives down at ${Math.round(worst)}mm/min where the `
+        + `plunge feed is ${ball.feedPlunge}, at ${JSON.stringify(at)}`);
+    }
   }
 });

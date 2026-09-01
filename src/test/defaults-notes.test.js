@@ -8,7 +8,7 @@
 // user never looks.
 
 import { test, assert } from './runner.js';
-import { makeBox, makeTube, makePocketBlock } from './fixtures.js';
+import { makeBox, makeTube, makePocketBlock, makeRamp } from './fixtures.js';
 import {
   createOperation, createTool, createSetup, createModel, createDrawing, OP_TYPES,
 } from '../doc/schema.js';
@@ -1221,4 +1221,87 @@ test('the panel says so before Generate when the cutter has no side', () => {
   doc.updateItem(op, { toolId: flat.id }, 'end mill');
   assert.ok(!opPreflight(doc, op).some((n) => /only cuts down its own axis/.test(n)),
     'and stops saying it once there is an end mill on the pass');
+});
+
+test('facing a billet flush with the part stops at the part, and says why', () => {
+  // The old default put Bottom Z half a millimetre *under* the top of the part
+  // whenever the billet had no margin above it — a "token pass" so the depth
+  // handle had something to drag. What it machined was 0.5mm off the finished
+  // top face, on every part whose stock is its own height, silently.
+  const mesh = makePocketBlock({ size: 40, pocketSize: 20, height: 20, depth: 12 }).mesh;
+  const stock = { kind: 'box', min: [0, 0, 0], max: [40, 40, 20] };
+  const modelBounds = computeBounds(mesh.positions);
+
+  const flush = depthRangeFor('face', { stock, modelBounds });
+  assert.eq(flush.bottomZ, 20, 'a flush billet faces down to the top of the part, not past it');
+  assert.eq(flush.topZ, 20, 'and starts there');
+
+  // and with margin it still takes the margin off
+  const proud = depthRangeFor('face',
+    { stock: { ...stock, max: [40, 40, 23] }, modelBounds });
+  assert.eq(proud.bottomZ, 20, '3mm of margin faces down to the part');
+  assert.eq(proud.topZ, 23, 'from the top of the billet');
+
+  const tool = {
+    number: 1, type: 'flat', diameter: 6, flutes: 2, fluteLength: 20,
+    spindleRpm: 12000, feedCut: 800, feedPlunge: 250,
+  };
+  const cl = generateToolpath({
+    type: 'face',
+    name: 'face',
+    tool,
+    mesh,
+    stock,
+    params: { ...defaultParamsFor('face', { stock, modelBounds, tool }), tolerance: 0.05 },
+  });
+  assert.ok(cl.count > 0, 'the pass is still there to see and to drag');
+  assert.ok(cl.notes.some((n) => /nothing to face/.test(n.text)),
+    `and says it has nothing to take off: ${JSON.stringify(cl.notes)}`);
+});
+
+test('a stepdown that swallows the whole depth says so rather than blaming the heights', () => {
+  // Adaptive's own default is two diameters, which is 12mm on a ⌀6 — so any
+  // part shallower than that is a single depth level, and that level is Bottom
+  // Z. On a part that fills its billet down there (a wedge, a dome) the cutter
+  // has nowhere to stand and the operation emits nothing at all. "Check the
+  // heights and the stock size" sent the user to look at two correct numbers.
+  const mesh = makeRamp(40, 40, 10);
+  const stock = { kind: 'box', min: [0, 0, 0], max: [40, 40, 10] };
+  const tool = {
+    number: 1, type: 'flat', diameter: 6, flutes: 2, fluteLength: 20,
+    spindleRpm: 12000, feedCut: 800, feedPlunge: 250,
+  };
+  for (const type of ['adaptive', 'clear2d']) {
+    const cl = generateToolpath({
+      type,
+      name: type,
+      tool,
+      mesh,
+      stock,
+      params: {
+        topZ: 10, bottomZ: 0, stepdown: 12, stepover: 0.5, engagement: 0.15,
+        clearanceHeight: 20, entryGap: 1, tolerance: 0.05, stockToLeave: 0.3,
+        rampAngle: 3, direction: 'climb',
+      },
+    });
+    assert.eq(cl.count, 0, `${type} cuts nothing here, which is the premise`);
+    const warned = cl.notes.filter((n) => n.level === 'warn').map((n) => n.text).join(' ');
+    assert.ok(/stepdown of 12mm covers the whole/.test(warned),
+      `${type} names the stepdown: ${warned}`);
+  }
+
+  // and a stepdown that leaves it room says nothing of the sort
+  const fine = generateToolpath({
+    type: 'clear2d',
+    name: 'clear2d',
+    tool,
+    mesh,
+    stock,
+    params: {
+      topZ: 10, bottomZ: 0, stepdown: 2.5, stepover: 0.5, clearanceHeight: 20,
+      entryGap: 1, tolerance: 0.05, stockToLeave: 0.3, rampAngle: 3, direction: 'climb',
+    },
+  });
+  assert.ok(fine.count > 0, 'it cuts');
+  assert.ok(!fine.notes.some((n) => /covers the whole/.test(n.text)), 'and says nothing about the stepdown');
 });

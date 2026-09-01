@@ -39,7 +39,7 @@ import {
 import { pointInLoops } from '../../geom/inside.js';
 import { ClearingMap, engagementFraction } from '../../geom/coverage.js';
 import { SilhouetteStack } from '../../geom/silhouette.js';
-import { depthLevelsFor, stockOutline } from '../stock.js';
+import { depthLevelsFor, depthRefusal, stockOutline } from '../stock.js';
 import { applyRegionsToArea, regionRefusal } from '../regions.js';
 import { orientLoop } from '../leads.js';
 import { cutSpanWithRamp } from '../linking.js';
@@ -154,7 +154,8 @@ export function generateAdaptive({
   let zEntry = params.topZ;
   let cutAnything = false;
 
-  for (const z of depthLevelsFor(params, mesh, tool)) {
+  const levels = depthLevelsFor(params, mesh, tool);
+  for (const z of levels) {
     const shadow = silhouette.down(z);
     // where the centre may go, and what is still standing at this level
     const allowed = applyRegionsToArea(
@@ -297,7 +298,7 @@ export function generateAdaptive({
   if (!cutAnything) {
     // Naming the heights when a picked face is the reason sends the user to the
     // one tab that is not the problem — see engine/regions.js regionRefusal.
-    const why = regionRefusal(regions, r, tolerance);
+    const why = regionRefusal(regions, r, tolerance) ?? depthRefusal(params, levels);
     cl.warn(why
       ? `adaptive cleared nothing — ${why}`
       : 'adaptive cleared nothing — check the heights and the stock size');

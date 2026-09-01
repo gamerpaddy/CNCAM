@@ -273,10 +273,18 @@ export function depthRangeFor(type, { stock, modelBounds, boreBottomZ = null }) 
   // screen to say why.
   if (spec.depth === 'stock') return { topZ: top, bottomZ: stock.min[2] };
   if (spec.depth === 'skim') {
-    // stop at the top of the part; if the stock has no margin there is nothing
-    // to face, so leave a token pass rather than a zero-height one the user
-    // cannot see or drag
-    return { topZ: top, bottomZ: partTop < top - 1e-6 ? partTop : top - 0.5 };
+    // Stop at the top of the part, and at the top of the part even when the
+    // billet is already flush with it.
+    //
+    // The old answer there was `top - 0.5`: a token pass, on the reasoning that
+    // a zero-height operation is one the user cannot see or drag. What it
+    // actually is, on a billet with no margin, is half a millimetre taken off
+    // the finished top face of the part — silently, from an operation whose
+    // whole promise is that it stops at the part. Measured on five of the test
+    // parts: 0.50mm under the model across the entire top face, up to 78,000
+    // cells of it. `face` handles Top Z equal to Bottom Z as the ordinary way
+    // to ask for one cut at a height, so this costs nothing but the handle.
+    return { topZ: top, bottomZ: partTop };
   }
   if (spec.depth === 'edge') return { topZ: partTop, bottomZ: partBottom };
   // Engraving: Top Z is the face, and Bottom Z is only a floor the mark may not

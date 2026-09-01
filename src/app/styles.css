@@ -1240,16 +1240,6 @@ kbd {
   padding: 7px 9px;
   margin: 0 0 8px;
 }
-.op-help-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--fg-dim);
-  margin: 6px 0 2px;
-  cursor: pointer;
-}
-.op-help-toggle input { accent-color: var(--accent); }
 .prop-field { margin-bottom: 6px; }
 .prop-hint {
   font-size: 11px;

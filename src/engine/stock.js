@@ -319,6 +319,36 @@ export const DEFAULT_FLAT_GAP = 0.2;
 export const FLAT_MERGE = 0.1;
 
 /**
+ * Why a clearing pass that found nothing found nothing, when the depth is the
+ * reason — the depth-side companion to engine/regions.js `regionRefusal`.
+ *
+ * A stepdown at least as deep as the whole cut leaves exactly one level, and
+ * that level is Bottom Z. There the part's shadow is everything the part ever
+ * occupies, so on a part that fills its billet at the bottom — a wedge, a dome,
+ * anything whose widest section is its lowest — the cutter has nowhere legal to
+ * stand and the operation emits nothing at all. Adaptive meets this on its own
+ * defaults: two diameters of stepdown is 12mm on a ⌀6, so any part shallower
+ * than that is one level.
+ *
+ * "Check the heights and the stock size" is what both strategies used to say,
+ * and on this failure the heights and the stock size are correct. The stepdown
+ * is the thing to change.
+ *
+ * @returns a clause to finish "X removed nothing — …", or null where the depth
+ *   is not what refused it
+ */
+export function depthRefusal(params, levels) {
+  if (!levels || levels.length !== 1) return null;
+  const total = (params.topZ ?? 0) - (params.bottomZ ?? 0);
+  const stepdown = params.stepdown ?? 0;
+  if (!(total > 1e-6) || !(stepdown >= total - 1e-6)) return null;
+  return `a stepdown of ${stepdown}mm covers the whole ${total.toFixed(2)}mm from `
+    + 'Top Z to Bottom Z, so the cut is one pass at the bottom — and down there the '
+    + 'part fills the billet, leaving the cutter nowhere to go. A stepdown smaller '
+    + 'than the depth gives the pass levels to work down through.';
+}
+
+/**
  * The depth levels for a clearing pass over `mesh` — the one place the three
  * clearing strategies ask the question, so they cannot answer it differently.
  *

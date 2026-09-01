@@ -612,22 +612,34 @@ function emitPoint(cl, p, state, { clearance, feedPlane = null, link = null }) {
     }
     return;
   }
+  // A raster follows the surface, and where the surface is a wall, following it
+  // is a plunge. Every other strategy says so by emitting FEED.RAMP, which is
+  // how `feedRate` knows to hold the *vertical* component to the plunge feed;
+  // a raster emitted every sample as a plain cut, so a ball nose went down a
+  // 9mm pocket wall at the full 800mm/min against a plunge feed of 250. The
+  // class costs nothing where the descent is shallow — feedRate hands a
+  // near-level ramp the cutting feed back — so it is asked of every sample
+  // rather than of a threshold nobody would know how to set.
+  const follow = (x, y, z) => {
+    cl.cut(x, y, z, z < state.at[2] - 1e-9 ? FEED.RAMP : FEED.CUT);
+    state.at = [x, y, z];
+  };
   if (!state.cutting) {
     approach(cl, p[0], p[1], p[2], { clearance, feedPlane });
   } else if (!state.gap) {
-    cl.cut(p[0], p[1], p[2]);
+    follow(p[0], p[1], p[2]);
   } else {
     const plan = state.gapOffLimits ? null : planLink(state.at, p, link, clearance);
     if (plan?.kind === 'cut') {
       // straight over: the whole cutter clears everything between, so the move
       // gouges nothing and the tool never leaves the cut
-      cl.cut(p[0], p[1], p[2]);
+      follow(p[0], p[1], p[2]);
     } else if (plan?.kind === 'ride') {
       // over the surface itself rather than over the top of it — the ground
       // between is the same face this pass is finishing, so the tool stays in
       // the cut and finishes it on the way past
-      for (const q of plan.points) cl.cut(q[0], q[1], q[2]);
-      cl.cut(p[0], p[1], p[2]);
+      for (const q of plan.points) follow(q[0], q[1], q[2]);
+      follow(p[0], p[1], p[2]);
     } else if (plan?.kind === 'hop') {
       // just over whatever is in the way, and no further
       cl.rapid(state.at[0], state.at[1], plan.z);
