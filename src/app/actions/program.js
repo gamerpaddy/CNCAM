@@ -61,6 +61,7 @@ export function makeProgramActions(ctx, space) {
     const jobs = [];
     let disabled = 0;
     let unusable = 0;
+    let orphaned = 0;
     for (const setup of doc.setups()) {
       const { meshes, stock, matrix, offset } = resolveSetupSpace(setup);
       const mesh = meshes.length ? mergeMeshes(meshes) : null;
@@ -76,6 +77,22 @@ export function makeProgramActions(ctx, space) {
           doc.toolpaths.delete(op.id);
           doc.fingerprints.delete(op.id);
           unusable++;
+          continue;
+        }
+        // An operation that follows a drawing and can no longer find it must
+        // not quietly follow the part instead. `drawingFor` answers null both
+        // for "no drawing asked for" and for "the drawing asked for is gone",
+        // and every strategy reads null as "use the model" — so deleting a DXF
+        // turned an engraving of fifteen drawn paths into an engraving of the
+        // part's own silhouette, and a slot along a centreline into a slot down
+        // a channel in the model, with nothing said either time. The delete
+        // dialog promises those operations "will stop cutting"; this is what
+        // makes that true.
+        if (op.params?.drawingId
+          && !(doc.project.drawings ?? []).some((d) => d.id === op.params.drawingId)) {
+          doc.toolpaths.delete(op.id);
+          doc.fingerprints.delete(op.id);
+          orphaned++;
           continue;
         }
         // Rest machining reads what the operations above this one actually cut,
@@ -116,6 +133,11 @@ export function makeProgramActions(ctx, space) {
       if (unusable) {
         return ctx.ui.setStatus('Nothing to generate — operations need a tool, a model and a setup', true);
       }
+      if (orphaned) {
+        return ctx.ui.setStatus(`Nothing to generate — ${plural(orphaned, 'operation')} `
+          + `${verb(orphaned, 'follows a drawing', 'follow drawings')} `
+          + 'that is no longer in the project', true);
+      }
       if (disabled) {
         return ctx.ui.setStatus(
           `Nothing to generate — ${allOf(disabled, 'operation')} `
@@ -152,6 +174,10 @@ export function makeProgramActions(ctx, space) {
       const notes = [];
       if (disabled) notes.push(`${disabled} disabled`);
       if (unusable) notes.push(`${unusable} missing a tool`);
+      if (orphaned) {
+        notes.push(`${orphaned} following ${verb(orphaned, 'a drawing', 'drawings')} `
+          + `${verb(orphaned, 'that is', 'that are')} no longer in the project`);
+      }
       // An operation that generated nothing is the failure most worth saying
       // out loud: it looks identical to one that was never generated.
       //
@@ -748,7 +774,30 @@ export function makeProgramActions(ctx, space) {
     refreshGcodePreview();
   }
 
+  /**
+   * Bring the toolpaths a file is about to be printed from up to date.
+   *
+   * A toolpath is computed once and then kept until something replaces it, so
+   * changing a stepdown leaves the *old* path on the document with only a badge
+   * in the tree to say so. Simulate has regenerated in that state for a while —
+   * "watch a faithful animation of the previous stepdown" is a quiet failure —
+   * and an export is the same failure with the machine on the end of it: the
+   * file goes to the control, cuts the settings you replaced, and nothing
+   * anywhere says which ones it used. So every export goes through here first.
+   *
+   * @param only one operation to check, or null for the whole program
+   */
+  async function freshenForExport(only = null) {
+    const stale = staleOperations().filter((op) => !only || op === only);
+    if (stale.length === 0) return;
+    ctx.ui.setStatus(`${plural(stale.length, 'operation')} `
+      + `${verb(stale.length, 'has', 'have')} changed since `
+      + `${verb(stale.length, 'it was', 'they were')} generated — regenerating before export…`);
+    await generate();
+  }
+
   async function exportGcode() {
+    await freshenForExport();
     const ops = postableOps();
     if (ops.length === 0) return ctx.ui.setStatus('Generate toolpaths before exporting', true);
     refreshGcodePreview();
@@ -793,6 +842,7 @@ export function makeProgramActions(ctx, space) {
    * that are no longer there.
    */
   async function exportOperationsSeparately() {
+    await freshenForExport();
     const ops = postableOps();
     if (ops.length === 0) return ctx.ui.setStatus('Generate toolpaths before exporting', true);
 
@@ -820,6 +870,7 @@ export function makeProgramActions(ctx, space) {
 
   /** One operation, on its own, from the tree or the operation panel. */
   async function exportOneOperation(op) {
+    await freshenForExport(op);
     const cl = doc.toolpaths.get(op?.id);
     if (!cl) return ctx.ui.setStatus('Generate this operation before exporting it', true);
     const setup = doc.findSetupOf(op.id);

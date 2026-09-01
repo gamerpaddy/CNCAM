@@ -31,7 +31,7 @@ import { offsetLoops, unionLoops } from '../../geom/clipper.js';
 import { SilhouetteStack } from '../../geom/silhouette.js';
 import { computeBounds } from '../../geom/mesh.js';
 import { depthPasses } from '../stock.js';
-import { applyRegionsToPaths } from '../regions.js';
+import { applyRegionsToPaths, regionRefusal } from '../regions.js';
 import {
   cutLoopPass, cutOpenPass, orderLoopForEntry, loopEntryPoint, loopExitPoint, resolveLead,
 } from './contour.js';
@@ -252,7 +252,14 @@ export function generateWaterline({
     if (cutHere) { cutAnything = true; zEntry = z; }
   }
 
-  if (!cutAnything) cl.warn('waterline produced no passes — check Top Z and Bottom Z');
+  if (!cutAnything) {
+    // see engine/regions.js regionRefusal — a picked face that leaves the
+    // cutter nowhere to go is not a heights problem
+    const why = regionRefusal(regions, r, tolerance);
+    cl.warn(why
+      ? `waterline produced no passes — ${why}`
+      : 'waterline produced no passes — check Top Z and Bottom Z');
+  }
   goHome(cl, clearance);
   return cl.finish();
 }

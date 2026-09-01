@@ -216,7 +216,15 @@ export function paramRow(doc, op, field, app) {
       el('option', { value: '' }, ['The part\'s own outline']),
       ...drawings.map((d) => el('option', { value: d.id }, [d.name])),
     ]);
-    select.value = op.params[field.key] ?? '';
+    // A drawing that has been removed while an operation still follows it: the
+    // id stays on the operation (see doc/document.js removeDrawing) and there
+    // is no option for it, so a plain assignment falls back to the empty one
+    // and the panel would claim the part's own outline had been chosen.
+    const chosen = op.params[field.key] ?? '';
+    if (chosen && !drawings.some((d) => d.id === chosen)) {
+      select.append(el('option', { value: chosen }, ['(the drawing this followed is gone)']));
+    }
+    select.value = chosen;
     select.addEventListener('change', () => {
       doc.updateItem(op.params, { [field.key]: select.value || null }, `edit ${label}`);
     });

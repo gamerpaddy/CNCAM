@@ -78,24 +78,21 @@ export class Document extends EventTarget {
     const index = this.project.drawings.findIndex((d) => d.id === id);
     if (index < 0) return;
     const drawing = this.project.drawings[index];
-    // Operations pointing at it stop having geometry to follow, so they are
-    // unpointed as part of the same edit — an operation holding a dangling id
-    // generates nothing and says nothing about why.
-    const holders = [];
-    for (const setup of this.project.setups) {
-      for (const op of setup.operations) {
-        if (op.params?.drawingId === id) holders.push(op);
-      }
-    }
+    // The operations that follow it keep pointing at it, dangling and all.
+    //
+    // Unpointing them looks tidier and is a different operation: `drawingId:
+    // null` is not "no drawing", it is the setting that means *follow the part
+    // instead*, and every strategy reads it that way. So clearing it turned an
+    // engraving of fifteen drawn paths into an engraving of the part's own
+    // silhouette and a slot along a centreline into a slot down a channel in
+    // the model — both generated, both reported as up to date, neither the job
+    // anybody set up, and the delete dialog promising they "will stop cutting"
+    // while they did nothing of the kind. Held as a dangling id, generation
+    // refuses them and says why (see actions/program.js) and the panel says the
+    // drawing is gone rather than claiming the part's outline was chosen.
     this.apply('remove drawing',
-      () => {
-        this.project.drawings.splice(index, 1);
-        for (const op of holders) op.params.drawingId = null;
-      },
-      () => {
-        this.project.drawings.splice(index, 0, drawing);
-        for (const op of holders) op.params.drawingId = id;
-      });
+      () => this.project.drawings.splice(index, 1),
+      () => this.project.drawings.splice(index, 0, drawing));
   }
 
   // --- tools ---

@@ -26,7 +26,7 @@ import {
   loopsBounds, offsetLoops, intersectLoops, unionWithHoles,
 } from '../../geom/clipper.js';
 import { silhouetteAbove } from '../../geom/silhouette.js';
-import { applyRegionsToArea, regionsActive } from '../regions.js';
+import { applyRegionsToArea, regionsActive, regionRefusal } from '../regions.js';
 import { pointInLoops } from '../../geom/inside.js';
 import { applyCutting } from '../cutting.js';
 import { approach, entryPlane, entryGapOf } from '../heights.js';
@@ -229,7 +229,12 @@ export function generateParallel3d({ mesh, tool, params, stock, regions }) {
       // to straight passes at the nominal raster angle
       flatHeading: [Math.cos(angle), Math.sin(angle)],
     });
-    if (cl.count === 0) cl.warn('follow-slope finishing produced no passes — check Top Z and Bottom Z');
+    if (cl.count === 0) {
+      const why = regionRefusal(regions, r, tolerance);
+      cl.warn(why
+        ? `follow-slope finishing produced no passes — ${why}`
+        : 'follow-slope finishing produced no passes — check Top Z and Bottom Z');
+    }
     return cl.finish();
   }
 
@@ -348,7 +353,13 @@ export function generateParallel3d({ mesh, tool, params, stock, regions }) {
   }
 
   if (state.cutting) cl.rapid(...lastXY(cl), clearance);
-  if (cl.count === 0) cl.warn('parallel finishing produced no passes — check Top Z and Bottom Z');
+  if (cl.count === 0) {
+    // see engine/regions.js regionRefusal
+    const why = regionRefusal(regions, r, tolerance);
+    cl.warn(why
+      ? `parallel finishing produced no passes — ${why}`
+      : 'parallel finishing produced no passes — check Top Z and Bottom Z');
+  }
   return cl.finish();
 }
 

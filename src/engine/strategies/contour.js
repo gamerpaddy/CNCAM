@@ -38,7 +38,7 @@ import {
   orientLoop, leadInPoints, leadOutPoints, emitLeadOut,
   internalLeadStart, startOnSegment, leadOnLoop,
 } from '../leads.js';
-import { applyRegionsToPaths } from '../regions.js';
+import { applyRegionsToPaths, regionRefusal } from '../regions.js';
 import { approach, entryPlane, crossingPlane, goHome, EntrySurface } from '../heights.js';
 import { applyCutting } from '../cutting.js';
 import { cutPerimeterWithTabs } from '../tabs.js';
@@ -211,7 +211,15 @@ export function generateContour({
     cl.info(`${dropped} boundary/boundaries left uncut — a ⌀${tool.diameter} cutter does `
       + 'not fit round them. Use a smaller cutter, or bore them.');
   }
-  if (!cutAnything) cl.warn('contour produced no passes — check Top Z and Bottom Z');
+  if (!cutAnything) {
+    // A pick that leaves the pass nowhere to go is not a heights problem, and
+    // sending somebody to the Heights tab for it wastes their time in the one
+    // tab that is not the cause — see engine/regions.js regionRefusal.
+    const why = regionRefusal(regions, r, tolerance);
+    cl.warn(why
+      ? `contour produced no passes — ${why}`
+      : 'contour produced no passes — check Top Z and Bottom Z');
+  }
   goHome(cl, clearance);
   return cl.finish();
 }

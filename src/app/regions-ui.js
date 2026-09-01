@@ -42,6 +42,21 @@ export const PICK_KIND_LABELS = {
  */
 const EDGE_BAND = 0.25;
 
+/**
+ * The hair that keeps a wall's band off its own boundary.
+ *
+ * Eroding a 2r band by r leaves the centres exactly a radius from the wall —
+ * which is exactly where the pass that machines it runs, and exactly the edge
+ * of the area the strategy has to cut. Two regions that meet along a line
+ * intersect in a line, and a line has no area: picking the wall of a pocket
+ * with a ⌀12 cutter cut the one level above the part and nothing below it,
+ * where the unrestricted pass runs the full depth. So the band is opened by a
+ * hair past what touches the wall, and the tangent ring falls inside it.
+ * Measured on the test plate: the threshold is 2r + stock-to-leave + 0.02, for
+ * every allowance tried.
+ */
+const WALL_TANGENCY = 0.1;
+
 const OVERLAY_COLORS = { include: 0x3ddc84, avoid: 0xff5566 };
 
 const faceCache = new Map(); // modelId -> { mesh, groups }
@@ -262,10 +277,14 @@ function clearedByEarlier(doc, op, setup, mesh, tool) {
  * rim of a hole 5mm away in the pocket's own pick, and chamfered a hole nobody
  * had asked for. Marking the line is all such a pass needs from the band.
  */
-function wallBandFor(mode, includeGrow) {
-  return mode === 'include' && includeGrow < 0
-    ? Math.max(includeGrow * -2, EDGE_BAND)
-    : EDGE_BAND;
+function wallBandFor(mode, includeGrow, params) {
+  if (!(mode === 'include' && includeGrow < 0)) return EDGE_BAND;
+  // The pass that machines a wall does not run with its axis a radius from it:
+  // it stands off by whatever it is leaving on as well. Both distances have to
+  // be inside the band, or the one ring that touches the wall is the one ring
+  // the erosion drops. See WALL_TANGENCY.
+  const allowance = Math.max(0, params?.stockToLeave ?? 0);
+  return Math.max(includeGrow * -2 + allowance + WALL_TANGENCY, EDGE_BAND);
 }
 
 export function resolveRegions(doc, op, transformMeshFn, setup = null, tool = null, mesh = null) {
@@ -323,7 +342,7 @@ export function resolveRegions(doc, op, transformMeshFn, setup = null, tool = nu
       if (faceIds.length) {
         const { faces } = facesFor(modelId, mesh);
         const loops = faceFootprint(placed, faces, faceIds,
-          { wallBand: wallBandFor(mode, includeGrow) });
+          { wallBand: wallBandFor(mode, includeGrow, op.params) });
         if (loops.length) { out[mode].push(...loops); any = true; }
       }
       if (edgeIds.length) {
