@@ -7,7 +7,7 @@
 
 import { test, assert } from './runner.js';
 import { generateToolpath } from '../engine/toolpath.js';
-import { eachMove, OP, FEED } from '../engine/cl.js';
+import { eachMove, OP, FEED, CLBuilder } from '../engine/cl.js';
 import { clearedArea, clearedStack } from '../engine/rest.js';
 import { makePocketBlock, makeStepped } from './fixtures.js';
 
@@ -150,6 +150,61 @@ test('rest machining is never longer than not using it', () => {
   assert.ok(rest <= plain + 1e-6,
     `repeating a pass with rest machining on cut ${rest.toFixed(0)}mm `
     + `against ${plain.toFixed(0)}mm with it off`);
+});
+
+// "Never longer" is a weak claim and it passed while three quarters of the pass
+// survived. A pass repeated with the same cutter has *nothing* left to do, so
+// what it cuts is a direct reading of how much of the deduction arrives.
+//
+// It used to be a quarter of it. The deduction was buffered by the tool radius
+// less a tenth of a millimetre — a blanket fudge for cutters narrower at the tip
+// than at the shank — and that tenth is a ribbon left standing along the whole
+// boundary between cleared and uncleared ground. A ribbon is a region, and a
+// region gets a ring: measured on the app's step plate, a ⌀6 rest pass after ⌀12
+// clearing fed 10.6 metres of its 10.8 and took off 0.2cm³ of corner.
+test('a pass repeated with rest machining on cuts next to nothing', () => {
+  const first = run(BIG);
+  const stack = clearedStack([{ cl: first, tool: BIG }], [10, 6, params.bottomZ]);
+  const plain = cutLength(run(BIG));
+  const rest = cutLength(run(BIG, { include: [], avoid: [], cleared: stack }));
+  assert.ok(rest < plain * 0.25,
+    `repeating a pass with rest machining on cut ${rest.toFixed(0)}mm `
+    + `against ${plain.toFixed(0)}mm with it off — ${(100 * rest / plain).toFixed(0)}%`);
+});
+
+// The other half of the same change, and the half that costs a cutter rather
+// than an hour: what a *shaped* tool cleared is what it was wide at the height
+// being asked about, not what it is called. A ⌀6 ball whose tip passed 1mm below
+// this level was 4.47mm across up here, not 6.
+test('a ball nose only cleared as wide as it was at that height', () => {
+  const ball = { ...BIG, name: '6mm ball', type: 'ball' };
+  const cl = new CLBuilder();
+  cl.rapid(-20, 0, 5);
+  cl.cut(-20, 0, 0);
+  cl.cut(20, 0, 0);
+  const pass = cl.finish();
+
+  const halfWidth = (loops) => {
+    let widest = 0;
+    for (const loop of loops) {
+      for (let i = 1; i < loop.length; i += 2) widest = Math.max(widest, Math.abs(loop[i]));
+    }
+    return widest;
+  };
+
+  // At the tip's own height the ball is a point, and a millimetre up it is
+  // 2·√(2·1·3 − 1²) = 4.47mm across. Nothing here may claim the nominal 6.
+  const atTip = clearedArea([{ cl: pass, tool: ball }], 0);
+  const above = clearedArea([{ cl: pass, tool: ball }], 1);
+  assert.ok(halfWidth(atTip) < 0.6, `the tip cleared ${halfWidth(atTip).toFixed(2)}mm either side`);
+  assert.ok(halfWidth(above) > 1.9 && halfWidth(above) < 2.4,
+    `1mm above the tip a ⌀6 ball cleared ${halfWidth(above).toFixed(2)}mm either side, `
+    + 'and it is 2.24mm wide there');
+
+  // A flat cutter is a cylinder and reaches its full radius at every height —
+  // that is the case the fudge was costing, and it has to stay exact.
+  const flat = clearedArea([{ cl: pass, tool: BIG }], 1);
+  assert.ok(halfWidth(flat) >= 3, `a ⌀6 flat cleared only ${halfWidth(flat).toFixed(2)}mm either side`);
 });
 
 test('nothing generated above means nothing deducted', () => {
