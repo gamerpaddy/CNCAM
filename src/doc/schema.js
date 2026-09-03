@@ -260,6 +260,9 @@ export function createSetup(name = 'Setup 1', mode = 'mill') {
 }
 
 export const OP_TYPES = [
+  // Not a cut: a block of G-code placed in the running order. See
+  // engine/strategies/command.js.
+  'command',
   'face', 'contour2d', 'pocket', 'slot', 'clear2d', 'adaptive',
   'spot', 'drill', 'tap', 'threadMill', 'bore', 'chamfer', 'engrave',
   'parallel3d', 'waterline',
@@ -283,6 +286,10 @@ export function createOperation(type = 'contour2d') {
     // machined. Empty means "the whole part", the usual case.
     regions: { include: [], avoid: [] },
     params: {
+      // A command operation's whole content: the lines it writes into the
+      // program, verbatim, where it stands in the running order. Empty on every
+      // other operation. See engine/strategies/command.js.
+      gcode: '',
       tolerance: 0.01,
       stockToLeave: 0,
       stepdown: 2,

@@ -1,7 +1,7 @@
 // GRBL dialect. No tool changer (comment only), no canned cycles (the core
 // expands drills long-hand), no G43 tool length compensation.
 
-import { num, spindleWord } from './format.js';
+import { num, spindleWord, customBlock } from './format.js';
 
 export const grbl = {
   name: 'GRBL',
@@ -45,10 +45,11 @@ export const grbl = {
 
   // Out of the cut before the spindle stops — see post/linuxcnc.js. The retract
   // goes through the modal tracker so it is not the second one in a row.
-  footer(w, { safeZ, spindleOn, modal }) {
+  footer(w, { safeZ, spindleOn, modal, endGcode }) {
     const z = modal ? modal.word('Z', safeZ) : `Z${num(safeZ)}`;
     if (z) w.line('G0', z);
     if (spindleOn) w.line('M5');
+    customBlock(w, endGcode, 'machine end');
     w.line('M2');
   },
 };

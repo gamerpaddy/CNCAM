@@ -47,6 +47,12 @@ const FLAT_LEVELLED = new Set(['clear2d', 'pocket', 'adaptive']);
  * raster, a spiral, a ring, a point.
  */
 const ICONS = {
+  // Not a cut: a block of text with a caret in front of it, which is what this
+  // operation is. Deliberately unlike every other icon in the row, because it
+  // is the one entry in the picker that produces no motion at all.
+  command:
+    '<rect x="2" y="4" width="20" height="16" rx="2" class="stroke"/>'
+    + '<path d="M6 9l3 3-3 3" class="stroke"/><path d="M12 15h6" class="stroke"/>',
   face:
     '<rect x="2" y="7" width="20" height="12" rx="1"/>'
     + '<path d="M4 10h16M4 13h16M4 16h16" class="stroke"/>',
@@ -142,6 +148,15 @@ const ICONS = {
  * @typedef {{ label, group, summary, when, cutter, icon }} StrategyCard
  */
 export const OP_CATALOG = {
+  command: {
+    group: 'Machine commands',
+    summary: 'Writes G-code you type straight into the program, where this '
+      + 'operation stands in the running order.',
+    when: 'A step the CAM cannot produce: a tool change that is not a T word, a '
+      + 'pause for the operator to move a clamp or measure a bore, a probe cycle '
+      + 'or a macro the control knows about and this app does not.',
+    cutter: 'None — it cuts nothing and moves nothing',
+  },
   face: {
     group: 'Prepare the stock',
     summary: 'Rasters the top of the billet flat.',
@@ -313,6 +328,9 @@ export const OP_CATALOG = {
 export const OP_GROUPS = [
   'Prepare the stock', 'Roughing', 'Profiles', 'Holes', 'Edges & marking',
   '3D finishing', 'Turning',
+  // Last, and on both machines: a command is not a stage of making a part, it
+  // is something you interleave with the stages. See strategies/command.js.
+  'Machine commands',
 ];
 
 /** Everything the picker needs about one strategy. */
@@ -361,6 +379,21 @@ export function describeIntent(op, tool) {
     : '';
 
   switch (op?.type) {
+    // A command has no depth, no cutter and no stepover, so the sentence every
+    // other operation gets — "this many passes of this deep with that cutter" —
+    // has nothing to say about it. What is worth reading back instead is how
+    // much G-code is in it and what its first line is, because the mistake this
+    // operation invites is an empty box or a block pasted into the wrong one.
+    case 'command': {
+      const lines = String(p.gcode ?? '').split(/\r?\n/)
+        .map((line) => line.trim()).filter(Boolean);
+      if (lines.length === 0) {
+        return 'Writes nothing — there is no G-code in this command yet.';
+      }
+      return `Writes ${plural(lines.length, 'line')} of G-code into the program `
+        + `here, starting "${lines[0].slice(0, 40)}". Nothing is checked and `
+        + 'nothing moves that these lines do not move.';
+    }
     case 'face':
       return `Skims ${mm(depth)} off the top with ${cutter}, stepping `
         + `${Math.round((p.stepover ?? 0.6) * 100)}% of its width between passes.`;

@@ -20,9 +20,25 @@ const KEY = 'cncam.settings';
 /**
  * @typedef {{ key, label, type, group, hint, options?, labels?, min?, max?, step? }} Setting
  */
-export const SETTING_GROUPS = ['Viewport', 'Simulation', 'Editing'];
+// Library last: it is the only group whose rows *do* something rather than
+// being a preference that is read back later.
+export const SETTING_GROUPS = ['Viewport', 'Simulation', 'Editing', 'Library'];
 
 export const SETTINGS = [
+  // --- library ---
+  {
+    key: 'resetToolLibrary',
+    label: 'Tool library',
+    group: 'Library',
+    type: 'action',
+    button: 'Reset to the built-in tools…',
+    hint: 'Deletes every catalogue you have made or imported in this browser, '
+      + 'along with any photographs on those cutters, and leaves the built-in '
+      + 'presets — which are the same in every browser and cannot be edited '
+      + 'away. Tools already in a project are not touched: a project keeps its '
+      + 'own copy. There is no undo, so export a catalogue you might want back.',
+  },
+
   // --- viewport ---
   {
     key: 'projection',
@@ -261,7 +277,11 @@ export const SETTINGS = [
   },
 ];
 
-const DEFAULTS = Object.fromEntries(SETTINGS.map((s) => [s.key, s.default]));
+// Actions carry no value, so they are kept out of the stored preferences
+// entirely — a key whose default is `undefined` would be written into the
+// settings blob on the first save and read back as a setting nobody set.
+const DEFAULTS = Object.fromEntries(
+  SETTINGS.filter((s) => s.type !== 'action').map((s) => [s.key, s.default]));
 
 let cache = null;
 

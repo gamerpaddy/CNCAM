@@ -992,6 +992,34 @@ export function removeUserTool(name, catalogId = null) {
   return writeCatalogs(catalogs);
 }
 
+/**
+ * Put the library back to the built-in presets and nothing else.
+ *
+ * The built-in catalogues cannot be edited, so "reset" cannot mean restoring
+ * them — they are the same in every browser and always have been. What it means
+ * is the other half: throwing away *your* drawers, which is the only part of
+ * the library that can end up in a state you want out of. A hundred imported
+ * cutters from a supplier's file, a drawer of test tools, a catalogue full of
+ * photographs eating the storage the projects need — this is the way back, and
+ * without it the only way was to delete them one card at a time.
+ *
+ * The legacy flat list goes with them. It is read once, on the first load after
+ * an upgrade, to become "My tools" — leaving it behind would mean the next
+ * reload quietly restored everything that was just deleted.
+ *
+ * @returns { catalogs, tools } — how much was thrown away
+ */
+export function resetCatalogs() {
+  const catalogs = loadCatalogs();
+  const thrown = {
+    catalogs: catalogs.length,
+    tools: catalogs.reduce((n, c) => n + c.tools.length, 0),
+  };
+  try { localStorage.removeItem(USER_KEY); } catch { /* nothing to remove */ }
+  writeCatalogs([emptyCatalog()]);
+  return thrown;
+}
+
 /** Every tool the user has, across every catalogue of theirs. */
 export function loadUserTools() {
   return loadCatalogs().flatMap((c) => c.tools);

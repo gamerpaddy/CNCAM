@@ -108,6 +108,19 @@ const FIELDS = [
       + 'with shaky arc support, or when you want every point in the file.',
   },
   { key: 'notes', label: 'Notes', type: 'text' },
+  {
+    key: 'startGcode', label: 'Start G-code', type: 'multiline',
+    hint: 'Written straight after the post\u2019s safety header, before the first '
+      + 'operation. The lines this machine wants first and no CAM can know: the '
+      + 'work offset it homes into, an air blast, a probe macro. Nothing here is '
+      + 'checked \u2014 it goes to the control exactly as typed.',
+  },
+  {
+    key: 'endGcode', label: 'End G-code', type: 'multiline',
+    hint: 'Written after the tool has retracted and the spindle has stopped, '
+      + 'before the end-of-program word. Where "G53 G0 Z0" to park the head '
+      + 'goes, so the vice is reachable when the program finishes.',
+  },
 ];
 
 function read(machine, key) {
@@ -245,6 +258,18 @@ export function openMachineManager(doc, { onDone } = {}) {
         doc.updateItem(machine, write(machine, field.key, input.value), `machine ${field.key}`);
         build();
       });
+    } else if (field.type === 'multiline') {
+      // A box rather than a field: these are programs, several lines long, and
+      // an <input> shows one line of them at a time with no way to see the rest.
+      input = el('textarea', { class: 'machine-gcode', rows: '4', spellcheck: 'false' });
+      input.value = value ?? '';
+      input.addEventListener('change', () => {
+        doc.updateItem(machine, write(machine, field.key, input.value), `machine ${field.key}`);
+        build();
+      });
+      // Full width, under its label rather than beside it: a four-line box in
+      // the right-hand column of a two-column row is forty characters wide.
+      return el('div', { class: 'machine-gcode-row' }, [el('label', {}, [label]), input]);
     } else if (field.type === 'checkbox') {
       input = el('input', { type: 'checkbox' });
       input.checked = !!value;

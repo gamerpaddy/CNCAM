@@ -184,6 +184,23 @@ export function createMachine(preset = {}) {
     // the machine, and switching machines no longer silently changes how the
     // last one's files would have been written. See post/core.js.
     arcs: merged.arcs !== false,
+    // What this machine wants said before the job and after it.
+    //
+    // Every shop has a few lines that belong to the machine and to nothing
+    // else: the WCS it homes into, an air blast, a probe macro, the M-code that
+    // opens the guard, `G53 G0 Z0` to park the head where the operator can
+    // reach the vice. None of that is CAM — the post cannot know it and no
+    // strategy produces it — and until now the only way to get it into a file
+    // was to open the .nc in an editor after every export, which is a step that
+    // gets forgotten exactly once.
+    //
+    // It belongs to the machine rather than to the project because that is what
+    // it describes: the same part run on the router and on the mill needs a
+    // different pair, and neither should follow the job to the other machine.
+    // Written verbatim — this is the one place in the post that does not check
+    // what it is emitting, which is the point of it.
+    startGcode: typeof merged.startGcode === 'string' ? merged.startGcode : '',
+    endGcode: typeof merged.endGcode === 'string' ? merged.endGcode : '',
     // Rotary axes for indexed 3+1 / 3+2 work, base → part. A plain 3-axis
     // machine has none; a machine that lists them can hold a tilted face under
     // the spindle without the operator re-fixturing. See engine/indexing.js.

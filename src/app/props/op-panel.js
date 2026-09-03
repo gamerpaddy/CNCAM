@@ -16,6 +16,7 @@ import { toolIcon, describeTool } from '../tool-shape.js';
 import { machineCanHold } from '../../doc/tool-library.js';
 import { paramRow, propRow } from './fields.js';
 import { resultSection } from './reports.js';
+import { snippetsFor, saveSnippet, deleteSnippet } from '../../doc/gcode-snippets.js';
 
 /**
  * The strategy, shown as what it is rather than as an entry in a dropdown.
@@ -77,6 +78,13 @@ export function opSections(doc, op, app) {
   const rows = [strategyRow(doc, op, app)];
   const intent = intentRow(doc, op);
   if (intent) rows.push(intent);
+  // A command has exactly one thing to set and no cutter to set it with, so it
+  // gets neither the tool row nor the tab bar: every tab on it would be a page
+  // of heights, stepovers and feeds that nothing reads. See the section below.
+  if (op.type === 'command') {
+    rows.push(...commandSection(doc, op, app));
+    return rows;
+  }
   rows.push(toolSelectRow(doc, op, app));
 
   // Regions are faces picked off the model, which is a milling idea: a turned
@@ -127,6 +135,137 @@ export function opSections(doc, op, app) {
     rows.push(el('h2', {}, [group.title]));
     for (const f of fields) rows.push(paramRow(doc, op, f, app));
   }
+  return rows;
+}
+
+/**
+ * The whole of a command operation: the lines, and the presets they come from.
+ *
+ * A monospaced box rather than a field, because what goes in it is a program
+ * and reading it back is half of trusting it. Nothing about it is validated —
+ * see engine/strategies/command.js for why that is the point — so the panel's
+ * job is to show exactly what will be written and where it will land.
+ */
+function commandSection(doc, op, app) {
+  const rows = [];
+  const machine = doc.machineRecord();
+  const text = String(op.params?.gcode ?? '');
+
+  const box = el('textarea', {
+    class: 'gcode-command',
+    rows: '8',
+    spellcheck: 'false',
+    placeholder: 'M5\nM0 (change to the 6mm cutter by hand, then Cycle Start)\nM3 S9000',
+  });
+  box.value = text;
+  // On change rather than on input: every keystroke would be an undo step, and
+  // an undo stack with one entry per character is an undo stack you cannot use.
+  box.addEventListener('change', () => {
+    if (box.value === text) return;
+    doc.updateItem(op, { params: { ...op.params, gcode: box.value } }, `edit ${op.name}`);
+  });
+  rows.push(box);
+  rows.push(el('div', { class: 'prop-hint' }, [
+    'Written into the program exactly as typed, where this operation stands in '
+    + 'the running order. Nothing here is checked against the machine, the '
+    + 'dialect or the part — that is what it is for.',
+  ]));
+
+  // --- presets -------------------------------------------------------------
+  //
+  // Kept in this browser and not in the project, because the block that stops
+  // the spindle for a hand tool change is the shop's and not this job's. See
+  // doc/gcode-snippets.js.
+  const saved = snippetsFor(machine);
+  const chooser = el('select', { class: 'gcode-preset-list' }, [
+    el('option', { value: '' }, [saved.length ? 'Choose a preset…' : 'No presets saved yet']),
+    ...saved.map((s) => el('option', { value: s.id }, [
+      // Which machine it belongs to, on the entry itself: two presets called
+      // "tool change" — one general and one for the router — are otherwise the
+      // same line twice, and picking the wrong one is a wrong M-code.
+      s.machineId ? `${s.name} — ${s.machineName || 'this machine'}` : s.name,
+    ])),
+  ]);
+  chooser.disabled = saved.length === 0;
+  const chosen = () => saved.find((s) => s.id === chooser.value) ?? null;
+
+  // Choosing does not load, and that is deliberate twice over: a select that
+  // acts the moment it changes cannot also be the thing Delete reads, and it
+  // makes browsing destructive — arrowing down five presets to see what is in
+  // them would overwrite the box five times.
+  const loadButton = el('button', {
+    title: 'Put this preset\u2019s lines in the box above',
+    onclick: () => {
+      const snippet = chosen();
+      if (!snippet) return app.ui?.setStatus?.('Choose a preset first', true);
+      // Replacing what is in the box is a real loss, so it is asked about — but
+      // only when there is something to lose, because asking on an empty box is
+      // a dialog in the way of the ordinary case.
+      if (box.value.trim() && !confirm(
+        `Replace the G-code in ${op.name} with the preset "${snippet.name}"?`)) return undefined;
+      doc.updateItem(op, { params: { ...op.params, gcode: snippet.gcode } },
+        `load ${snippet.name}`);
+      return app.ui?.setStatus?.(`"${snippet.name}" loaded into ${op.name}`);
+    },
+  }, ['Load']);
+  loadButton.disabled = saved.length === 0;
+
+  const deleteButton = el('button', {
+    class: 'danger',
+    title: 'Remove the chosen preset from this browser',
+    onclick: () => {
+      const snippet = chosen();
+      if (!snippet) return app.ui?.setStatus?.('Choose the preset to delete first', true);
+      if (!confirm(`Delete the preset "${snippet.name}"?\n\n`
+        + 'It goes out of this browser. Operations already using it keep their '
+        + 'own copy of the lines.')) return undefined;
+      deleteSnippet(snippet.id);
+      app.rerenderProps?.();
+      return app.ui?.setStatus?.(`"${snippet.name}" deleted`);
+    },
+  }, ['\u2715']);
+  deleteButton.disabled = saved.length === 0;
+
+  // Stacked rather than in the panel's usual two columns. The properties panel
+  // is 300px wide and a label takes a third of it, which left the preset list
+  // showing three characters of a name — and a list of presets you cannot read
+  // is a list you cannot choose from.
+  rows.push(el('div', { class: 'gcode-preset-block' }, [
+    el('label', {}, ['Presets']),
+    el('div', { class: 'gcode-preset-row' }, [chooser, loadButton, deleteButton]),
+  ]));
+
+  const forAll = el('input', { type: 'checkbox' });
+  const nameBox = el('input', { type: 'text', placeholder: 'Name this block' });
+  const save = el('button', {
+    title: 'Keep these lines for other projects — they are saved in this browser',
+    onclick: () => {
+      const name = nameBox.value.trim();
+      if (!name) return app.ui?.setStatus?.('Give the preset a name first', true);
+      if (!box.value.trim()) return app.ui?.setStatus?.('There is no G-code to save', true);
+      const scope = forAll.checked ? null : machine;
+      const snippet = saveSnippet(name, box.value, scope);
+      if (!snippet) {
+        return app.ui?.setStatus?.('Could not save it — browser storage is full or unavailable', true);
+      }
+      nameBox.value = '';
+      app.rerenderProps?.();
+      return app.ui?.setStatus?.(`"${name}" saved for `
+        + (scope ? scope.name : 'every machine'));
+    },
+  }, ['Save as preset']);
+  rows.push(el('div', { class: 'gcode-preset-block' }, [
+    el('label', {}, ['Save these lines as a preset']),
+    el('div', { class: 'gcode-preset-row' }, [nameBox, save]),
+    el('label', { class: 'toggle gcode-preset-scope' }, [forAll, 'For every machine']),
+  ]));
+  rows.push(el('div', { class: 'prop-hint' }, [
+    'Left unticked it is saved against ' + (machine?.name ?? 'this machine')
+    + ' alone and never offered on another. An M-code that opens the guard on '
+    + 'one control means something else on the next, so a preset only shows up '
+    + 'where it was saved.',
+  ]));
+
   return rows;
 }
 

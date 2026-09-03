@@ -1,7 +1,7 @@
 // LinuxCNC (rs274ngc) dialect. Tool changes (T..M6 + G43), canned drill
 // cycles (G98 G81/G83, G80 cancel), full safety header.
 
-import { num, spindleWord } from './format.js';
+import { num, spindleWord, customBlock } from './format.js';
 
 export const linuxcnc = {
   name: 'LinuxCNC',
@@ -107,13 +107,17 @@ export const linuxcnc = {
   // finished bore gets a witness mark down it. Every operation happens to end at
   // clearance today, so this costs nothing and is the only order that is safe
   // when one does not.
-  footer(w, { safeZ, spindleOn, modal }) {
+  footer(w, { safeZ, spindleOn, modal, endGcode }) {
     // Asked of the modal tracker rather than written flat, so the retract the
     // last operation already made is not made twice. Nothing modal survives a
     // canned cycle, so a program that ends on one still gets its retract.
     const z = modal ? modal.word('Z', safeZ) : `Z${num(safeZ)}`;
     if (z) w.line('G0', z);
     if (spindleOn) w.line('M5');
+    // After the retract and the stop, before the end of program: a block that
+    // parks the table must not be undone by a retract written after it, and
+    // nothing at all may come after M2. See doc/machines.js.
+    customBlock(w, endGcode, 'machine end');
     w.line('M2');
   },
 };

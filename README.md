@@ -180,6 +180,15 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
   different tools; the picture is what tells them apart. It is kept with the tool,
   so it travels into the catalogue, an exported library and the project.
 * Export the whole program or one operation at a time.
+* Each machine carries its own **start and end G-code** — the work offset it homes
+  into, an air blast, the `G53 G0 Z0` that parks the head where the vice is
+  reachable. Written verbatim, after the safety header and before the end of
+  program, and never followed to another machine.
+* A **Command** operation is nothing but G-code you type, placed in the running
+  order between the cuts: a tool change that is not a T word, a pause to move a
+  clamp, a probe macro. Blocks can be saved as presets — for one machine or for
+  all of them — and the presets are kept in the browser, so they outlive the job
+  they were first typed for.
 
 ## What it does not do
 

@@ -327,6 +327,30 @@ had three megabytes and silently dropped every mesh past it. A browser without a
 OPFS falls back to the old localStorage pair, and a session saved there is
 migrated on the first save. A **Clear** button discards everything and starts over.
 
+**Hand-written G-code.** Two places the app writes lines it does not understand,
+and one function (`post/format.js` `customBlock`) that decides how. A machine
+carries `startGcode` and `endGcode` (`doc/machines.js`): the first goes after the
+dialect's safety header — before it, and it would be read in whatever state the
+last program left — and the second inside each dialect's footer, after the
+retract and the spindle stop but before the end-of-program word, so a block that
+parks the head in machine coordinates is not undone by a retract written
+afterwards in work coordinates. A **command operation**
+(`engine/strategies/command.js`) is the same idea in the running order: an
+operation with no cutter, no geometry and no moves, whose CL carries a single
+`raw` event that the post writes where the operation stands. It is an operation
+rather than a note to edit the file, because being one is what puts it in the
+tree, the undo stack, the project and the reorder.
+
+After either block the post drops what it believed about position, the spindle
+and coolant, and keeps what it believed about the tool. The asymmetry is the
+point: restating S or M8 costs one word and is never wrong, while restating T
+after a hand tool change would swing the carousel straight after the operator
+fitted the cutter — which is the case the operation exists for. Coolant becomes
+*unknown* rather than off, so the footer does not assert an M9 for a pump it
+never started. Presets for these blocks live in `doc/gcode-snippets.js`, in the
+browser rather than the project, scoped either to one machine or to all — an
+M-code that opens a guard on one control means something else on the next.
+
 **Tool photographs** — a tool may carry `image`, a data URL of a photo of the
 real cutter (`app/tool-photo.js`), taken from the webcam or dropped in as a file.
 `toolIcon` returns it wherever a cutter is *identified* — the picker, the tree,

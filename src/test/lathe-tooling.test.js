@@ -528,6 +528,10 @@ test('every turning strategy generates something from its own defaults', () => {
     turnPart: '3mm parting blade',
   };
   for (const type of TURNING_OPS) {
+    // A command is in both machines' lists and is not a turning strategy: it
+    // has no cutter, no defaults and no moves, because it is a block of G-code
+    // somebody typed. See engine/strategies/command.js.
+    if (type === 'command') continue;
     assert.ok(toolFor[type], `${type} has no cutter named in this test`);
     const cl = generate(type, {}, toolFor[type]);
     // Boring is the one that legitimately produces nothing on a solid shaft —

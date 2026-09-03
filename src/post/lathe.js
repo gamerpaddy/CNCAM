@@ -26,7 +26,7 @@
 // in ZX (G18). Fitting them is a real thing to do later; emitting XY arc
 // centres into a ZX plane is not.
 
-import { num, spindleWord } from './format.js';
+import { num, spindleWord, customBlock } from './format.js';
 
 export const lathe = {
   name: 'Lathe (LinuxCNC)',
@@ -106,7 +106,7 @@ export const lathe = {
   // minefield across controls.
   drill: null,
 
-  footer(w, { safeX, spindleOn, modal }) {
+  footer(w, { safeX, spindleOn, modal, endGcode }) {
     // Cross-slide clear of the work first: a parting blade left in the groove
     // when the spindle stops is a blade the operator has to free by hand, and
     // anything still touching the bar gets a witness mark as it runs down.
@@ -120,6 +120,7 @@ export const lathe = {
     // wherever the tool happens to be sitting.
     w.line('G97');
     if (spindleOn) w.line('M5');
+    customBlock(w, endGcode, 'machine end');
     w.line('M2');
   },
 };

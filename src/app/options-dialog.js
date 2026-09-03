@@ -10,12 +10,14 @@ import {
   SETTINGS, SETTING_GROUPS, getSetting, setSetting, resetSettings,
 } from './settings.js';
 import { numberInput, parseNumber, formatNumber } from './number-input.js';
+import { resetCatalogs } from '../doc/tool-library.js';
+import { plural } from '../engine/text.js';
 
 /**
  * @param onChange called with (key, value) after every change, so the app can
  *   push it into the viewport straight away
  */
-export function openOptions({ onChange } = {}) {
+export function openOptions({ onChange, onStatus } = {}) {
   const dialog = el('dialog', { class: 'lib-dialog options-dialog' });
   const body = el('div', { class: 'lib-body options-body' });
 
@@ -23,6 +25,14 @@ export function openOptions({ onChange } = {}) {
     const groups = SETTING_GROUPS.map((group) => {
       const rows = SETTINGS.filter((s) => s.group === group).map((setting) => {
         const control = controlFor(setting, (value) => {
+          // An action has no value to store and nothing in the app to push it
+          // into: what it hands back is a sentence about what it did, which
+          // goes to the status line the way every other report does.
+          if (setting.type === 'action') {
+            if (value) onStatus?.(value);
+            build();
+            return;
+          }
           setSetting(setting.key, value);
           onChange?.(setting.key, value);
           // a change can enable or disable another row, so the group is rebuilt
@@ -56,7 +66,9 @@ export function openOptions({ onChange } = {}) {
         onclick: () => {
           if (!confirm('Put every option back to its default?')) return;
           resetSettings();
-          for (const setting of SETTINGS) onChange?.(setting.key, getSetting(setting.key));
+          for (const setting of SETTINGS) {
+            if (setting.type !== 'action') onChange?.(setting.key, getSetting(setting.key));
+          }
           build();
         },
       }, ['Reset to defaults']),
@@ -71,7 +83,42 @@ export function openOptions({ onChange } = {}) {
   return dialog;
 }
 
+/**
+ * The rows that are not preferences.
+ *
+ * An action row is a button that does something once, rather than a value read
+ * back later, so it is kept apart from the settings machinery entirely — see
+ * DEFAULTS in settings.js. Each one asks before it acts and says what it did.
+ */
+const ACTIONS = {
+  resetToolLibrary: () => {
+    const { catalogs, tools } = resetCatalogs();
+    if (tools === 0 && catalogs <= 1) {
+      return 'The library is already just the built-in tools.';
+    }
+    return `${plural(tools, 'tool')} in ${plural(catalogs, 'catalogue')} deleted — `
+      + 'the built-in presets are all that is left.';
+  },
+};
+
+const ACTION_PROMPTS = {
+  resetToolLibrary: 'Delete every tool catalogue you have made in this browser?\n\n'
+    + 'The built-in presets stay — they cannot be edited away. Your own drawers, '
+    + 'the cutters in them and any photographs on those cutters go, and this '
+    + 'cannot be undone. Tools already in a project keep their own copy.',
+};
+
 function controlFor(setting, commit) {
+  if (setting.type === 'action') {
+    return el('button', {
+      class: 'danger',
+      onclick: () => {
+        if (!confirm(ACTION_PROMPTS[setting.key] ?? 'Are you sure?')) return;
+        const said = ACTIONS[setting.key]?.();
+        commit(said);
+      },
+    }, [setting.button ?? 'Do it']);
+  }
   const value = getSetting(setting.key);
   if (setting.type === 'checkbox') {
     const box = el('input', { type: 'checkbox' });

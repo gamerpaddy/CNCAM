@@ -23,7 +23,7 @@
 import { MOVE_STRIDE, OP, FEED, feedRate, descentOf } from '../engine/cl.js';
 import { orientationKey } from '../engine/indexing.js';
 import { wrapPoint, inverseTime } from '../engine/wrap.js';
-import { Modal, LineWriter, num } from './format.js';
+import { Modal, LineWriter, num, customBlock } from './format.js';
 import { planArcs } from './arcs.js';
 
 export function buildProgram(dialect, ops, options = {}) {
@@ -115,6 +115,13 @@ export function buildProgram(dialect, ops, options = {}) {
   const cycleKey = (m, feeds2) => `${m.z}|${m.retractZ}|${m.peck}|${m.dwell}|${feeds2.plunge}`;
 
   dialect.header(w, options);
+  // The machine's own opening lines, after the dialect's header rather than
+  // before it: the header is what puts the control into millimetres, absolute
+  // and G17, and a hand-written block that runs before that is read in whatever
+  // state the last program left behind. The modal tracker is cleared after it,
+  // because those lines may have moved the machine and this post has no idea
+  // where to. See doc/machines.js.
+  if (customBlock(w, options.startGcode, 'machine start')) modal.reset();
 
   const useArcs = (options.arcs ?? true) && !!dialect.arcs;
   // How a straight move is written. A mill says X, Y and Z; a lathe says X and
@@ -169,6 +176,34 @@ export function buildProgram(dialect, ops, options = {}) {
       endCycle();
       if (e.type === 'comment') w.comment(e.text);
       if (e.type === 'feeds') feeds = e;
+      // A command operation: nothing but lines somebody typed, run in program
+      // order between the passes either side of it. Handled before the `silent`
+      // guard below, because a command operation has no moves at all and that
+      // guard exists to stop a *motionless* operation writing tool changes and
+      // spindle words — which is not this. See engine/strategies/command.js.
+      if (e.type === 'raw') {
+        if (customBlock(w, e.text, `command: ${op.name}`)) {
+          // The post has just written lines it does not understand, so what it
+          // believed about the machine is no longer evidence. Three of the four
+          // beliefs are dropped:
+          //
+          //   * position, because the block may have moved the machine and the
+          //     modal tracker would otherwise omit the words that bring it back;
+          //   * the spindle, because a block that pauses almost always stops it,
+          //     and restating S is one word and never wrong;
+          //   * coolant, for the same reason and at the same price. Null rather
+          //     than 'off' so the next operation states its mode whatever it is.
+          //
+          // The tool is deliberately *kept*. Forgetting it would make the next
+          // operation write a tool change — which is precisely what a command
+          // that performs a hand tool change exists to avoid, and on a machine
+          // with a changer it would swing the carousel straight after the
+          // operator fitted the cutter by hand.
+          modal.reset();
+          activeSpindle = null;
+          coolant = null;   // unknown, which is not the same as off — see the footer
+        }
+      }
       if (silent) return;
       if (e.type === 'tool' && e.tool !== activeTool) {
         // the options go through because whether the machine can change its own
@@ -464,12 +499,23 @@ export function buildProgram(dialect, ops, options = {}) {
   if (planeActive) { dialect.tiltedPlane?.cancel(w, modal); planeActive = false; }
   // Coolant off before the spindle stops and the tool retracts, always. A file
   // that ends with the pump still running leaves it running.
-  if (coolant !== 'off') (dialect.coolant ?? defaultCoolant)(w, { mode: 'off' }, options);
+  //
+  // Null is "this post no longer knows", which a command operation's lines
+  // leave behind, and it is not the same as on: writing M9 for a state the post
+  // never created put an M9 at the end of every program containing a hand tool
+  // change, in files where the pump was never asked for. What the block turned
+  // on, the block owns.
+  if (coolant != null && coolant !== 'off') {
+    (dialect.coolant ?? defaultCoolant)(w, { mode: 'off' }, options);
+  }
   // `modal` goes with it so the closing retract can be dropped when the tool is
   // already standing there — every milling program ended `G0 Z10 / G0 Z10`,
   // because the last operation retracts to clearance and the footer then said so
   // again, bypassing the modal tracker that would have known.
-  dialect.footer(w, { safeZ: safeZ(ops), safeX: safeX(ops), spindleOn, modal });
+  dialect.footer(w, {
+    safeZ: safeZ(ops), safeX: safeX(ops), spindleOn, modal,
+    endGcode: options.endGcode,
+  });
   return { text: w.toString(), lineMap };
 }
 

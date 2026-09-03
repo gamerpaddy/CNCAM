@@ -210,9 +210,13 @@ export function opStatus(doc, op) {
   return {
     ...stats,
     stale,
-    // an operation that emitted nothing is a problem whether or not the
-    // strategy thought to say so
-    level: stats.empty || stats.warnings.length ? 'warn' : stale ? 'stale' : 'ok',
+    // An operation that emitted nothing is a problem whether or not the
+    // strategy thought to say so — unless it is a command, where emitting no
+    // motion is the entire point and an empty box is the only thing that can
+    // actually be wrong. That one warns for itself, from the strategy.
+    // See engine/strategies/command.js.
+    level: (stats.empty && op.type !== 'command') || stats.warnings.length ? 'warn'
+      : stale ? 'stale' : 'ok',
     timeText: formatTime(stats.seconds),
     lengthText: formatLength(stats.cutLength),
   };
@@ -476,6 +480,12 @@ function estimatedPerimeter(doc, op) {
 /** Why an operation cannot be generated at all, or null if it can. */
 export function opBlockedReason(doc, op) {
   if (!op.enabled) return 'disabled';
+  // A command is lines of G-code, not a cut: it wants no cutter, no model and
+  // no stock, and it is the one operation that can be the whole program. Only
+  // being empty stops it. See engine/strategies/command.js.
+  if (op.type === 'command') {
+    return String(op.params?.gcode ?? '').trim() ? null : 'no G-code in it yet';
+  }
   if (!op.toolId) return 'no tool assigned';
   if (!doc.project.tools.some((t) => t.id === op.toolId)) return 'its tool was deleted';
   if (doc.project.models.length === 0) return 'no model imported';

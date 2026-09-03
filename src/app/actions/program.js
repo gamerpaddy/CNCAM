@@ -19,7 +19,7 @@ import { checkPost, rapidCutFinding } from '../../engine/backplot.js';
 const MAX_CHECKED_PROGRAM = 2_000_000;
 import { transformMesh } from '../../engine/setup.js';
 import { turningProfile, barFromStock } from '../../engine/lathe.js';
-import { estimateSeconds } from '../../engine/toolpath.js';
+import { estimateSeconds, generateToolpath } from '../../engine/toolpath.js';
 import { orientationFor, indexingWarnings } from '../../engine/indexing.js';
 import { wrapFor, wrapWarnings, wrapExtent, linearExtent } from '../../engine/wrap.js';
 import { buildGcode, postsFor, defaultPostFor } from '../../post/index.js';
@@ -71,6 +71,16 @@ export function makeProgramActions(ctx, space) {
       for (const op of setup.operations) {
         const tool = doc.project.tools.find((t) => t.id === op.toolId);
         if (!op.enabled) { disabled++; continue; }
+        // A command has no geometry to work from, so it does not go to the
+        // worker pool: there is nothing to compute and nothing to transfer. It
+        // still becomes a toolpath, because being one is what puts it in the
+        // program, the tree and the running order. See strategies/command.js.
+        if (op.type === 'command') {
+          doc.toolpaths.set(op.id, generateToolpath({ type: 'command', params: op.params }));
+          doc.fingerprints.set(op.id, opFingerprint(doc, op, setup));
+          jobs.push(Promise.resolve());
+          continue;
+        }
         if (!tool || !stock) {
           // an op that can no longer be generated must not keep showing the
           // path it produced back when it could
@@ -187,8 +197,14 @@ export function makeProgramActions(ctx, space) {
       // that as "cut nothing" reported a spot drill that spotted seven holes
       // and a thread mill that cut three threads as having done nothing at all.
       // The two are counted apart and said apart.
+      //
+      // And a command is not in this question at all. It is lines of G-code,
+      // so cutting nothing is not a failure to explain — it is the whole
+      // description of the operation, and reporting it as one made every
+      // program with a hand tool change in it announce a problem that was not
+      // there. See engine/strategies/command.js.
       const generated = [...doc.allOperations()]
-        .filter(({ op }) => op.enabled && doc.toolpaths.has(op.id))
+        .filter(({ op }) => op.enabled && doc.toolpaths.has(op.id) && op.type !== 'command')
         .map(({ op }) => ({ op, status: opStatus(doc, op) }));
       const barren = generated.filter(({ status }) => status?.empty).map(({ op }) => op.name);
       const flagged = generated
@@ -821,6 +837,10 @@ export function makeProgramActions(ctx, space) {
       // The dialect has the final say either way — post/core.js will not write
       // an arc for a post that cannot read one. See doc/machines.js.
       arcs: machine?.arcs !== false,
+      // What this machine wants said before the job and after it, written
+      // verbatim. See doc/machines.js and post/format.js customBlock.
+      startGcode: machine?.startGcode ?? '',
+      endGcode: machine?.endGcode ?? '',
     };
   }
 

@@ -81,6 +81,7 @@ export function makeActions(ctx) {
         // some of them change what the panels draw, not just the viewport
         if (key === 'hintStyle') ctx.rerenderProps?.();
       },
+      onStatus: (message, isError = false) => ctx.ui.setStatus(message, isError),
     });
   }
 

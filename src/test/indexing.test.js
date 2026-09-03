@@ -21,7 +21,7 @@ import {
 import { createMachine, defaultMachines } from '../doc/machines.js';
 import { rotationMatrix, applyMatrix, transposeMatrix } from '../engine/setup.js';
 import { createSetup } from '../doc/schema.js';
-import { generateToolpath, MILLING_OPS } from '../engine/toolpath.js';
+import { generateToolpath, MILLING_OPS, BOTH_MACHINES } from '../engine/toolpath.js';
 import { defaultParamsFor } from '../engine/op-defaults.js';
 import { eachMove, OP, FEED } from '../engine/cl.js';
 import { buildGcode } from '../post/index.js';
@@ -417,6 +417,9 @@ function feedMoves(text) {
 test('indexing leaves every milling toolpath byte-for-byte unchanged', () => {
   const orientations = [[90, 0, 0], [0, 90, 0], [45, 0, 30], [179.999, 0, 0]];
   for (const type of MILLING_OPS) {
+    // A command emits no moves at all — it is lines of G-code, not a cut — so
+    // there is no toolpath for indexing to leave unchanged. See BOTH_MACHINES.
+    if (BOTH_MACHINES.has(type)) continue;
     const { tool, mesh, params } = sweepInputs(type);
     const cl = generateToolpath({ type, name: type, tool, mesh, stock: SWEEP_STOCK, params, fixtures: [] });
     assert.ok(cl.count > 0, `${type} must cut something on the sweep fixture`);

@@ -1863,3 +1863,41 @@ kbd {
 .proj-size { flex: 0 0 70px; font-family: Consolas, monospace; }
 .proj-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-version button { padding: 1px 6px; font-size: 11px; }
+
+/* --- hand-written G-code: the command operation and a machine's own blocks --- */
+
+/* Monospaced, because what goes in these is a program and columns of words are
+   how a program is read. Wide as the panel, tall enough that a typical block —
+   three or four lines — is on screen without scrolling. */
+.gcode-command,
+.machine-gcode {
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+.gcode-command:focus,
+.machine-gcode:focus { outline: none; border-color: var(--accent); }
+.gcode-command { margin: 8px 0 4px; }
+
+/* Under its label rather than beside it: a four-line box in the right-hand
+   column of a two-column property row is forty characters wide. */
+.machine-gcode-row { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
+.machine-gcode-row > label { font-size: 11px; color: var(--fg-dim); }
+
+/* Stacked, not in the panel's two columns: the properties panel is 300px wide
+   and a label eats a third of it, which left the preset list showing three
+   characters of a name. */
+.gcode-preset-block { display: flex; flex-direction: column; gap: 3px; margin: 8px 0; }
+.gcode-preset-block > label { font-size: 11px; color: var(--fg-dim); }
+.gcode-preset-row { display: flex; gap: 4px; align-items: center; min-width: 0; }
+.gcode-preset-row > select,
+.gcode-preset-row > input { flex: 1; min-width: 0; }
+.gcode-preset-row > button { flex: 0 0 auto; white-space: nowrap; }
+.gcode-preset-scope { margin-top: 2px; }

@@ -10,6 +10,7 @@
 import { test, assert } from './runner.js';
 import {
   IMPLEMENTED_OPS, MILLING_OPS, TURNING_OPS, OP_LABELS, opsForMode,
+  BOTH_MACHINES,
 } from '../engine/toolpath.js';
 import { OP_CATALOG, OP_GROUPS, strategyCard } from '../app/op-catalog.js';
 import { shortcuts, shortcutGroups, matchesShortcut, firesWhileTyping } from '../app/shortcuts.js';
@@ -33,11 +34,18 @@ test('every implemented strategy is described, grouped and drawn', () => {
   }
 });
 
-test('every strategy belongs to exactly one machine', () => {
+test('every strategy belongs to one machine, or is named as belonging to both', () => {
+  // A turning operation in a milling setup is meaningless and the pickers must
+  // never offer one, which is what this guards. The single exception is named
+  // rather than tolerated: a command is a block of G-code somebody typed, so it
+  // is not about what is being cut and appears in both lists. See BOTH_MACHINES.
   const both = IMPLEMENTED_OPS.filter((t) => MILLING_OPS.includes(t) && TURNING_OPS.includes(t));
-  assert.eq(both.length, 0, `${both.join(', ')} claim to be both`);
-  assert.eq(MILLING_OPS.length + TURNING_OPS.length, IMPLEMENTED_OPS.length,
-    'and none is left out of both');
+  assert.eq(both.join(','), [...BOTH_MACHINES].join(','), 'only the named ones are in both lists');
+  assert.eq(MILLING_OPS.length + TURNING_OPS.length - BOTH_MACHINES.size,
+    IMPLEMENTED_OPS.length, 'and none is left out of both');
+  for (const type of BOTH_MACHINES) {
+    assert.ok(IMPLEMENTED_OPS.includes(type), `${type} is named for both machines but does not exist`);
+  }
   assert.eq(opsForMode('turn').join(','), TURNING_OPS.join(','));
   assert.eq(opsForMode('mill').join(','), MILLING_OPS.join(','));
   assert.eq(opsForMode(undefined).join(','), MILLING_OPS.join(','), 'an old setup mills');

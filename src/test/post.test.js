@@ -4,6 +4,7 @@ import { buildGcode, postsFor, defaultPostFor } from '../post/index.js';
 import { makeBox, makeTube } from './fixtures.js';
 import { CLBuilder, FEED, feedRate, descentOf } from '../engine/cl.js';
 import { applyCutting } from '../engine/cutting.js';
+import { generateCommand } from '../engine/strategies/command.js';
 
 const TOOL = {
   number: 3, diameter: 6, spindleRpm: 9000, feedCut: 800, feedPlunge: 300,
@@ -379,4 +380,111 @@ test('and a fixed-rpm lathe still divides by the S word it wrote', () => {
   assert.ok(text.includes('G97 S1200'), 'a plain rpm is stated');
   const feeds = [...text.matchAll(/F([\d.]+)/g)].map((m) => Number(m[1]));
   assert.close(feeds[0], 0.1, 1e-6, `120 mm/min at 1200 rpm is 0.1 mm/rev, not ${feeds[0]}`);
+});
+
+test('a machine writes its own lines before the job and after it', () => {
+  // Not CAM and not a dialect: the WCS a machine homes into, an air blast, the
+  // G53 that parks the head where the vice is reachable. Placement is the whole
+  // of this — a start block before the safety header is read in whatever state
+  // the last program left, and an end block after the retract is undone by it.
+  const cl = new CLBuilder();
+  cl.toolChange(1);
+  cl.spindle(9000);
+  cl.rapid(0, 0, 5);
+  cl.cut(10, 0, -1);
+  const { text } = buildGcode('linuxcnc', [{ name: 'cut', cl: cl.finish() }], {
+    startGcode: 'G54\nM7',
+    endGcode: 'G53 G0 Z0',
+  });
+  const lines = text.split('\n');
+  const at = (needle) => lines.findIndex((l) => l.includes(needle));
+
+  assert.ok(at('G21 G90') < at('G54'), 'the start block follows the safety header');
+  assert.ok(at('G54') < at('T1 M6'), 'and precedes the first operation');
+  assert.ok(at('M5') < at('G53 G0 Z0'), 'the end block follows the spindle stop');
+  assert.ok(at('G53 G0 Z0') < at('M2'), 'and precedes the end of program');
+  assert.ok(at('(machine start)') >= 0 && at('(machine end)') >= 0,
+    'both are labelled, so the operator can see which lines are not CAM');
+});
+
+test('a command operation writes its lines where it stands, and nowhere else', () => {
+  // The point of the operation is that nothing is checked and nothing is moved
+  // that the lines do not move — so what is tested is placement and what the
+  // post believes afterwards, which is the part that can go wrong silently.
+  const first = new CLBuilder();
+  first.toolChange(1);
+  first.spindle(9000);
+  first.rapid(0, 0, 5);
+  first.cut(10, 0, -1);
+
+  const second = new CLBuilder();
+  second.toolChange(1);
+  second.spindle(9000);
+  second.rapid(0, 0, 5);
+  second.cut(20, 0, -1);
+
+  const { text } = buildGcode('linuxcnc', [
+    { name: 'rough', cl: first.finish() },
+    { name: 'swap the head', cl: generateCommand({ params: { gcode: 'M5\nM0 (fit the 12mm)' } }) },
+    { name: 'finish', cl: second.finish() },
+  ]);
+  const lines = text.split('\n');
+  const at = (needle) => lines.findIndex((l) => l.includes(needle));
+
+  assert.ok(at('(command: swap the head)') > at('(operation: rough)'),
+    'the block lands after the operation before it');
+  assert.ok(at('M0 (fit the 12mm)') < at('(operation: finish)'),
+    'and before the one after it');
+
+  // The tool is *not* restated. A command that performs a hand tool change
+  // exists to avoid a T word, and writing one straight after the operator
+  // fitted the cutter would swing the carousel on a machine that has one.
+  assert.eq(text.match(/^T1 M6$/gm).length, 1, 'the tool is stated once, not again after the block');
+  // The spindle is, because a block that pauses nearly always stops it and one
+  // extra S word is never wrong.
+  assert.eq(text.match(/^M3 S9000$/gm).length, 2, 'the spindle is restated after the block');
+
+  // An empty command says so rather than posting a silent nothing.
+  const empty = generateCommand({ params: { gcode: '   ' } });
+  assert.ok(empty.notes.some((n) => n.level === 'warn'), 'an empty command warns');
+});
+
+test('a command block leaves the post honest about what it no longer knows', () => {
+  // The lines are not understood, so three of the four things the post believed
+  // about the machine are dropped and one is kept. The one kept is the tool —
+  // see the test above. These are the two that must *not* be asserted.
+  const cutting = new CLBuilder();
+  cutting.toolChange(1);
+  cutting.spindle(9000);
+  cutting.coolant('flood');
+  cutting.rapid(0, 0, 5);
+  cutting.cut(10, 0, -1);
+
+  const withCommand = buildGcode('linuxcnc', [
+    { name: 'pause', cl: generateCommand({ params: { gcode: 'M0 (measure the bore)' } }) },
+  ]).text;
+  assert.ok(!/^M9$/m.test(withCommand),
+    'no M9 for coolant the post never turned on — the block owns what the block started');
+
+  // But an operation that did ask for coolant still gets it turned off.
+  const withCoolant = buildGcode('linuxcnc', [
+    { name: 'cut', cl: cutting.finish() },
+  ]).text;
+  assert.ok(/^M9$/m.test(withCoolant), 'a program that ran the pump still stops it');
+
+  // And an operation after a command restates its coolant rather than assuming
+  // the block left it alone: a tool-change block that writes M9 would otherwise
+  // leave the next pass running dry with nothing saying so.
+  const after = new CLBuilder();
+  after.toolChange(1);
+  after.spindle(9000);
+  after.coolant('flood');
+  after.rapid(0, 0, 5);
+  after.cut(10, 0, -1);
+  const both = buildGcode('linuxcnc', [
+    { name: 'first', cl: cutting.finish() },
+    { name: 'swap', cl: generateCommand({ params: { gcode: 'M5\nM9\nM0 (fit the 12mm)' } }) },
+    { name: 'second', cl: after.finish() },
+  ]).text;
+  assert.eq(both.match(/^M8$/gm).length, 2, 'coolant is restated after the block');
 });

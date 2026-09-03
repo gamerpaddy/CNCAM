@@ -5,6 +5,7 @@ import {
   MOVE_STRIDE, OP, FEED, eachMove, syncTrack, rapidRates, rapidSeconds, feedRate, descentOf,
 } from './cl.js';
 import { fixtureTop } from './fixtures.js';
+import { generateCommand } from './strategies/command.js';
 import { generateFace } from './strategies/face.js';
 import { generateContour } from './strategies/contour.js';
 import { generateClear } from './strategies/clear2d.js';
@@ -24,6 +25,11 @@ import {
 } from './strategies/turning.js';
 
 const strategies = {
+  // Not a strategy at all — a block of G-code you typed, placed in the running
+  // order. In here because everything downstream (generate, the tree, the
+  // program, the export) works on operations, and being one is what makes it
+  // survive a reorder and a save. See strategies/command.js.
+  command: generateCommand,
   face: generateFace,
   contour2d: generateContour,
   pocket: generatePocket,
@@ -59,12 +65,26 @@ const strategies = {
  * grooves and threads that need finished diameters to sit on, part it off last.
  */
 export const TURNING_OPS = [
+  'command',
   'turnFace', 'turnDrill', 'turnBore', 'turnRough', 'turnFinish',
   'turnGroove', 'turnThread', 'turnPart',
 ];
 
+/**
+ * The operations that belong to both machines.
+ *
+ * There is one, and it is the exception that proves the rule above: a command
+ * is a block of G-code somebody typed, so it is not about what is being cut and
+ * has no reason to pick a side. Named as a set rather than by leaving it out of
+ * `TURNING_OPS`, because the two lists are derived from each other — put it in
+ * one and it is filtered out of the other, which is how it first appeared on
+ * the lathe alone.
+ */
+export const BOTH_MACHINES = new Set(['command']);
+
 export const IMPLEMENTED_OPS = Object.keys(strategies);
-export const MILLING_OPS = IMPLEMENTED_OPS.filter((t) => !TURNING_OPS.includes(t));
+export const MILLING_OPS = IMPLEMENTED_OPS.filter(
+  (t) => !TURNING_OPS.includes(t) || BOTH_MACHINES.has(t));
 
 /** The strategies a setup of this mode may use. */
 export function opsForMode(mode) {
@@ -72,6 +92,7 @@ export function opsForMode(mode) {
 }
 
 export const OP_LABELS = {
+  command: 'Command (G-code)',
   face: 'Face',
   contour2d: 'Contour',
   pocket: 'Pocket',
@@ -120,7 +141,9 @@ export const OP_LABELS = {
  * engine/fixtures.js), so it is left alone.
  */
 function clampSafeArgs(args) {
-  if (TURNING_OPS.includes(args.type)) return args;
+  // A command has no clearance plane to raise — it has no moves at all — and a
+  // turning op has no overhead traverse to raise one for.
+  if (BOTH_MACHINES.has(args.type) || TURNING_OPS.includes(args.type)) return args;
   const clamp = fixtureTop(args.fixtures);
   if (!clamp) return args;
   const floor = clamp.z + 3;
