@@ -755,7 +755,12 @@ export function openToolWizard({
   });
 
   dialog.append(
-    el('h2', {}, [editing ? `Edit T${editing.number} ${editing.name}` : 'New tool']),
+    // A catalogue entry has no tool number — that belongs to the project it is
+    // pulled into, not to the drawer it sits in — so editing one says its name
+    // rather than "Edit Tundefined". See doc/tool-library.js.
+    el('h2', {}, [editing
+      ? `Edit ${editing.number ? `T${editing.number} ` : ''}${editing.name}`
+      : 'New tool']),
     el('div', { class: 'wiz-body' }, [
       el('div', { class: 'wiz-families' }, familyCards),
       el('div', { class: 'wiz-columns' }, [

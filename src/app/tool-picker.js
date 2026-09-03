@@ -29,9 +29,13 @@ import { el } from './layout.js';
 import { toolIcon, describeTool } from './tool-shape.js';
 import {
   presetsFor, userCatalogsFor, removeUserTool, machineCanHold, BUILTIN_CATALOGS,
-  catalogById, createCatalog, renameCatalog, deleteCatalog,
+  catalogById, createCatalog, renameCatalog, deleteCatalog, saveUserTool,
+  loadCatalogs, DEFAULT_CATALOG,
   serializeLibrary, deserializeCatalog,
 } from '../doc/tool-library.js';
+import { openContextMenu } from './context-menu.js';
+import { openToolWizard } from './tool-wizard.js';
+import { isPhoto, pickPhotoFile, capturePhoto } from './tool-photo.js';
 
 const ALL = 'all';
 
@@ -120,6 +124,8 @@ export function openToolPicker({
       nodes.push(el('div', { class: 'lib-group' }, [
         el('h3', {}, [group.title, el('span', { class: 'lib-group-count' }, [` ${visible.length}`])]),
         el('div', { class: 'lib-grid' }, visible.map((tool) => card(tool, widest, {
+          catalogId: group.catalogId ?? null,
+          catalogName: group.title,
           onDelete: group.catalogId
             ? () => {
               removeUserTool(tool.name, group.catalogId);
@@ -158,7 +164,7 @@ export function openToolPicker({
    * The whole card is the label, so clicking anywhere on it ticks the box —
    * a checkbox you have to hit exactly is a checkbox you miss.
    */
-  function card(tool, widest, { onDelete }) {
+  function card(tool, widest, { onDelete, catalogId = null, catalogName = '' }) {
     const box = el('input', { type: 'checkbox', class: 'lib-check' });
     checkboxes.push({ box, tool });
 
@@ -201,7 +207,162 @@ export function openToolPicker({
       dialog.close();
       onAdd([tool]);
     });
+    node.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openContextMenu(e, menuForCard(tool, catalogId, catalogName));
+    });
     return node;
+  }
+
+  /**
+   * What you can do to a cutter in the library, on the card it is on.
+   *
+   * Right-clicking one did nothing at all, and every way of changing a tool was
+   * somewhere else: pull it into a project, correct it there, save it back,
+   * delete the old entry. The card is where you are looking when you decide a
+   * tool is wrong, so this is where the answer belongs.
+   *
+   * The two kinds of card get different menus, because they are genuinely
+   * different things: your own catalogue entries can be changed, and the
+   * built-in presets cannot be, by anything, ever. So a preset is not offered a
+   * greyed-out Edit — it is offered the copy that would be editable.
+   */
+  function menuForCard(tool, catalogId, catalogName) {
+    const add = {
+      label: 'Add to the project',
+      hint: 'The same as ticking it and pressing Add — double-clicking does it too',
+      onclick: () => { dialog.close(); onAdd([tool]); },
+    };
+    if (!catalogId) {
+      return [
+        add,
+        { separator: true },
+        {
+          label: 'Copy to my library',
+          hint: 'Built-in presets cannot be changed — a copy in your own catalogue can',
+          onclick: () => copyToMine(tool, false),
+        },
+        {
+          label: 'Copy to my library and edit…',
+          hint: 'The copy, opened in the builder',
+          onclick: () => copyToMine(tool, true),
+        },
+      ];
+    }
+    const others = loadCatalogs().filter((c) => c.id !== catalogId);
+    return [
+      add,
+      { separator: true },
+      { label: 'Edit…', onclick: () => editCatalogTool(tool, catalogId, catalogName) },
+      {
+        label: 'Duplicate',
+        hint: `A second copy in ${catalogName}, to change without losing this one`,
+        onclick: () => {
+          const copy = { ...tool, name: uniqueName(`${tool.name} copy`, catalogId) };
+          saveUserTool(copy, catalogId);
+          say(`${copy.name} added to ${catalogName}`);
+          refresh();
+        },
+      },
+      // Moving a cutter between drawers is most of what having drawers is for:
+      // a special that turned out to be general belongs in the carousel now.
+      ...others.map((c) => ({
+        label: `Copy to ${c.name}`,
+        onclick: () => {
+          saveUserTool({ ...tool, name: uniqueName(tool.name, c.id) }, c.id);
+          say(`${tool.name} copied to ${c.name}`);
+          refresh();
+        },
+      })),
+      { separator: true },
+      {
+        label: isPhoto(tool.image) ? 'Replace the photo…' : 'Add a photo…',
+        hint: 'A picture of the real cutter, shown instead of the drawing',
+        onclick: () => setPhoto(tool, catalogId, catalogName, 'file'),
+      },
+      {
+        label: 'Photograph it…',
+        hint: 'Hold the cutter up to the webcam',
+        onclick: () => setPhoto(tool, catalogId, catalogName, 'camera'),
+      },
+      ...(isPhoto(tool.image) ? [{
+        label: 'Remove the photo',
+        onclick: () => setPhoto(tool, catalogId, catalogName, null),
+      }] : []),
+      { separator: true },
+      {
+        label: `Remove from ${catalogName}`, danger: true,
+        onclick: () => {
+          if (!confirm(`Remove ${tool.name} from ${catalogName}?\n\n`
+            + 'It goes out of this browser’s library. Projects already using it '
+            + 'keep their own copy, and the built-in presets are untouched.')) return;
+          removeUserTool(tool.name, catalogId);
+          say(`${tool.name} removed from ${catalogName}`);
+          refresh();
+        },
+      },
+    ];
+  }
+
+  /**
+   * Edit an entry in place.
+   *
+   * The wizard is the same dialog the tool was built in, and what comes back is
+   * a full tool record — with an id and a number, which a catalogue entry does
+   * not have: those belong to the project it is pulled into. So they are
+   * dropped on the way back in, and a rename takes the old entry with it, since
+   * `saveUserTool` matches on the name and would otherwise leave the cutter in
+   * the drawer twice under two names.
+   */
+  function editCatalogTool(tool, catalogId, catalogName) {
+    openToolWizard({
+      machine,
+      tool,
+      onCreate: (next) => {
+        const { id, number, ...record } = next;
+        if (record.name !== tool.name) removeUserTool(tool.name, catalogId);
+        saveUserTool(record, catalogId);
+        say(`${record.name} updated in ${catalogName} — ${describeTool(record)}`);
+        refresh();
+      },
+    });
+  }
+
+  /** A preset copied into a drawer you own — optionally straight into the builder. */
+  function copyToMine(tool, thenEdit) {
+    const mine = loadCatalogs();
+    const target = mine.find((c) => c.id === DEFAULT_CATALOG) ?? mine[0];
+    if (!target) return say('Could not reach your library', true);
+    const copy = { ...tool, name: uniqueName(tool.name, target.id) };
+    if (!saveUserTool(copy, target.id)) {
+      return say('Could not save to your library — browser storage is full or unavailable', true);
+    }
+    say(`${copy.name} copied to ${target.name}`);
+    refresh();
+    if (thenEdit) editCatalogTool(copy, target.id, target.name);
+    return undefined;
+  }
+
+  function setPhoto(tool, catalogId, catalogName, source) {
+    const write = (image) => {
+      saveUserTool({ ...tool, image }, catalogId);
+      say(image
+        ? `${tool.name} in ${catalogName} now shows its photo`
+        : `${tool.name} is drawn from its numbers again`);
+      refresh();
+    };
+    if (source === null) return write(null);
+    const onError = (message) => say(message, true);
+    return (source === 'camera' ? capturePhoto({ onError }) : pickPhotoFile({ onError }))
+      .then((image) => { if (image) write(image); });
+  }
+
+  /** A name nothing in that drawer already has — saving on top of one replaces it. */
+  function uniqueName(base, catalogId) {
+    const taken = new Set((catalogById(catalogId)?.tools ?? []).map((t) => t.name));
+    if (!taken.has(base)) return base;
+    const stem = base.replace(/ \d+$/, '');
+    for (let n = 2; ; n++) if (!taken.has(`${stem} ${n}`)) return `${stem} ${n}`;
   }
 
   // --- the catalogue bar ---------------------------------------------------

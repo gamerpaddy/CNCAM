@@ -48,7 +48,17 @@ export function openContextMenu(event, items) {
     if (!item.disabled) buttons.push(button);
   }
 
-  document.body.append(menu);
+  // Into the open dialog, when there is one.
+  //
+  // A modal <dialog> is in the browser's top layer, and everything outside it
+  // paints behind the backdrop no matter what z-index it carries. So a menu
+  // appended to the body from inside a dialog — right-clicking a cutter in the
+  // tool library, say — was built, positioned and dismissible, and completely
+  // invisible: the click looked like it had done nothing, which is exactly how
+  // "there is no context menu here" looks. The menu is `position: fixed`, so
+  // moving it inside the dialog costs nothing.
+  const dialogs = document.querySelectorAll('dialog[open]');
+  (dialogs[dialogs.length - 1] ?? document.body).append(menu);
   position(menu, event);
 
   // keyboard: Up/Down/Enter/Escape, so the menu is usable without the mouse
