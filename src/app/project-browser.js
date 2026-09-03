@@ -139,15 +139,47 @@ export function openProjectBrowser({
         title: meta.versions.length < 2
           ? 'The only version left — delete the project instead'
           : `Delete v${v.v}`,
-        onclick: async () => {
-          if (!(await deleteVersion(meta.id, v.v))) {
-            onStatus?.('That is the only version left — delete the project instead', true);
-            return;
-          }
-          refresh();
-        },
+        onclick: () => removeVersion(meta, v),
       }, ['✕']),
     ]);
+  }
+
+  /**
+   * Throw one version away — asked about first.
+   *
+   * Deleting the project asks; deleting a version did not, and it is the same
+   * loss on a smaller scale and behind a smaller button. A ✕ sitting between
+   * Open and Download on a dense row is exactly the button a mis-aimed click
+   * lands on, and there is no undo here: the store is the only copy of that
+   * version unless it has been downloaded. So it says which one, how old it is
+   * and how big — a history of eight rows is unreadable without them — and it
+   * checks the "only version left" rule before asking, rather than asking a
+   * question whose answer turns out not to matter.
+   */
+  async function removeVersion(meta, v) {
+    if (meta.versions.length < 2) {
+      onStatus?.('That is the only version left — delete the project instead', true);
+      return;
+    }
+    const newest = v.v === meta.versions[0].v;
+    if (!confirm(
+      `Delete ${meta.name} v${v.v}, saved ${when(v.at)} (${size(v.bytes)})?
+
+`
+      + (newest
+        ? `This is the newest version, so Open on ${meta.name} will give you `
+          + `v${meta.versions[1].v} instead.
+
+`
+        : '')
+      + 'It cannot be undone, and this browser is the only copy unless you have '
+      + 'downloaded it.')) return;
+    if (!(await deleteVersion(meta.id, v.v))) {
+      onStatus?.('That is the only version left — delete the project instead', true);
+      return;
+    }
+    await refresh();
+    onStatus?.(`${meta.name} v${v.v} deleted`);
   }
 
   function toggle(id) {
