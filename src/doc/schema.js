@@ -9,7 +9,9 @@ import { defaultMachines, MACHINE_KINDS } from './machines.js';
 // v3 → v4: the project carries machines, not just a post id. A post is how a
 // move is spelled; a machine is how far the table goes, how fast a rapid
 // really is and what the spindle will turn — see doc/machines.js.
-export const PROJECT_VERSION = 4;
+// v4 → v5: whether to post arcs is one of those machine facts too, and moved
+// off the project's post options onto each machine.
+export const PROJECT_VERSION = 5;
 
 let counter = 0;
 export function uid(prefix) {
@@ -49,14 +51,15 @@ export function createProject(name = 'Untitled') {
 /**
  * Post options a user can tune.
  *
- * Arcs are on because they are smaller and smoother everywhere they fit, and
- * off is here because "everywhere" is not quite everywhere: a controller with a
- * shaky G2/G3 implementation, or a shop that wants to read every point in the
- * file, is better served by the chords the toolpath was planned as.
+ * Whether to post arcs at all used to live here as well. It is a fact about the
+ * controller — one takes G2/G3, the next takes it badly, the lathe post takes
+ * none — so it moved onto the machine record, where it travels with the machine
+ * and can differ between the router and the mill in the same project. What is
+ * left is how tightly a fitted arc has to hug the path it replaces, which is a
+ * tolerance and belongs to the job. See doc/machines.js.
  */
 export function createPostOptions() {
   return {
-    arcs: true,
     arcTolerance: 0.01,   // mm the fitted arc may stray from the planned path
   };
 }
@@ -183,6 +186,11 @@ export function createTool(type = 'flat') {
     // it is the authority on the shape and its corner angle; null falls back to
     // a rhombus of `insertAngle`. See engine/insert.js and app/shape-editor.js.
     customPoints: null,
+    // A photograph of the actual cutter, as a data URL, or null for the drawing
+    // the app generates from the numbers above. Two 6mm 3-flute end mills are
+    // one drawing and two different tools; a picture is the only thing that
+    // tells them apart. See app/tool-photo.js.
+    image: null,
     // boring bars: how far into a hole the bar reaches, and the smallest hole
     // it will fit down. Both are the reason a bore is or is not machinable.
     minBore: 0,
@@ -492,6 +500,13 @@ export function deserializeProject(json) {
     ]));
   }
   p.machineIds ??= {};
+  // v4 → v5: arcs moved from the project's post options onto each machine. A
+  // project that had them turned off meant it, so every machine in it inherits
+  // that rather than quietly posting arcs again on the next export.
+  if (p.postOptions.arcs === false) {
+    for (const machine of p.machines) machine.arcs = false;
+  }
+  delete p.postOptions.arcs;
   // v3 → v4: imported drawings. A file written before they existed has none.
   p.drawings = (p.drawings ?? []).map((d) => ({
     ...d,

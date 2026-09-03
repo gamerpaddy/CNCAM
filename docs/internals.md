@@ -317,9 +317,25 @@ stepover, which in a finishing pass means uncut material.
 
 **Simulation** — see below.
 
-**Project persistence** — tools, setups, operations and their parameters
-autosave to localStorage and come back on reload, along with the meshes when
-they fit. A **Clear** button discards everything and starts over.
+**Project persistence** — projects live in the browser's own filesystem (OPFS;
+`doc/project-store.js`), one directory per project holding numbered versions, so
+a save never overwrites the save before it. The **Projects…** dialog lists them
+with their history and can open, download, upload, rename or delete any of them.
+The session autosaves to the same store as a single whole-project file —
+geometry included, because OPFS has no meaningful size limit where localStorage
+had three megabytes and silently dropped every mesh past it. A browser without an
+OPFS falls back to the old localStorage pair, and a session saved there is
+migrated on the first save. A **Clear** button discards everything and starts over.
+
+**Tool photographs** — a tool may carry `image`, a data URL of a photo of the
+real cutter (`app/tool-photo.js`), taken from the webcam or dropped in as a file.
+`toolIcon` returns it wherever a cutter is *identified* — the picker, the tree,
+the operation panel — while `toolAssembly` always draws the generated silhouette,
+because that one is about stickout and reach and no photo measures those. Photos
+are centre-cropped square and stored at 384px, which keeps them at about twenty
+kilobytes so they can ride along in a catalogue, an exported library and a
+project file. `opFingerprint` excludes `image` for the same reason it excludes
+`name`: it is a label, and a label cannot move a toolpath.
 
 **A new model is usually a new part.** Importing one into a project that already
 has a job in it offers to clear the setups and operations first, because they do
@@ -414,7 +430,7 @@ reach. Scrubbing 21 full-range seeks over 3.3M events costs 129ms.
 expanded long-hand, dwells as G4) or **Lathe** (G18 G7, X in diameter, T0101,
 G97) → G-code preview panel with click↔viewport
 cross-highlighting → export `.ngc`. Undo/redo throughout; project save/load with
-v1→v2→v3 migration.
+v1→v5 migration.
 
 **Arcs, including the ones that descend.** CL data is linear — every curve
 reaches a post as a polyline, because that is what keeps the strategies, the
@@ -428,6 +444,15 @@ handful of instructions. A ⌀30 bore now goes from 593 motion blocks to 36. The
 extra condition is that Z advances in proportion to the swept angle, so a pass
 whose Z rises and falls over a form stays as lines rather than having the
 controller run the Z straight through it.
+
+Whether to fit them at all is a checkbox on the **machine**, not on the project:
+one control takes `G2/G3`, the next takes it badly, and the lathe post here fits
+none — so a project that roughs on the router and finishes on the mill needs a
+different answer for each. It was a project-wide tick on the toolbar until
+project v5, which migrates an off tick onto every machine in the file. The
+dialect still has the last word (`post/core.js`), and how tightly a fitted arc
+must hug the path it replaces stays a project option, because that is a
+tolerance and belongs to the job.
 
 Next: pencil finishing, thread milling, and 3+2.
 

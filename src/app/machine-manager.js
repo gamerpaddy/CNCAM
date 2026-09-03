@@ -97,6 +97,16 @@ const FIELDS = [
   {
     key: 'coolant', label: 'Has coolant', type: 'checkbox',
   },
+  {
+    // Shown only where the dialect can write an arc at all: the lathe post
+    // fits none (post/lathe.js), and a tick that does nothing is worse than no
+    // tick — it reads as a setting that is being ignored.
+    key: 'arcs', label: 'Post G2/G3 arcs', type: 'checkbox',
+    when: (m) => !!POSTS[m.post]?.arcs,
+    hint: 'Curves go out as arcs — a smaller file and smoother motion — rather '
+      + 'than as the chords they were planned from. Turn it off for a control '
+      + 'with shaky arc support, or when you want every point in the file.',
+  },
   { key: 'notes', label: 'Notes', type: 'text' },
 ];
 
@@ -171,6 +181,8 @@ export function openMachineManager(doc, { onDone } = {}) {
       // feed-per-revolution question to answer
       if (field.axis === 'y' && machine.kind === 'turn') continue;
       if (field.kind && field.kind !== machine.kind) continue;
+      // …and some only exist for the dialect this machine speaks
+      if (field.when && !field.when(machine)) continue;
       rows.push(machineField(machine, field));
       const hint = field.hintFor?.(machine) ?? field.hint;
       if (hint) rows.push(el('div', { class: 'prop-hint' }, [hint]));

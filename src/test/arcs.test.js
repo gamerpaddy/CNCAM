@@ -14,6 +14,8 @@ import { CLBuilder, MOVE_STRIDE, OP, FEED } from '../engine/cl.js';
 import { generateToolpath } from '../engine/toolpath.js';
 import { makeBox, makeTube } from './fixtures.js';
 import { mergeTolerance } from '../engine/simplify.js';
+import { createMachine } from '../doc/machines.js';
+import { createProject, deserializeProject } from '../doc/schema.js';
 
 const TOOL = {
   number: 1, diameter: 6, spindleRpm: 9000, feedCut: 800, feedPlunge: 300,
@@ -352,4 +354,27 @@ test('merging collinear points does not stop the post fitting arcs', () => {
   assert.ok(mergeTolerance(0.05) < 0.01,
     `merge tolerance ${mergeTolerance(0.05)} is not below the arc tolerance`);
   assert.ok(mergeTolerance(1) <= 0.004, 'and it never grows into a machining allowance');
+});
+
+test('whether a controller gets arcs is a property of the machine', () => {
+  // It used to be one tick on the toolbar for the whole project, which is wrong
+  // twice: it is a fact about the control — one takes G2/G3, the next takes it
+  // badly, the lathe post here takes none — and a project that roughs on the
+  // router and finishes on the mill needs a different answer for each.
+  assert.eq(createMachine({ kind: 'mill' }).arcs, true, 'on unless said otherwise');
+  assert.eq(createMachine({ kind: 'mill', arcs: false }).arcs, false, 'and off when it is');
+
+  // A project written before the move meant what its tick said, so every
+  // machine in it inherits that rather than quietly posting arcs again.
+  const old = createProject('legacy');
+  old.version = 4;
+  old.postOptions = { arcs: false, arcTolerance: 0.01 };
+  const back = deserializeProject(JSON.stringify(old));
+  assert.ok(back.machines.length > 0, 'the rack came back');
+  assert.ok(back.machines.every((m) => m.arcs === false), 'with arcs off on all of them');
+  assert.eq(back.postOptions.arcs, undefined, 'and the project-wide tick is gone');
+
+  // The tolerance stays where it was: that is how tightly a fitted arc has to
+  // hug the path, which belongs to the job and not to the control.
+  assert.eq(back.postOptions.arcTolerance, 0.01, 'the fit tolerance is still the project\u2019s');
 });

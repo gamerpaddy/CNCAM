@@ -4,7 +4,7 @@
 // works on meshes. Clearing and opening both throw the current document away,
 // so both ask first when there is something to lose.
 
-import { createModel, createDrawing } from '../../doc/schema.js';
+import { createModel, createDrawing, uid } from '../../doc/schema.js';
 import { plural } from '../../engine/text.js';
 import { openFile, saveFile, ACCEPT } from '../../io/files.js';
 import { parseSTL } from '../../io/stl.js';
@@ -19,6 +19,8 @@ import {
   toolFromPreset, serializeLibrary, deserializeLibrary, saveUserTool,
 } from '../../doc/tool-library.js';
 import { openToolWizard } from '../tool-wizard.js';
+import { openProjectBrowser } from '../project-browser.js';
+import { pickPhotoFile, capturePhoto } from '../tool-photo.js';
 import { describeTool } from '../tool-shape.js';
 import { toolNumberClashes } from '../op-status.js';
 
@@ -186,6 +188,10 @@ export function makeFileActions(ctx, program) {
     if (!file) return;
     try {
       const { models, restored } = doc.loadJSON(new TextDecoder().decode(file.buffer));
+      // A file opened from disk is not (yet) one of the projects this browser
+      // keeps, so the next save into the store starts its own history rather
+      // than adding a version to whatever was open before.
+      ctx.storeProjectId = null;
       ctx.viewport.frameAll();
       const missing = models - restored;
       ctx.ui.setStatus(missing
@@ -194,6 +200,51 @@ export function makeFileActions(ctx, program) {
     } catch (err) {
       ctx.ui.setStatus(`Open failed: ${err.message}`, true);
     }
+  }
+
+  /**
+   * The drawer of projects kept in this browser (see doc/project-store.js).
+   *
+   * Separate from Save and Open, which write a file to disk and are how a job
+   * leaves this machine. This is the other half — the twelve saves a day you
+   * make for yourself — and it keeps every one of them as a version rather than
+   * overwriting the last.
+   */
+  function browseProjects() {
+    openProjectBrowser({
+      currentName: doc.project.name,
+      currentId: ctx.storeProjectId ?? null,
+      currentJSON: () => doc.toJSON(),
+      hasWork: doc.project.models.length > 0 || doc.project.setups.length > 0,
+      files: {
+        open: () => openFile(ACCEPT.project),
+        save: (name, text) => saveFile(name, text, ACCEPT.project),
+      },
+      onSaved: (id, name) => {
+        ctx.storeProjectId = id;
+        // The name in the dialog is the name of the project, not a filename for
+        // this one save: type a new one there and the project is called that
+        // from now on, in the title, in an export and in the next save.
+        if (name !== doc.project.name) doc.updateItem(doc.project, { name }, 'rename project');
+      },
+      onOpen: (json, meta) => {
+        if (ctx.simulation) program.closeSimulation();
+        try {
+          const { models, restored } = doc.loadJSON(json);
+          ctx.storeProjectId = meta.id;
+          invalidateFaces();
+          program.refreshGcodePreview(false);
+          ctx.viewport.frameAll();
+          const missing = models - restored;
+          ctx.ui.setStatus(`${meta.name} v${meta.version} opened`
+            + (missing ? ` — ${missing} of ${plural(models, 'model')} saved without geometry, re-import them` : ''),
+          missing > 0);
+        } catch (err) {
+          ctx.ui.setStatus(`Could not open it: ${err.message}`, true);
+        }
+      },
+      onStatus: (message, isError = false) => ctx.ui.setStatus(message, isError),
+    });
   }
 
   /**
@@ -209,6 +260,9 @@ export function makeFileActions(ctx, program) {
     }
     if (ctx.simulation) program.closeSimulation();
     doc.clear();
+    // The next "Save a version" starts a new project rather than adding one to
+    // whichever job was open before it was cleared away.
+    ctx.storeProjectId = null;
     clearSaved();
     invalidateFaces();
     ctx.viewport.setToolpaths(null);
@@ -291,13 +345,73 @@ export function makeFileActions(ctx, program) {
     });
   }
 
+  /**
+   * The same cutter again, on the next free T number.
+   *
+   * The case this is for is one physical size held twice — a 6mm rougher and a
+   * 6mm finisher, or the same insert in two holders — where everything but the
+   * feeds and the number is identical. Building the second one from the wizard
+   * means retyping eighteen fields to get back to where you already are.
+   *
+   * A copy, not a reference: the new tool gets its own id, so operations point
+   * at one or the other and editing either leaves the other alone.
+   */
+  function duplicateTool(tool) {
+    if (!tool) return;
+    const copy = structuredClone({ ...tool, id: uid('tool') });
+    copy.number = nextToolNumber();
+    copy.name = uniqueToolName(`${tool.name} copy`);
+    doc.addTool(copy);
+    doc.select('tool', copy.id);
+    ctx.ui.setStatus(`T${copy.number} ${copy.name} — a copy of T${tool.number}, `
+      + 'change its feeds or its number');
+  }
+
+  function uniqueToolName(base) {
+    const taken = new Set(doc.project.tools.map((t) => t.name));
+    if (!taken.has(base)) return base;
+    const stem = base.replace(/ \d+$/, '');
+    for (let n = 2; ; n++) if (!taken.has(`${stem} ${n}`)) return `${stem} ${n}`;
+  }
+
+  /**
+   * Put a photograph on a cutter, or take one off, without opening the builder.
+   *
+   * The builder is where a tool is *described*, and a photo is not a
+   * description — it is a label you want to add to a tool you already have,
+   * usually while standing at the machine holding the thing. Two clicks from
+   * the row it is on beats eight through a modal.
+   *
+   * @param source 'file' | 'camera' | null, where null removes it
+   */
+  async function setToolPhoto(tool, source) {
+    if (!tool) return;
+    const onError = (message) => ctx.ui.setStatus(message, true);
+    if (source === null) {
+      doc.updateItem(tool, { image: null }, `photo off ${tool.name}`);
+      ctx.ui.setStatus(`${tool.name} is drawn from its numbers again`);
+      return;
+    }
+    const image = source === 'camera'
+      ? await capturePhoto({ onError })
+      : await pickPhotoFile({ onError });
+    if (!image) return;                 // cancelled, or already reported
+    doc.updateItem(tool, { image }, `photograph ${tool.name}`);
+    ctx.ui.setStatus(`${tool.name} now shows its photo wherever it is listed`);
+  }
+
   /** Keep a project's tool for other projects: it joins "My tools" in the picker. */
   function saveToolToLibrary(tool) {
     if (!tool) return;
     const saved = saveUserTool(tool);
     ctx.ui.setStatus(saved
       ? `${tool.name} saved to My tools — it is in the Tool Library dialog now`
-      : 'Could not save to the library (browser storage is unavailable)', !saved);
+      // The library is localStorage, which is a few megabytes for the whole
+      // origin, and a photographed cutter carries about twenty kilobytes of
+      // image with it. So "full" is a real answer here and not just "private
+      // mode", and it is worth saying which lever the user has.
+      : 'Could not save to the library — browser storage is full or unavailable. '
+        + 'Removing photos from tools you no longer need frees the most.', !saved);
   }
 
   async function importTools() {
@@ -346,10 +460,13 @@ export function makeFileActions(ctx, program) {
     importDrawing,
     saveProject,
     openProject,
+    browseProjects,
     clearProject,
     addToolsFromLibrary,
     newTool,
     editTool,
+    duplicateTool,
+    setToolPhoto,
     saveToolToLibrary,
     importTools,
     exportTools,

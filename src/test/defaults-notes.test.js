@@ -788,12 +788,18 @@ test('moving the drawing an operation follows marks it out of date', () => {
   assert.eq(opFingerprint(doc, op, setup), following, 'a drawing it does not follow is not its business');
 });
 
-test('every field of the cutter but its name is part of the fingerprint', () => {
+test('every field of the cutter but its name and its photo is part of the fingerprint', () => {
   // The list used to be the milling ones — diameter, corner radius, tip angle —
   // so changing a turning insert's nose radius moved the finishing profile
   // (67.57mm → 67.24mm, 16 moves → 19) with nothing saying so, and the next
-  // tool field to be added would have gone the same way. Naming the two that
+  // tool field to be added would have gone the same way. Naming the ones that
   // cannot matter is a list that does not have to be maintained.
+  //
+  // There are three of them. A name and an id are labels. So is `image`, the
+  // photograph of the actual cutter (see app/tool-photo.js) — and that one is
+  // also twenty kilobytes of base64, so leaving it in put a copy of the picture
+  // inside the fingerprint of every operation using the tool, and taking the
+  // photo marked passes out of date that no photo can move.
   const doc = new Document();
   doc.addModel(createModel('part'), makeBox(40, 40, 10));
   const tool = createTool('turning');
@@ -806,7 +812,7 @@ test('every field of the cutter but its name is part of the fingerprint', () => 
 
   const before = opFingerprint(doc, op, setup);
   for (const [key, value] of Object.entries(tool)) {
-    if (key === 'id' || key === 'name') continue;
+    if (key === 'id' || key === 'name' || key === 'image') continue;
     const changed = typeof value === 'number' ? value + 1
       : typeof value === 'string' ? `${value}x`
         : typeof value === 'boolean' ? !value : [...(value ?? []), { diameter: 1, length: 1 }];
@@ -818,6 +824,11 @@ test('every field of the cutter but its name is part of the fingerprint', () => 
 
   doc.updateItem(tool, { name: 'my favourite insert' }, 'rename');
   assert.eq(opFingerprint(doc, op, setup), before, 'renaming a cutter does not move a path');
+
+  doc.updateItem(tool, { image: `data:image/jpeg;base64,${'A'.repeat(20000)}` }, 'photograph it');
+  const withPhoto = opFingerprint(doc, op, setup);
+  assert.eq(withPhoto, before, 'and photographing one does not either');
+  assert.ok(withPhoto.length < 4000, 'nor does it carry the photo around in every fingerprint');
 });
 
 test('two cutters on one T number are named as the clash they are', () => {

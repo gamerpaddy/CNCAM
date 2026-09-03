@@ -354,6 +354,12 @@ export function toolFromPreset(preset, number = 1) {
     // A hand-drawn custom insert outline, when the shape is 'X'. An array of
     // [x, y] with the cutting corner first, or null for the rhombus fallback.
     customPoints: Array.isArray(merged.customPoints) ? merged.customPoints : null,
+    // The user's own photograph of this cutter, if they took one. Carried
+    // through here because this function is the only door into a tool record:
+    // a field it does not name is a field that is dropped on import, on
+    // export, and on every trip through a catalogue. See app/tool-photo.js.
+    image: typeof merged.image === 'string' && merged.image.startsWith('data:image/')
+      ? merged.image : null,
     minBore: merged.minBore ?? 0,
     maxDepth: merged.maxDepth ?? 0,
     cornerRadius: merged.cornerRadius ?? 0,

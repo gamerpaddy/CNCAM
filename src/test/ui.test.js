@@ -376,14 +376,17 @@ test('an autosaved CAD model keeps its B-rep faces', async () => {
   for (let f = 0; f < 6; f++) faceRanges.push({ first: f * 2, last: f * 2 + 1, faceId: f });
   doc.addModel(model, { ...box, faceRanges });
 
-  // this test writes to the same keys the running session autosaves to
+  // this test writes over whatever the running session last autosaved — the
+  // OPFS file where that now lives, and the legacy keys on a browser without one
   const kept = ['cncam.project', 'cncam.meshes'].map((k) => [k, localStorage.getItem(k)]);
   const stop = attachAutosave(doc);
   try {
     doc.emitChange('test');
     await new Promise((r) => setTimeout(r, 600));
     stop();
-    const back = loadSaved()?.meshes?.get(model.id);
+    // The autosave writes to the browser's own filesystem now, so reading it
+    // back is asynchronous — see doc/project-store.js.
+    const back = (await loadSaved())?.meshes?.get(model.id);
     assert.ok(back, 'the mesh came back');
     assert.eq(back.indices.length, box.indices.length, 'with all its triangles');
     assert.eq(back.faceRanges?.length, 6, 'and its B-rep faces');

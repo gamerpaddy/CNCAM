@@ -79,7 +79,6 @@ function refresh(kind) {
   // A lathe is not a mill seen from another angle: Z runs along the bar and X
   // is the cross-slide going in. The viewport draws and frames accordingly.
   viewport.setMachine(doc.machine);
-  ui.arcToggle.checked = doc.project.postOptions?.arcs ?? true;
   if (kind === 'selection') {
     viewport.setHighlight(doc.selection?.kind === 'model' ? doc.selection.id : null);
   }
@@ -494,7 +493,7 @@ function boot() {
   // from one table and cannot drift apart.
   bindShortcuts(window, ctx);
 
-  restoreSaved();
+  restoreSaved();   // async: the store is a filesystem, and the boot does not wait on it
   if (getSetting('autosave')) {
     attachAutosave(ctx.doc, {
       onError: (err) => ctx.ui.setStatus(`Autosave failed (${err.name}) — export to keep your work`, true),
@@ -548,12 +547,18 @@ function showBuildBadge() {
 }
 
 /**
- * Bring back the previous session. Meshes are stored separately and may not
- * have fitted, so the project can come back without its geometry — the setups
- * and operations are the expensive part to recreate, and they survive either way.
+ * Bring back the previous session.
+ *
+ * The autosave is a file in the browser's own filesystem now, so it is read
+ * asynchronously and the boot does not wait: the app comes up empty and the
+ * restore lands a moment later, through the same change event any other load
+ * goes through. A session saved by an older build — or by a browser with no
+ * file store — still comes back from localStorage, where its geometry may not
+ * have fitted; the setups and operations are the expensive part to recreate,
+ * and those survive either way.
  */
-function restoreSaved() {
-  const saved = loadSaved();
+async function restoreSaved() {
+  const saved = await loadSaved();
   if (!saved) return;
   const meshes = new Map();
   for (const [id, mesh] of saved.meshes) meshes.set(id, computeNormals(mesh));

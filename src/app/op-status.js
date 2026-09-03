@@ -141,8 +141,15 @@ export function opFingerprint(doc, op, setup = null) {
     // saying so — and the next tool field to be added would have been missed
     // in the same way. A name and an id cannot change a path; assume the rest
     // can, and a needless regenerate is the worst this can cost.
+    //
+    // `image` joins them, and is the one exception worth stating: it is a
+    // photograph of the cutter, which is a label in exactly the way a name is.
+    // It is also twenty kilobytes of base64, and leaving it in put a copy of it
+    // in the fingerprint of every operation using that tool — so photographing
+    // a cutter you had already generated with marked all of its passes out of
+    // date, for a change that cannot move a single move.
     tool && Object.fromEntries(
-      Object.entries(tool).filter(([k]) => k !== 'id' && k !== 'name')),
+      Object.entries(tool).filter(([k]) => k !== 'id' && k !== 'name' && k !== 'image')),
     drawing && [drawing.paths, drawing.placement],
     // The models this setup machines, resolved — not the raw `modelIds`, which
     // is empty on every setup the app makes and so never changes. Importing or

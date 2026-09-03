@@ -1743,3 +1743,123 @@ kbd {
   user-select: none;
 }
 #build-badge:hover { opacity: 1; color: var(--fg); border-color: var(--accent); }
+
+/* --- tool photographs --- */
+
+/* A photo stands in for the generated drawing wherever a cutter is identified
+   (see app/tool-photo.js). It has to fill exactly the box the SVG would have
+   filled — the picker's cards, the tree's rows and the operation panel all size
+   that box themselves — so it covers rather than fits: the stored image is
+   already a centre crop, and letterboxing it inside a box that was measured for
+   a silhouette leaves the card looking half empty. */
+.tool-photo {
+  object-fit: cover;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.3);
+}
+.lib-preview .tool-photo { width: 100%; height: 100%; border-radius: 0; }
+
+/* The wizard's photo panel: the picture, what to do about it, and a line for
+   the one thing that can go wrong. */
+.wiz-photo {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 6px;
+  border: 1px dashed var(--border);
+  border-radius: 5px;
+}
+.wiz-photo.drop-target { border-color: var(--accent); background: rgba(74, 158, 255, 0.1); }
+.wiz-photo-frame {
+  flex: 0 0 96px;
+  width: 96px;
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.wiz-photo-img { width: 96px; height: 96px; object-fit: cover; }
+.wiz-photo-empty {
+  font-size: 11px;
+  color: var(--fg-dim);
+  text-align: center;
+  padding: 6px;
+  line-height: 1.3;
+}
+.wiz-photo-buttons { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wiz-photo-error { color: var(--danger); font-size: 11px; }
+
+/* The webcam modal. Sized to the stream rather than to the dialog's usual
+   880px: a 1280×720 preview stretched across that is a wall of face. */
+.cam-dialog { width: min(560px, 92vw); }
+.cam-view {
+  width: 100%;
+  max-height: 60vh;
+  background: #000;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  display: block;
+}
+
+/* --- projects kept in this browser --- */
+
+.proj-dialog { width: min(920px, 96vw); }
+/* The title is three words and the usage figure beside it is the thing being
+   read; left to wrap, the title took two lines and pushed the row down. */
+.proj-dialog .lib-head h2 { white-space: nowrap; }
+.proj-body { display: flex; flex-direction: column; gap: 6px; }
+.proj-name { flex: 0 0 240px; }
+.proj-save { flex-wrap: nowrap; }
+
+.proj-item {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 6px 8px;
+}
+.proj-item.open { border-color: var(--fg-dim); }
+.proj-head { display: flex; align-items: center; gap: 6px; }
+.proj-twisty {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--fg-dim);
+  padding: 0 4px;
+}
+/* The name takes the slack so the buttons stay in the same place down the
+   list — a row of controls that moves with the length of a project's name is a
+   row you have to re-aim at every time. */
+.proj-id { flex: 1; min-width: 0; }
+.proj-name-text {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.proj-meta { font-size: 11px; color: var(--fg-dim); font-family: Consolas, monospace; }
+.proj-head button.active { border-color: var(--accent); color: var(--accent); }
+
+.proj-versions {
+  margin: 6px 0 2px 22px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.proj-version {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.proj-v { font-family: Consolas, monospace; color: var(--fg); flex: 0 0 44px; }
+.proj-when { flex: 0 0 130px; }
+.proj-size { flex: 0 0 70px; font-family: Consolas, monospace; }
+.proj-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-version button { padding: 1px 6px; font-size: 11px; }

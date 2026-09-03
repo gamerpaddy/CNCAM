@@ -20,6 +20,9 @@ import { el } from './layout.js';
 import { numberInput, parseNumber, formatNumber } from './number-input.js';
 import { toolIcon, toolAssembly, describeTool, TYPE_COLORS } from './tool-shape.js';
 import {
+  isPhoto, photoElement, pickPhotoFile, capturePhoto, photoFromTransfer,
+} from './tool-photo.js';
+import {
   toolFromPreset, suggestCutting, suggestName, machineForType,
   toolWarnings, cuttingReadout, defaultsForType, coarsePitch,
   loadCatalogs, DEFAULT_CATALOG,
@@ -252,6 +255,9 @@ export function openToolWizard({
     feedPlunge: 300,
     name: '',
     nameEdited: false,
+    // A photograph of the real cutter, or null for the drawing. Not derived
+    // from anything and not affected by any other field — see app/tool-photo.js.
+    image: null,
   };
   // Editing a tool that exists is the same set of questions, and asking them in
   // the panel's flat list of eighteen fields — with no drawing, no warnings and
@@ -289,6 +295,7 @@ export function openToolWizard({
       feedCut: editing.feedCut ?? draft.feedCut,
       feedPlunge: editing.feedPlunge ?? draft.feedPlunge,
       name: editing.name ?? '',
+      image: isPhoto(editing.image) ? editing.image : null,
       nameEdited: true,
       fluteEdited: true,
       shankEdited: true,
@@ -302,6 +309,14 @@ export function openToolWizard({
   }
 
   const preview = el('div', { class: 'wiz-preview' });
+  // The photograph, beside the drawing rather than instead of it. Both are
+  // wanted here and they answer different questions: the drawing is live
+  // feedback on the numbers being typed — a corner radius bigger than the
+  // cutter is obvious in it and invisible in a photo — and the photo is which
+  // of the three 6mm end mills in the drawer this is. Everywhere *else* in the
+  // app the photo simply replaces the icon; this is the one screen that is
+  // about the numbers, so the drawing keeps its place.
+  const photoPanel = el('div', { class: 'wiz-photo' });
   const sizeRows = el('div', { class: 'wiz-fields' });
   const speedRows = el('div', { class: 'wiz-fields' });
   const speedNote = el('div', { class: 'prop-note' });
@@ -436,6 +451,7 @@ export function openToolWizard({
       spindleRpm: draft.spindleRpm,
       feedCut: draft.feedCut,
       feedPlunge: draft.feedPlunge,
+      image: draft.image,
     }, number);
   }
 
@@ -537,13 +553,79 @@ export function openToolWizard({
     return wrapRow(spec, input);
   }
 
+  /** Report into the panel itself: a wizard has no status bar to write to. */
+  function photoError(message) {
+    const line = photoPanel.querySelector('.wiz-photo-error');
+    if (line) line.textContent = message;
+  }
+
+  async function setPhoto(promise) {
+    const image = await promise;
+    if (!image) return;                 // cancelled, or already reported
+    draft.image = image;
+    renderPhoto();
+  }
+
+  function renderPhoto() {
+    const has = isPhoto(draft.image);
+    photoPanel.classList.toggle('has-photo', has);
+    photoPanel.replaceChildren(
+      el('div', { class: 'wiz-photo-frame' }, [
+        has
+          ? photoElement(draft.image, { width: 96, height: 96, className: 'wiz-photo-img' })
+          : el('div', { class: 'wiz-photo-empty' }, ['No photo — the drawing is used']),
+      ]),
+      el('div', { class: 'wiz-photo-buttons' }, [
+        el('button', {
+          type: 'button',
+          title: 'Choose an image file — or drop one anywhere on this panel',
+          onclick: () => setPhoto(pickPhotoFile({ onError: photoError })),
+        }, ['Image…']),
+        el('button', {
+          type: 'button',
+          title: 'Hold the cutter up to the webcam',
+          onclick: () => setPhoto(capturePhoto({ onError: photoError })),
+        }, ['Camera…']),
+        ...(has ? [el('button', {
+          type: 'button',
+          class: 'danger',
+          title: 'Go back to the generated drawing',
+          onclick: () => { draft.image = null; renderPhoto(); },
+        }, ['Remove'])] : []),
+      ]),
+      el('div', { class: 'wiz-photo-error' }, ['']),
+    );
+  }
+
+  // Drop an image on the panel. The default drag behaviour of a browser is to
+  // navigate away to the file that was dropped, which in a modal dialog means
+  // losing the tool you were half-way through describing — so both handlers are
+  // needed even to do nothing.
+  photoPanel.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    photoPanel.classList.add('drop-target');
+  });
+  photoPanel.addEventListener('dragleave', () => photoPanel.classList.remove('drop-target'));
+  photoPanel.addEventListener('drop', (e) => {
+    e.preventDefault();
+    photoPanel.classList.remove('drop-target');
+    setPhoto(photoFromTransfer(e.dataTransfer, { onError: photoError }));
+  });
+
   function render({ keepFocus = null, keepText = null } = {}) {
     for (const card of familyCards) {
       card.classList.toggle('active', card.dataset.type === draft.type);
       card.classList.toggle('other-machine', card.dataset.machine !== machine);
       const icon = card.querySelector('.wiz-family-icon');
+      // `image: null` on purpose: a family card is a picture of a *family*, and
+      // spreading the draft into one put this tool's photograph on all fourteen
+      // of them — fourteen identical thumbnails where the whole job of the row
+      // is to tell the shapes apart.
       icon.replaceChildren(toolIcon(
-        { ...draft, type: card.dataset.type, ...familyDefaults(card.dataset.type) },
+        {
+          ...draft, image: null, type: card.dataset.type,
+          ...familyDefaults(card.dataset.type),
+        },
         { width: 30, height: 34, color: TYPE_COLORS[card.dataset.type] },
       ));
     }
@@ -689,6 +771,8 @@ export function openToolWizard({
         el('div', { class: 'wiz-column wiz-column-preview' }, [
           el('h3', {}, ['This tool']),
           preview,
+          el('h3', {}, ['Photo']),
+          photoPanel,
         ]),
       ]),
       el('label', { class: 'wiz-field wiz-name-row' }, [
@@ -719,6 +803,7 @@ export function openToolWizard({
   // deriving and drawing it is all the open needs.
   rederive();
   render();
+  renderPhoto();
   document.body.append(dialog);
   dialog.showModal();
   nameInput.focus();

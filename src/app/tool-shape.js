@@ -27,6 +27,7 @@ import {
   isLatheTool, latheToolOutline, latheToolBounds, insertIcOf, INSERT_SHAPES,
   effectiveLead, cornerAngleOf, insertEngagement, recommendedDepthOfCut,
 } from '../engine/insert.js';
+import { isPhoto, photoElement } from './tool-photo.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -140,6 +141,16 @@ function clipToHeight(points, maxZ) {
 export function toolIcon(tool, {
   width = 34, height = 40, scaleTo = null, color = null, orientation = 'vertical',
 } = {}) {
+  // A tool that has been photographed shows its photograph. The icon is the
+  // "which one is this" drawing — in the picker, the tree, the operation panel
+  // — and a picture of the actual cutter answers that better than any
+  // silhouette can. The *assembly* below is not overridden: that one is about
+  // stickout and reach, which no photo measures. See app/tool-photo.js.
+  if (isPhoto(tool?.image)) {
+    return photoElement(tool.image, {
+      width, height, className: `tool-icon tool-icon-${orientation}`,
+    });
+  }
   // A lathe tool is a shape in a plane, not a silhouette to revolve. Sending it
   // through the code below produced a grey cone for every insert in the drawer:
   // a CNMG, a WNMG and a parting blade came out identical, and the insert shape

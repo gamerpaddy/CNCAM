@@ -171,8 +171,14 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
 * And it checks its own posts the same way. Every time a program is written the
   file is read straight back and compared with the path it was printed from, so
   a flipped G2/G3 or a lost modal word is a warning rather than a scrapped part.
-* Projects save to a file, and autosave to the browser so a reload does not cost
-  you an afternoon of setup.
+* Projects save to a file, and the browser keeps a drawer of them for you —
+  **Projects…** — where every save is a new version, nothing is overwritten, and
+  any version can be opened or downloaded as a .cncam file. The session autosaves
+  there too, geometry included, so a reload does not cost you an afternoon of setup.
+* Tools can carry a photograph of the actual cutter, taken with the webcam or
+  dropped in from a file. Two 6mm 3-flute end mills are one drawing and two very
+  different tools; the picture is what tells them apart. It is kept with the tool,
+  so it travels into the catalogue, an exported library and the project.
 * Export the whole program or one operation at a time.
 
 ## What it does not do

@@ -175,6 +175,15 @@ export function createMachine(preset = {}) {
     toolChanger: merged.toolChanger === 'manual' ? 'manual' : 'auto',
     toolChangeSeconds: num(merged.toolChangeSeconds, base.toolChangeSeconds),
     coolant: merged.coolant !== false,
+    // Whether to post curves as G2/G3 rather than as the chords they were
+    // planned from. This was a project-wide tick on the toolbar, which is the
+    // wrong place for it twice over: it is a fact about the controller — some
+    // take arcs, some take them badly, a lathe post here takes none — and a
+    // project that runs its roughing on the router and its finishing on the
+    // mill needs a different answer for each. On the machine it travels with
+    // the machine, and switching machines no longer silently changes how the
+    // last one's files would have been written. See post/core.js.
+    arcs: merged.arcs !== false,
     // Rotary axes for indexed 3+1 / 3+2 work, base → part. A plain 3-axis
     // machine has none; a machine that lists them can hold a tilted face under
     // the spindle without the operator re-fixturing. See engine/indexing.js.

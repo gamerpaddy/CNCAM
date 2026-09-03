@@ -12,6 +12,7 @@ import { openContextMenu } from './context-menu.js';
 import { opStatus, opBlockedReason, opPreflight } from './op-status.js';
 import { OP_LABELS } from '../engine/toolpath.js';
 import { toolIcon, describeTool } from './tool-shape.js';
+import { isPhoto } from './tool-photo.js';
 import { opIcon, OP_CATALOG } from './op-catalog.js';
 import { openStrategyPicker } from './strategy-picker.js';
 import { machineCanHold } from '../doc/tool-library.js';
@@ -633,14 +634,62 @@ function menuForDrawing(doc, drawing, app) {
   ];
 }
 
+/**
+ * Everything you can do to a cutter, on the row it is on.
+ *
+ * This used to be rename and delete, which is a strange pair to offer on its
+ * own: renaming a tool is the one thing about it that changes nothing, and the
+ * thing you actually right-click a tool for — open it and change it — was
+ * reachable only by selecting the row and finding a button at the bottom of the
+ * properties panel. Editing goes first, because it is the answer to the
+ * question that made you right-click.
+ */
 function menuForTool(doc, tool, app) {
   const { operations } = doc.usageOf('tool', tool.id);
+  const actions = app?.actions;
+  const hasPhoto = isPhoto(tool.image);
   return [
+    {
+      label: 'Edit in the builder…',
+      hint: 'The dialog it was made in — every size, with the drawing and the checks',
+      onclick: () => actions?.editTool(tool),
+    },
     renameItem(doc, tool),
+    { separator: true },
+    {
+      label: 'Duplicate tool',
+      hint: 'The same cutter on the next free T number — for one size held twice',
+      onclick: () => actions?.duplicateTool(tool),
+    },
+    {
+      label: 'Save to my library',
+      hint: 'Keep this cutter for other projects — it joins "My tools" in the library',
+      onclick: () => actions?.saveToolToLibrary(tool),
+    },
+    { separator: true },
+    // A photo is a label you add to a tool you already have, usually while
+    // holding it — so it is offered where the tool is, not eight clicks into
+    // the builder. See app/tool-photo.js.
+    {
+      label: hasPhoto ? 'Replace the photo…' : 'Add a photo…',
+      hint: 'An image file — the picture stands in for the drawing wherever this tool is listed',
+      onclick: () => actions?.setToolPhoto(tool, 'file'),
+    },
+    {
+      label: 'Photograph it…',
+      hint: 'Hold the cutter up to the webcam',
+      onclick: () => actions?.setToolPhoto(tool, 'camera'),
+    },
+    ...(hasPhoto ? [{
+      label: 'Remove the photo',
+      hint: 'Go back to the drawing generated from its numbers',
+      onclick: () => actions?.setToolPhoto(tool, null),
+    }] : []),
+    { separator: true },
     {
       label: 'Remove tool', danger: true,
       hint: operations ? `${plural(operations, 'operation')} ${operations === 1 ? 'uses' : 'use'} this tool` : undefined,
-      onclick: () => app?.actions?.deleteItem('tool', tool.id),
+      onclick: () => actions?.deleteItem('tool', tool.id),
     },
   ];
 }

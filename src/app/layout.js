@@ -165,17 +165,6 @@ export function buildLayout(root, actions, project) {
   });
   const machineTabs = buildMachineTabs(actions);
 
-  const arcToggle = el('input', {
-    type: 'checkbox',
-    onchange: (e) => actions.setPostOption('arcs', e.target.checked),
-  });
-  arcToggle.checked = project.postOptions?.arcs ?? true;
-  const arcs = el('label', {
-    class: 'toggle',
-    title: 'Post curves as G2/G3 arcs — smaller files and smoother motion. '
-      + 'Turn off for controllers with unreliable arc support.',
-  }, [arcToggle, 'Arcs']);
-
   const gcode = el('div', { id: 'gcode', class: 'collapsed' });
 
   // Undo and redo are the only buttons whose *availability* is information —
@@ -223,7 +212,6 @@ export function buildLayout(root, actions, project) {
       onclick: actions.openMachines,
       title: 'Create and edit machines — travel, rapids, spindle range, dialect',
     }, ['⚙']),
-    arcs,
     // One button that opens a chooser, spelling both choices out in full.
     //
     // This has been all three ways round. "Export" with a caret beside it hid
@@ -277,8 +265,15 @@ export function buildLayout(root, actions, project) {
     }, ['?']),
     undoButton,
     redoButton,
-    el('button', { onclick: actions.saveProject, title: 'Save the project, geometry included' }, ['Save']),
-    el('button', { onclick: actions.openProject, title: 'Open a .cncam project' }, ['Open']),
+    el('button', { onclick: actions.saveProject, title: 'Save the project to a file, geometry included' }, ['Save']),
+    el('button', { onclick: actions.openProject, title: 'Open a .cncam project from a file' }, ['Open']),
+    // Save and Open write files to disk; this is the drawer of jobs the browser
+    // keeps for you, where every save is a version and nothing overwrites
+    // anything. See doc/project-store.js.
+    el('button', {
+      onclick: actions.browseProjects,
+      title: 'Projects kept in this browser, with their history — save, open, download or upload one',
+    }, ['Projects…']),
     el('button', { class: 'danger', onclick: actions.clearProject, title: 'Discard everything and start over' }, ['Clear']),
   ]);
 
@@ -437,7 +432,6 @@ export function buildLayout(root, actions, project) {
     gcode,
     timeline,
     machineSelect,
-    arcToggle,
     /**
      * Point the toolbar at a machine: highlight its tab, list the machines of
      * that kind, and offer the views that machine is worth looking at from.

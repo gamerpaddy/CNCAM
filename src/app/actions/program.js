@@ -767,13 +767,6 @@ export function makeProgramActions(ctx, space) {
       : `${label} — no setups yet on this machine. Add one to start.`);
   }
 
-  /** Post settings that are not the dialect itself — arcs, and how tightly they fit. */
-  function setPostOption(key, value) {
-    doc.updateItem(doc.project,
-      { postOptions: { ...(doc.project.postOptions ?? {}), [key]: value } }, `post ${key}`);
-    refreshGcodePreview();
-  }
-
   /**
    * Bring the toolpaths a file is about to be printed from up to date.
    *
@@ -822,6 +815,12 @@ export function makeProgramActions(ctx, space) {
       // a comment the controller reads straight past — see post/grbl.js
       toolChanger: machine?.toolChanger ?? 'auto',
       ...(doc.project.postOptions ?? {}),
+      // After the project's options, not before: whether this controller gets
+      // G2/G3 is the machine's answer, and an old file still carrying the
+      // project-wide tick must not override the machine it was migrated onto.
+      // The dialect has the final say either way — post/core.js will not write
+      // an arc for a post that cannot read one. See doc/machines.js.
+      arcs: machine?.arcs !== false,
     };
   }
 
@@ -947,7 +946,6 @@ export function makeProgramActions(ctx, space) {
     setMachineRecord,
     openMachines,
     setMachine,
-    setPostOption,
     exportGcode,
     exportOperationsSeparately,
     exportOneOperation,
