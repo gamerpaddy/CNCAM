@@ -42,6 +42,13 @@ export class Document extends EventTarget {
     });
   }
 
+  /**
+   * Run `fn` as one undoable step, however many commands it applies.
+   *
+   * For an action that is one gesture and two edits — see undo.js `group`.
+   */
+  group(label, fn) { return this.undoStack.group(label, fn); }
+
   undo() { this.undoStack.undo(); }
   redo() { this.undoStack.redo(); }
 

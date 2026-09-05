@@ -42,11 +42,16 @@ export function makeEditActions(ctx, space) {
    */
   function engraveDrawing(drawing) {
     if (!drawing) return;
-    const setup = ensureSetup();
-    addOperationTo(setup, 'engrave');
-    const op = setup.operations[setup.operations.length - 1];
-    doc.updateItem(op.params, { drawingId: drawing.id }, 'follow drawing');
-    doc.updateItem(op, { name: uniqueOpName(setup, `Engrave ${drawing.name}`) }, 'name op');
+    let op = null;
+    // One click, one undo: the setup, the operation, the drawing it follows and
+    // the name it takes from that drawing are four commands and one gesture.
+    doc.group('engrave drawing', () => {
+      const setup = ensureSetup();
+      addOperationTo(setup, 'engrave');
+      op = setup.operations[setup.operations.length - 1];
+      doc.updateItem(op.params, { drawingId: drawing.id }, 'follow drawing');
+      doc.updateItem(op, { name: uniqueOpName(setup, `Engrave ${drawing.name}`) }, 'name op');
+    });
     ctx.ui.setStatus(`${op.name} follows ${drawing.name} — set the depth and generate`);
   }
 
@@ -163,13 +168,21 @@ export function makeEditActions(ctx, space) {
     const previousTool = doc.project.tools.find((t) => t.id === op.toolId) ?? null;
     const tool = doc.project.tools.find((t) => t.id === toolId) ?? null;
     if ((tool?.id ?? null) === (previousTool?.id ?? null)) return;
-    doc.updateItem(op, { toolId: tool?.id ?? null }, 'assign tool');
+    // The tool and the stepping that comes with it are one edit, not two:
+    // undoing half of it leaves the operation holding the new cutter with the
+    // old one's stepping, which is the state this function exists to prevent.
+    let patch = {};
+    let kept = [];
+    doc.group('assign tool', () => {
+      doc.updateItem(op, { toolId: tool?.id ?? null }, 'assign tool');
+      if (!tool) return;
+      ({ patch, kept } = retoolParams(op.type, op.params, { tool, previousTool }));
+      if (Object.keys(patch).length) {
+        doc.updateItem(op.params, patch, 'stepping for the new tool');
+      }
+    });
     if (!tool) return ctx.ui.setStatus(`${op.name} has no tool — it will not generate`, true);
 
-    const { patch, kept } = retoolParams(op.type, op.params, { tool, previousTool });
-    if (Object.keys(patch).length) {
-      doc.updateItem(op.params, patch, 'stepping for the new tool');
-    }
     const moved = patch.stepdown != null ? `stepdown ${patch.stepdown}mm` : null;
     ctx.ui.setStatus(`${op.name}: T${tool.number} ${tool.name}`
       + (moved ? ` — ${moved} for a ⌀${tool.diameter}` : '')

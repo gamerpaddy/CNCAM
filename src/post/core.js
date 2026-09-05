@@ -38,6 +38,22 @@ export function buildProgram(dialect, ops, options = {}) {
   // — and the reader of a file cannot tell a restatement from a change. A
   // program starts dry, so 'off' is the state in force before the first word.
   let coolant = 'off';
+  /**
+   * Turn the pump off — but only one this post knows it started.
+   *
+   * `coolant` is null after a block of hand-written G-code, which is "this post
+   * no longer knows" and is not the same as on. Asserting M9 for it puts a
+   * stop-coolant word in a file where the pump was never asked for, and the
+   * pump it does stop belongs to whoever wrote that block. The three places
+   * that turn it off — the next operation's own request, a re-fixturing, and
+   * the footer — all have to say that the same way, so they say it here.
+   */
+  const stopCoolant = () => {
+    if (coolant != null && coolant !== 'off') {
+      (dialect.coolant ?? defaultCoolant)(w, { mode: 'off' }, options);
+    }
+    coolant = 'off';
+  };
   // The cycle in force, as the words that were written for it — not just
   // "there is one". A canned cycle's short form is `X.. Y..` and everything
   // else about the hole is modal, so a second hole that is deeper, or has a
@@ -224,8 +240,11 @@ export function buildProgram(dialect, ops, options = {}) {
           : null;
       }
       if (e.type === 'coolant' && e.mode !== coolant) {
-        (dialect.coolant ?? defaultCoolant)(w, e, options);
-        coolant = e.mode;
+        if (e.mode === 'off') stopCoolant();
+        else {
+          (dialect.coolant ?? defaultCoolant)(w, e, options);
+          coolant = e.mode;
+        }
       }
       if (e.type === 'tapping') {
         // A post that cannot synchronise cannot tap, and the one thing it must
@@ -291,10 +310,7 @@ export function buildProgram(dialect, ops, options = {}) {
         // the stop is the machine's own and not a tilted one.
         if (planeActive) { dialect.tiltedPlane?.cancel(w, modal); planeActive = false; }
         activeOrientation = null;
-        if (coolant !== 'off') {
-          (dialect.coolant ?? defaultCoolant)(w, { mode: 'off' }, options);
-          coolant = 'off';
-        }
+        stopCoolant();
         if (spindleOn) { w.line('M5'); spindleOn = false; activeSpindle = null; }
         w.comment(`re-fixture the part for ${op.setupName ?? 'the next setup'}, `
           + 'then cycle start');
@@ -505,9 +521,7 @@ export function buildProgram(dialect, ops, options = {}) {
   // never created put an M9 at the end of every program containing a hand tool
   // change, in files where the pump was never asked for. What the block turned
   // on, the block owns.
-  if (coolant != null && coolant !== 'off') {
-    (dialect.coolant ?? defaultCoolant)(w, { mode: 'off' }, options);
-  }
+  stopCoolant();
   // `modal` goes with it so the closing retract can be dropped when the tool is
   // already standing there — every milling program ended `G0 Z10 / G0 Z10`,
   // because the last operation retracts to clearance and the footer then said so

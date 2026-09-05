@@ -768,10 +768,15 @@ export function makeProgramActions(ctx, space) {
    */
   function setMachine(machine) {
     if (machine === doc.machine) return;
-    doc.setMachine(machine);
-    if (!postsFor(machine).includes(doc.project.post)) {
-      doc.updateItem(doc.project, { post: defaultPostFor(machine) }, 'change post');
-    }
+    // The machine and the post it forces are one switch: undoing back to the
+    // mill with the lathe's post still selected is a state the toolbar cannot
+    // even show.
+    doc.group('switch machine', () => {
+      doc.setMachine(machine);
+      if (!postsFor(machine).includes(doc.project.post)) {
+        doc.updateItem(doc.project, { post: defaultPostFor(machine) }, 'change post');
+      }
+    });
     // a backplot of the machine you just left is not a backplot of this one
     if (ctx.simulation) closeSimulation();
     doc.select(null, null);

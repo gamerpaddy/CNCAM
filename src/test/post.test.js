@@ -487,4 +487,23 @@ test('a command block leaves the post honest about what it no longer knows', () 
     { name: 'second', cl: after.finish() },
   ]).text;
   assert.eq(both.match(/^M8$/gm).length, 2, 'coolant is restated after the block');
+
+  // And a *dry* operation after a command block does not assert one either.
+  // Every operation states the coolant it wants, "none" included, and the post
+  // held null — so the mismatch wrote a bare M9 into a program that had never
+  // written an M8, on the pass right after a hand tool change. Null is not on:
+  // the only pump an M9 may stop is one this post started.
+  const dry = new CLBuilder();
+  dry.toolChange(1);
+  dry.spindle(9000);
+  dry.coolant('off');
+  dry.rapid(0, 0, 5);
+  dry.cut(10, 0, -1);
+  const dryAfter = buildGcode('linuxcnc', [
+    { name: 'swap', cl: generateCommand({ params: { gcode: 'M0 (fit the 12mm)' } }) },
+    { name: 'second', cl: dry.finish() },
+  ]).text;
+  assert.ok(!/^M9$/m.test(dryAfter),
+    `a dry program that contains a command block has no M9 in it:
+${dryAfter}`);
 });

@@ -24,6 +24,48 @@ test('new commands clear the redo branch', () => {
   assert.eq(stack.canRedo, false);
 });
 
+// One gesture, one undo. Assigning a cutter writes two things — the tool, and
+// the stepping that was the old cutter's — and pushing them separately made a
+// single Ctrl+Z leave the operation holding the new tool with the old tool's
+// stepping: exactly the state the action exists to prevent.
+test('a group is one step on the stack, undone and redone together', () => {
+  const stack = new UndoStack();
+  const seen = [];
+  const step = (name) => ({
+    label: name,
+    do: () => seen.push(`+${name}`),
+    undo: () => seen.push(`-${name}`),
+  });
+  stack.group('assign tool', () => { stack.push(step('tool')); stack.push(step('stepping')); });
+  assert.eq(seen.join(' '), '+tool +stepping', 'both ran, in the order they were pushed');
+  assert.eq(stack.done.length, 1, 'and they are one entry');
+  assert.eq(stack.undoLabel, 'assign tool', 'labelled by the gesture, not by its halves');
+
+  seen.length = 0;
+  stack.undo();
+  assert.eq(seen.join(' '), '-stepping -tool', 'undone in reverse');
+  assert.eq(stack.canUndo, false, 'one press was the whole of it');
+  seen.length = 0;
+  stack.redo();
+  assert.eq(seen.join(' '), '+tool +stepping', 'and redone forwards');
+
+  // A group holding one command records that command, and one that collects
+  // nothing records nothing — an action that decided there was nothing to do
+  // must not leave a Ctrl+Z that does nothing.
+  const lone = new UndoStack();
+  lone.group('one', () => lone.push(step('only')));
+  assert.eq(lone.done.length, 1);
+  assert.eq(lone.undoLabel, 'only', 'a single command keeps its own label');
+  lone.group('nothing', () => {});
+  assert.eq(lone.done.length, 1, 'an empty group is not a step');
+
+  // and it clears the redo branch like any other new command
+  lone.undo();
+  assert.eq(lone.canRedo, true);
+  lone.group('later', () => lone.push(step('later')));
+  assert.eq(lone.canRedo, false, 'a group starts a new branch');
+});
+
 test('document add/remove tool is undoable', () => {
   const doc = new Document();
   doc.addTool(createTool());
