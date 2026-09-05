@@ -1566,17 +1566,41 @@ kbd {
   line-height: 1;
 }
 
-.machine-dialog { width: min(940px, 95vw); }
+/* Head, body, action bar — a column, so the bar is the bottom of the dialog and
+   not the end of the scroll.
+
+   The two panes inside the body scroll; the dialog does not. That takes saying
+   twice, because a grid item's default `min-height: auto` is "as tall as my
+   content" and it wins against the row: the editor grew to the full height of
+   its fields — a machine's start and end G-code are two text areas, so it is
+   over a thousand pixels — spilled out of the body, and painted straight over
+   the preset dropdown and the buttons underneath. `overflow-y: auto` on the
+   pane cannot scroll a box that was never made short. */
+.machine-dialog {
+  width: min(940px, 95vw);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .machine-body {
   display: grid;
   grid-template-columns: minmax(200px, 260px) 1fr;
+  /* One row, and it may not be taller than the body. An implicit `auto` row is
+     sized to its content and the panes then fill *it*, so `min-height: 0` on a
+     pane changes nothing — the row is what has to be told. */
+  grid-template-rows: minmax(0, 1fr);
   gap: 14px;
   max-height: 62vh;
-  min-height: 320px;
+  /* room to be worth opening, but never more than the window has: a floor
+     taller than the dialog is a floor that pushes the action bar off it */
+  min-height: min(320px, 40vh);
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .machine-list {
   overflow-y: auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1618,7 +1642,7 @@ kbd {
   white-space: nowrap;
 }
 
-.machine-editor { overflow-y: auto; padding-right: 6px; }
+.machine-editor { overflow-y: auto; min-height: 0; padding-right: 6px; }
 .machine-editor h3 { margin: 0 0 4px; font-size: 14px; }
 .machine-editor .prop-row label { flex: 0 0 190px; }
 .machine-actions {
@@ -1629,6 +1653,12 @@ kbd {
   border-top: 1px solid var(--border);
 }
 .machine-preset { max-width: 280px; }
+/* The action bar is the floor of the dialog: it keeps its own background so
+   nothing shows through it, and does not shrink when the body wants the room. */
+.machine-dialog .lib-actions {
+  flex: 0 0 auto;
+  background: var(--bg-panel);
+}
 
 .options-dialog { width: min(720px, 94vw); }
 .options-body { max-height: 66vh; }
