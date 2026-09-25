@@ -229,7 +229,7 @@ export function buildLayout(root, actions, project) {
       onclick: (e) => openContextMenu(e, [
         {
           label: 'Export all — one file',
-          hint: 'One .ngc file: every enabled operation, in machining order (Ctrl+S)',
+          hint: 'One .ngc file: every enabled operation, in machining order (Ctrl+E)',
           onclick: actions.exportGcode,
         },
         {

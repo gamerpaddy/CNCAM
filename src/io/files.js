@@ -31,31 +31,48 @@ export async function openFile(accept) {
   });
 }
 
-/** Save text/blob to disk. Returns a handle when possible (for re-save). */
+/**
+ * Save text/blob to disk.
+ *
+ * @returns true when it was written (or handed to the browser's downloads),
+ *   false when the user cancelled the dialog — so a caller never reports
+ *   "saved" for a file nobody saved, which is what every caller used to do.
+ */
 export async function saveFile(suggestedName, content, accept) {
   const blob = content instanceof Blob ? content : new Blob([content]);
+  const name = safeFileName(suggestedName, 'untitled');
   if (hasFS) {
     try {
       const handle = await window.showSaveFilePicker({
-        suggestedName,
+        suggestedName: name,
         types: [{ description: accept.description, accept: accept.mime }],
       });
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();
-      return handle;
+      return true;
     } catch (err) {
-      if (err.name === 'AbortError') return null;
+      if (err.name === 'AbortError') return false;
       throw err;
     }
   }
+  download(blob, name);
+  return true;
+}
+
+/**
+ * The download path: a link to the blob, clicked. The URL is let go a little
+ * later rather than in the same tick — some browsers only start reading the
+ * blob after the click has returned, and revoking it first is a download of
+ * nothing.
+ */
+function download(blob, name) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = suggestedName;
+  a.download = name;
   a.click();
-  URL.revokeObjectURL(url);
-  return null;
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 /**
@@ -92,13 +109,7 @@ export async function saveFiles(files) {
     return { written: files.length, folder: dir.name };
   }
   for (const { name, content } of files) {
-    const url = URL.createObjectURL(
-      content instanceof Blob ? content : new Blob([content]));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    a.click();
-    URL.revokeObjectURL(url);
+    download(content instanceof Blob ? content : new Blob([content]), name);
   }
   return { written: files.length, folder: null };
 }
@@ -142,9 +153,13 @@ export const ACCEPT = {
     extensions: ['.json'],
     mime: { 'application/json': ['.json'] },
   },
+  // .ngc first: it is what every export here is called (LinuxCNC's own
+  // extension), and it was missing — so Check a file listed every program but
+  // the ones this app writes, and the save dialog filtered on a type the name
+  // it suggested did not have.
   gcode: {
     description: 'G-code',
-    extensions: ['.nc', '.gcode', '.tap'],
-    mime: { 'text/plain': ['.nc', '.gcode', '.tap'] },
+    extensions: ['.ngc', '.nc', '.gcode', '.tap', '.cnc'],
+    mime: { 'text/plain': ['.ngc', '.nc', '.gcode', '.tap', '.cnc'] },
   },
 };

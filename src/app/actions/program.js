@@ -25,7 +25,7 @@ import { wrapFor, wrapWarnings, wrapExtent, linearExtent } from '../../engine/wr
 import { buildGcode, postsFor, defaultPostFor } from '../../post/index.js';
 import { renderGcodePanel } from '../gcode-panel.js';
 import {
-  opStatus, formatTime, opFingerprint, toolNumberClashes, toolChangesIn,
+  opStatus, formatTime, opFingerprint, toolNumberClashes, toolChangesIn, opBlockedReason,
 } from '../op-status.js';
 import { resolveRegions } from '../regions-ui.js';
 import {
@@ -816,8 +816,36 @@ export function makeProgramActions(ctx, space) {
     const ops = postableOps();
     if (ops.length === 0) return ctx.ui.setStatus('Generate toolpaths before exporting', true);
     refreshGcodePreview();
-    await saveFile(`${doc.project.name}.ngc`, ctx.lastProgram.text, ACCEPT.gcode);
-    ctx.ui.setStatus(`Exported ${plural(ops.length, 'operation')} — ${doc.postId()} post`);
+    if (!(await saveFile(`${doc.project.name}.ngc`, ctx.lastProgram.text, ACCEPT.gcode))) {
+      return ctx.ui.setStatus('Export cancelled — nothing was written');
+    }
+    const left = leftOut();
+    return ctx.ui.setStatus(`Exported ${plural(ops.length, 'operation')} — ${doc.postId()} post`
+      + left.text, left.count > 0);
+  }
+
+  /**
+   * Enabled operations that are not in the file, and why.
+   *
+   * The export regenerates first, and an operation that can no longer be
+   * generated — its tool deleted, the drawing it followed gone — simply has no
+   * toolpath and drops out of the program. The status line then said "Exported
+   * 1 operation" for a job of two, and the file went to the machine a pass
+   * short with nothing anywhere saying which.
+   */
+  function leftOut() {
+    const missing = [...doc.allOperations()]
+      .filter(({ op }) => op.enabled && !doc.toolpaths.has(op.id))
+      .map(({ op }) => {
+        const why = opBlockedReason(doc, op)
+          ?? (op.params?.drawingId ? 'the drawing it follows is gone' : 'it could not be generated');
+        return `${op.name} (${why})`;
+      });
+    if (missing.length === 0) return { count: 0, text: '' };
+    return {
+      count: missing.length,
+      text: ` — NOT in the file: ${missing.join(', ')}`,
+    };
   }
 
   /** The post options every export uses, so one program cannot differ from another. */
@@ -888,9 +916,11 @@ export function makeProgramActions(ctx, space) {
 
     const { written, folder } = await saveFiles(files);
     if (written === 0) return ctx.ui.setStatus('Export cancelled');
-    ctx.ui.setStatus(folder
+    const left = leftOut();
+    return ctx.ui.setStatus((folder
       ? `Exported ${plural(written, 'operation')} into ${folder} — ${doc.postId()} post`
-      : `Exported ${plural(written, 'operation')} to your downloads — ${doc.postId()} post`);
+      : `Exported ${plural(written, 'operation')} to your downloads — ${doc.postId()} post`)
+      + left.text, left.count > 0);
   }
 
   /** One operation, on its own, from the tree or the operation panel. */
@@ -905,8 +935,10 @@ export function makeProgramActions(ctx, space) {
         orientation: setup ? orientationFor(setup, doc.machineRecord()) : null,
         wrap: setup ? wrapFor(setup, doc.machineRecord()) : null,
       }], postSettings());
-    await saveFile(`${safeFileName(op.name)}.ngc`, text, ACCEPT.gcode);
-    ctx.ui.setStatus(`Exported ${op.name} — ${doc.postId()} post`);
+    if (!(await saveFile(`${safeFileName(op.name)}.ngc`, text, ACCEPT.gcode))) {
+      return ctx.ui.setStatus('Export cancelled — nothing was written');
+    }
+    return ctx.ui.setStatus(`Exported ${op.name} — ${doc.postId()} post`);
   }
 
   /**

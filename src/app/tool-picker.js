@@ -537,8 +537,8 @@ export function openToolPicker({
       return say('That catalogue has no cutters in it', true);
     }
     const file = `${catalog.name.replace(/[^\w.-]+/g, '-').toLowerCase()}-tools.json`;
-    await files.save(file, serializeLibrary(catalog.tools, catalog.name));
-    say(`Exported ${catalog.tools.length} cutters from “${catalog.name}”`);
+    if (!(await files.save(file, serializeLibrary(catalog.tools, catalog.name)))) return undefined;
+    return say(`Exported ${catalog.tools.length} cutters from “${catalog.name}”`);
   }
 
   const add = el('button', { class: 'primary' }, ['Add selected']);

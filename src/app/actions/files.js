@@ -173,8 +173,10 @@ export function makeFileActions(ctx, program) {
   }
 
   async function saveProject() {
-    await saveFile(`${doc.project.name}.cncam`, doc.toJSON(), ACCEPT.project);
-    ctx.ui.setStatus('Project saved');
+    if (!(await saveFile(`${doc.project.name}.cncam`, doc.toJSON(), ACCEPT.project))) {
+      return ctx.ui.setStatus('Save cancelled — nothing was written');
+    }
+    return ctx.ui.setStatus('Project saved');
   }
 
   /**
@@ -439,10 +441,11 @@ export function makeFileActions(ctx, program) {
     if (doc.project.tools.length === 0) {
       return ctx.ui.setStatus('No tools to export', true);
     }
-    await saveFile(`${doc.project.name}-tools.json`,
+    const saved = await saveFile(`${doc.project.name}-tools.json`,
       // named after the project, so importing it back as a catalogue gives a
       // drawer that says where those cutters came from
       serializeLibrary(doc.project.tools, doc.project.name), ACCEPT.toolLibrary);
+    if (!saved) return ctx.ui.setStatus('Export cancelled — nothing was written');
     ctx.ui.setStatus(`Exported ${plural(doc.project.tools.length, 'tool')}`);
   }
 

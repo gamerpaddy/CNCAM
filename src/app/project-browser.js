@@ -231,7 +231,7 @@ export function openProjectBrowser({
     try {
       const json = await readVersion(meta.id, v);
       const suffix = v === meta.versions[0].v ? '' : `-v${v}`;
-      await files.save(`${meta.name}${suffix}.cncam`, json);
+      if (!(await files.save(`${meta.name}${suffix}.cncam`, json))) return;
       onStatus?.(`${meta.name} v${v} written out`);
     } catch (err) {
       onStatus?.(`Download failed: ${err.message}`, true);

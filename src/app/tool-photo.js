@@ -47,6 +47,12 @@ export async function normalisePhoto(source) {
     canvas.width = out;
     canvas.height = out;
     const ctx = canvas.getContext('2d');
+    // A JPEG has no transparency, and a canvas that was never painted is
+    // transparent black — so a cutter cut out onto a clear background, which
+    // is how a supplier's product shot usually arrives, came out as a dark tool
+    // on a black square. White is the background those pictures were cut from.
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, out, out);
     ctx.drawImage(
       bitmap,
       (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side,
