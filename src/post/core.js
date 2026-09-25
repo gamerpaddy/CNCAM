@@ -187,6 +187,15 @@ export function buildProgram(dialect, ops, options = {}) {
     // the reader of the file needs. What is dropped is the motion-side state:
     // nothing was cut, so nothing needed fitting, starting or turning on.
     const silent = cl.count === 0;
+    // A command operation has no moves either, but it is not motionless in the
+    // sense `silent` means: its lines run on the machine, in the fixturing and
+    // under the work offset of the setup it belongs to. So it still crosses a
+    // setup boundary. It used not to — the stop for the operator and the G55
+    // were left for the next operation that moved, and a probe block written as
+    // the first thing in setup 2 ran with the spindle still on, on setup 1's
+    // part, in setup 1's coordinates.
+    const command = silent && events.some((e) => e.type === 'raw' && String(e.text ?? '').trim());
+    const inSetup = !silent || command;
 
     const flush = (e) => {
       endCycle();
@@ -294,7 +303,7 @@ export function buildProgram(dialect, ops, options = {}) {
     // turned over and be picked up on a new datum. Nothing in the program said
     // so. So the transition is written as what it is: the spindle stopped, the
     // coolant off, and a program stop with the reason next to it.
-    if (!silent && op.setup != null) {
+    if (inSetup && op.setup != null) {
       const thisIndexed = !!op.orientation;
       // An indexed setup is reached by the machine swinging its rotary axes to a
       // fixed angle and locking, not by the operator turning the part over — so
@@ -324,7 +333,7 @@ export function buildProgram(dialect, ops, options = {}) {
     }
     // the work offset ties our coordinates to what the operator touched off,
     // so it is stated once and restated whenever a setup change moves it
-    if (op.wcs && op.wcs !== activeWcs && !silent) {
+    if (op.wcs && op.wcs !== activeWcs && inSetup) {
       (dialect.wcs ?? defaultWcs)(w, { code: op.wcs });
       activeWcs = op.wcs;
       // Modal words are numbers in *some* coordinate system, and this line just

@@ -18,7 +18,7 @@ import { wrapFor, linearExtent, WRAP_AXES, WRAP_AXIS_LABELS } from '../../engine
 import { setupModelIds } from '../actions/setup-space.js';
 import { boreProfile } from '../../engine/lathe.js';
 import { computeBounds, mergeMeshes } from '../../geom/mesh.js';
-import { opStatus, formatTime } from '../op-status.js';
+import { opStatus, formatTime, toolChangesIn } from '../op-status.js';
 import { machineWarnings } from '../../doc/machines.js';
 import { effectiveCutting } from '../../engine/cutting.js';
 import { MOVE_STRIDE, OP } from '../../engine/cl.js';
@@ -128,13 +128,11 @@ function jobSummarySection(doc, setup) {
   let seconds = 0;
   let generated = 0;
   let stale = 0;
-  let lastToolId = null;
-  let toolChanges = 0;
+  const { changes: toolChanges } = toolChangesIn(doc, ops);
   const lines = [];
 
   for (const op of ops) {
     const tool = doc.project.tools.find((t) => t.id === op.toolId);
-    if (tool && tool.id !== lastToolId) { toolChanges++; lastToolId = tool.id; }
     const status = opStatus(doc, op);
     if (status) { seconds += status.seconds; generated++; if (status.stale) stale++; }
     lines.push(el('div', { class: 'job-row' }, [

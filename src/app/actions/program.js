@@ -24,7 +24,9 @@ import { orientationFor, indexingWarnings } from '../../engine/indexing.js';
 import { wrapFor, wrapWarnings, wrapExtent, linearExtent } from '../../engine/wrap.js';
 import { buildGcode, postsFor, defaultPostFor } from '../../post/index.js';
 import { renderGcodePanel } from '../gcode-panel.js';
-import { opStatus, formatTime, opFingerprint, toolNumberClashes } from '../op-status.js';
+import {
+  opStatus, formatTime, opFingerprint, toolNumberClashes, toolChangesIn,
+} from '../op-status.js';
 import { resolveRegions } from '../regions-ui.js';
 import {
   SimulationPlayback, positionAtStep, positionAtTime, turnPositionAt, opSpindleRpm,
@@ -312,15 +314,14 @@ export function makeProgramActions(ctx, space) {
     return out;
   }
 
-  /** How many times the operator or the turret has to change tool. */
+  /**
+   * How many times the operator or the turret has to change tool — in the
+   * program as posted, so only what was generated. See op-status.js.
+   */
   function toolChangeCount() {
-    let changes = 0;
-    let last = null;
-    for (const { op } of doc.allOperations()) {
-      if (!op.enabled || !doc.toolpaths.has(op.id) || !op.toolId) continue;
-      if (op.toolId !== last) { changes++; last = op.toolId; }
-    }
-    return changes;
+    const ops = [...doc.allOperations()]
+      .map(({ op }) => op).filter((op) => doc.toolpaths.has(op.id));
+    return toolChangesIn(doc, ops).changes;
   }
 
   /** The box every move of the program stays inside, in setup coordinates. */

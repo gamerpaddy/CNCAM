@@ -507,3 +507,35 @@ test('a command block leaves the post honest about what it no longer knows', () 
     `a dry program that contains a command block has no M9 in it:
 ${dryAfter}`);
 });
+
+test('a command at the start of a setup runs after that setup is fixtured, not before', () => {
+  // A command belongs to the setup it sits in. The first thing in a second
+  // setup is very often a probe or a "check the vice" stop — and it was posted
+  // before the re-fixturing stop, the M5 and the second work offset, because
+  // those were only written by an operation that moved. So the probe ran with
+  // the spindle still turning, on the first setup's part, in G54.
+  const cut = (x) => {
+    const b = new CLBuilder();
+    b.toolChange(1);
+    b.spindle(9000);
+    b.rapid(0, 0, 5);
+    b.cut(x, 0, -1);
+    return b.finish();
+  };
+  const { text } = buildGcode('linuxcnc', [
+    { name: 'top', setup: 's1', setupName: 'Top', wcs: 'G54', cl: cut(10) },
+    {
+      name: 'probe', setup: 's2', setupName: 'Bottom', wcs: 'G55',
+      cl: generateCommand({ params: { gcode: 'G38.2 Z-50 F100' } }),
+    },
+    { name: 'bottom', setup: 's2', setupName: 'Bottom', wcs: 'G55', cl: cut(20) },
+  ]);
+  const lines = text.split('\n');
+  const at = (needle) => lines.findIndex((l) => l === needle);
+  assert.ok(at('M0') >= 0 && at('M0') < at('G38.2 Z-50 F100'),
+    `the operator re-fixtures before the block runs:\n${text}`);
+  assert.ok(at('M5') < at('G38.2 Z-50 F100'), 'with the spindle stopped');
+  assert.ok(at('G55') < at('G38.2 Z-50 F100'), 'and in the second setup\'s work offset');
+  assert.eq(text.match(/^M0$/gm).length, 1, 'one stop for one re-fixturing');
+  assert.eq(text.match(/^G55$/gm).length, 1, 'and the offset stated once');
+});

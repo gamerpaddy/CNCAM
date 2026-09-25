@@ -24,6 +24,7 @@ import {
 
 const PROJECT_KEY = 'cncam.project';
 const MESH_KEY = 'cncam.meshes';
+const STORE_ID_KEY = 'cncam.sessionProject';
 const SAVE_DELAY = 400;
 const MESH_BUDGET = 3_000_000;   // characters of base64; keeps us inside quota
 
@@ -81,10 +82,35 @@ function loadLegacyMeshes() {
   return meshes;
 }
 
+/**
+ * Which project in the browser's store the session is a version of, or null.
+ *
+ * Kept beside the session rather than only in memory: the session survives a
+ * reload, and a session that forgot where it was filed made its next "Save a
+ * version" a second drawer of the same job instead of the next version in the
+ * first. Not in the project itself, because a project goes out as a file and
+ * this is a fact about one browser.
+ */
+export function sessionProjectId() {
+  try {
+    return localStorage.getItem(STORE_ID_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function setSessionProjectId(id) {
+  try {
+    if (id) localStorage.setItem(STORE_ID_KEY, id);
+    else localStorage.removeItem(STORE_ID_KEY);
+  } catch { /* no storage: the link lasts as long as the page */ }
+}
+
 /** Forget the session — both where it lives now and where it used to. */
 export function clearSaved() {
   localStorage.removeItem(PROJECT_KEY);
   localStorage.removeItem(MESH_KEY);
+  setSessionProjectId(null);
   return storeAvailable() ? clearSession() : Promise.resolve();
 }
 
@@ -107,7 +133,14 @@ export function attachAutosave(doc, { onError } = {}) {
         // writes are chained rather than overlapped: two createWritable() calls
         // racing on the same file is a truncated project, and the later one is
         // the only one anybody wants anyway.
+        //
+        // The chain is joined past any earlier failure: `.then` on a rejected
+        // promise never calls its callback, so one write that failed (a full
+        // disk, a moment's lock) used to leave `writing` rejected for good and
+        // every save after it skipped — silently, because the warning is only
+        // given once. A failed write is reported by the save that made it.
         writing = (writing ?? Promise.resolve())
+          .catch(() => {})
           .then(() => saveSession(serializeProject(doc.project, doc.meshes)));
         await writing;
       } else {

@@ -3,7 +3,9 @@
 
 import { Document } from '../doc/document.js';
 import { plural } from '../engine/text.js';
-import { loadSaved, attachAutosave } from '../doc/autosave.js';
+import {
+  loadSaved, attachAutosave, sessionProjectId, setSessionProjectId,
+} from '../doc/autosave.js';
 import { computeNormals, mergeMeshes } from '../geom/mesh.js';
 import { sliceMeshZ } from '../geom/slice.js';
 import { transformMesh } from '../engine/setup.js';
@@ -47,11 +49,15 @@ const ctx = {
   lastProgram: null,
   pickMode: null,              // 'include' | 'avoid' | null — transient UI state
   pickKind: 'face',            // 'face' | 'edge' — what a click selects
+  // The project in the browser's store this job is a version of — kept with
+  // the session, so a reload still saves into the drawer it came from.
+  get storeProjectId() { return sessionProjectId(); },
+  set storeProjectId(id) { setSessionProjectId(id); },
   opTabs: new Map(),           // opId -> which properties tab is open
   setPickMode: (mode, kind) => setPickMode(mode, kind),
   setPickKind: (kind) => setPickMode(ctx.pickMode, kind),
   rerenderProps: () => {
-    renderProps(ctx.ui.props, ctx.doc, ctx);
+    renderPropsKeepingFocus();
     syncHeightGizmoVisibility();
   },
   // The named Z values a height can be snapped to — the top of the part, the
@@ -72,8 +78,7 @@ function refresh(kind) {
   // re-derived after it rather than before — see pickingLive.
   const wasPicking = ctx.pickMode;
 
-  renderTree(ui.tree, doc, ctx);
-  renderProps(ui.props, doc, ctx);
+  renderPanels();
   ui.setMachine(doc.machine, machinesFor(doc.project, doc.machine),
     doc.machineRecord()?.id ?? null);
   // A lathe is not a mill seen from another angle: Z runs along the bar and X
@@ -97,6 +102,125 @@ function refresh(kind) {
   applyPickHandler();
   syncHint();
   ui.setHistory(doc.undoStack);
+}
+
+// --- rebuilding the side panels without losing the gesture that caused it ---
+//
+// A field commits on `change`, and `change` fires as the field *loses* focus —
+// in the middle of whatever took the focus away: the click on the next field,
+// the Tab to it, the click on a tree row, the arrow key that nudges it. The tree
+// and the panel are rebuilt on every document change, so the rebuild replaced
+// the thing being clicked before the click reached it. The click went nowhere,
+// the caret went to <body>, and the next keys typed went to the shortcuts: the
+// Delete pressed to clear the next field deleted the operation, a typed "s"
+// started a simulation, and an arrow key nudged a number once and never again.
+//
+// So the rebuild waits. While a pointer that went down in a panel is still down
+// it waits for the click to land; while a control in them has the focus it
+// waits for the focus to finish moving; and then the caret is put back on the
+// same control in the new panel.
+let panelsPending = false;
+let pointerInPanels = false;
+// A Tab out of a field is not seen by the focus check below: the browser takes
+// the focus off the field *before* it dispatches the field's `change`, so for
+// the length of that event the caret is on <body>. The event's own target says
+// where the edit came from.
+let committingInPanels = false;
+
+function inPanels(node) {
+  const { ui } = ctx;
+  return !!node && node !== document.body
+    && (ui.props.contains(node) || ui.tree.contains(node));
+}
+
+function renderPanels() {
+  if (pointerInPanels || committingInPanels || inPanels(document.activeElement)) {
+    if (!panelsPending) {
+      panelsPending = true;
+      if (!pointerInPanels) setTimeout(flushPanels, 0);
+    }
+    return;
+  }
+  panelsPending = false;
+  renderTree(ctx.ui.tree, ctx.doc, ctx);
+  renderPropsKeepingFocus();
+}
+
+function flushPanels() {
+  if (!panelsPending || pointerInPanels) return;
+  panelsPending = false;
+  renderTree(ctx.ui.tree, ctx.doc, ctx);
+  renderPropsKeepingFocus();
+  // what the panel settles (which tab is open) decides these two
+  syncHeightGizmoVisibility();
+  applyPickHandler();
+}
+
+function watchPanelPointer() {
+  window.addEventListener('pointerdown', (e) => {
+    pointerInPanels = inPanels(e.target);
+  }, true);
+  // After the click, not at the release: `click` is dispatched after
+  // `pointerup`, and it has to reach the control the pointer went down on.
+  const release = () => {
+    if (!pointerInPanels) return;
+    pointerInPanels = false;
+    if (panelsPending) setTimeout(flushPanels, 0);
+  };
+  for (const type of ['pointerup', 'pointercancel', 'dragend']) {
+    window.addEventListener(type, release, true);
+  }
+  // The window losing focus mid-press, not a field losing it: a field's blur is
+  // the very event this is waiting out.
+  window.addEventListener('blur', (e) => { if (e.target === window) release(); });
+  window.addEventListener('change', (e) => {
+    if (!inPanels(e.target)) return;
+    committingInPanels = true;
+    // cleared before the deferred rebuild runs, which is queued after this
+    setTimeout(() => { committingInPanels = false; }, 0);
+  }, true);
+}
+
+const FOCUSABLE = 'input, select, textarea, button';
+
+/** What a control is called, so its replacement can be found by name. */
+function controlName(node) {
+  return (node.labels?.[0]?.textContent ?? node.getAttribute('placeholder')
+    ?? node.getAttribute('title') ?? node.textContent ?? '').trim();
+}
+
+/** Rebuild the properties panel and put the caret back on the same control. */
+function renderPropsKeepingFocus() {
+  const { ui, doc } = ctx;
+  const active = document.activeElement;
+  let focus = null;
+  if (active && active !== document.body && ui.props.contains(active)) {
+    const all = [...ui.props.querySelectorAll(FOCUSABLE)];
+    const name = controlName(active);
+    const same = all.filter((n) => n.tagName === active.tagName && controlName(n) === name);
+    focus = {
+      tag: active.tagName,
+      name,
+      nth: same.indexOf(active),
+      index: all.indexOf(active),
+      caret: typeof active.selectionStart === 'number'
+        ? [active.selectionStart, active.selectionEnd] : null,
+    };
+  }
+  renderProps(ui.props, doc, ctx);
+  if (!focus) return;
+  const all = [...ui.props.querySelectorAll(FOCUSABLE)];
+  const same = all.filter((n) => n.tagName === focus.tag && controlName(n) === focus.name);
+  const target = same[focus.nth]
+    ?? (all[focus.index]?.tagName === focus.tag ? all[focus.index] : null);
+  if (!target || target.disabled) return;
+  target.focus({ preventScroll: true });
+  if (focus.caret && typeof target.selectionStart === 'number') {
+    const end = target.value.length;
+    try {
+      target.setSelectionRange(Math.min(focus.caret[0], end), Math.min(focus.caret[1], end));
+    } catch { /* not a text control */ }
+  }
 }
 
 /**
@@ -492,6 +616,7 @@ function boot() {
   // Every key lives in shortcuts.js, so the help dialog and the bindings come
   // from one table and cannot drift apart.
   bindShortcuts(window, ctx);
+  watchPanelPointer();
 
   restoreSaved();   // async: the store is a filesystem, and the boot does not wait on it
   if (getSetting('autosave')) {
@@ -559,7 +684,11 @@ function showBuildBadge() {
  */
 async function restoreSaved() {
   const saved = await loadSaved();
-  if (!saved) return;
+  if (!saved) {
+    // nothing came back, so there is no job for a remembered drawer to be of
+    ctx.storeProjectId = null;
+    return;
+  }
   const meshes = new Map();
   for (const [id, mesh] of saved.meshes) meshes.set(id, computeNormals(mesh));
   ctx.doc.restore(saved.project, meshes);

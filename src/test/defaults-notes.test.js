@@ -13,7 +13,7 @@ import {
   createOperation, createTool, createSetup, createModel, createDrawing, OP_TYPES,
 } from '../doc/schema.js';
 import {
-  formatTime, opPreflight, opFingerprint, toolNumberClashes,
+  formatTime, opPreflight, opFingerprint, toolNumberClashes, toolChangesIn,
 } from '../app/op-status.js';
 import { defaultParamsFor, retypeParams, depthRangeFor } from '../engine/op-defaults.js';
 import { generateToolpath, toolpathStats } from '../engine/toolpath.js';
@@ -859,6 +859,41 @@ test('two cutters on one T number are named as the clash they are', () => {
   assert.eq(clash.get(1).length, 2, 'by two cutters');
   assert.ok(opPreflight(doc, op).some((n) => /different cutters/.test(n)),
     'and the operation holding it says so');
+});
+
+test('tool changes are counted the way the post writes them', () => {
+  // The count goes into the cycle time, and on a machine changed by hand a
+  // change is a minute. It counted every operation *holding* a tool, so a
+  // drill that found no holes between two passes on one end mill made three
+  // changes in the estimate and one M6 in the file.
+  const doc = new Document();
+  const mill = toolFor('flat', 6);
+  const drill = toolFor('drill', 10);
+  drill.number = 2;
+  doc.addTool(mill);
+  doc.addTool(drill);
+  const setup = createSetup('Setup 1');
+  doc.addSetup(setup);
+  const ops = ['contour2d', 'drill', 'contour2d', 'command'].map((type, i) => {
+    const op = createOperation(type);
+    op.toolId = type === 'drill' ? drill.id : type === 'command' ? null : mill.id;
+    op.name = `${type} ${i}`;
+    doc.addOperation(setup, op);
+    return op;
+  });
+  // not generated yet: every operation is assumed to cut
+  assert.eq(toolChangesIn(doc, setup.operations).changes, 3, 'before generating, three');
+
+  const cut = { count: 5, moves: new Float32Array(0), events: [] };
+  doc.toolpaths.set(ops[0].id, cut);
+  doc.toolpaths.set(ops[1].id, { count: 0, moves: new Float32Array(0), events: [] });
+  doc.toolpaths.set(ops[2].id, cut);
+  assert.eq(toolChangesIn(doc, setup.operations).changes, 1,
+    'an operation that cut nothing changes no tool, and the end mill stays in');
+
+  // what is already in the spindle carries in from the setup before
+  assert.eq(toolChangesIn(doc, setup.operations, mill.number).changes, 0,
+    'nothing to change when the end mill is already fitted');
 });
 
 // --- fields the panel offers that nothing reads ---

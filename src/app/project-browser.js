@@ -64,6 +64,10 @@ export function openProjectBrowser({
       body.replaceChildren(el('div', { class: 'tree-empty' }, [`Could not read the store: ${err.message}`]));
       return;
     }
+    // The drawer this job was last saved into may have been deleted since — in
+    // this dialog, in another tab, or before a reload. Saving "into" it then
+    // re-created a project nobody could see marked, under the old id.
+    if (saveAs && !projects.some((p) => p.id === saveAs)) saveAs = null;
     body.replaceChildren(...(projects.length
       ? projects.map(projectRow)
       : [el('div', { class: 'tree-empty' }, [
@@ -270,6 +274,10 @@ export function openProjectBrowser({
     const next = prompt('Call this project:', meta.name);
     if (next == null || !next.trim() || next.trim() === meta.name) return;
     await renameProject(meta.id, next.trim());
+    // The save box names what the next version is called, and a save writes
+    // that name into the drawer — so left alone it put the old name straight
+    // back on the project that was just renamed.
+    if (saveAs === meta.id) nameInput.value = next.trim();
     refresh();
   }
 

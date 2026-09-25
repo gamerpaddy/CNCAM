@@ -449,6 +449,38 @@ export function toolNumberClashes(project) {
   return new Map([...byNumber].filter(([, tools]) => tools.length > 1));
 }
 
+/**
+ * How many tool changes a run of operations makes — counted the way the post
+ * writes them, because the count is only ever used to say how long the file
+ * will take.
+ *
+ * It was counted twice, once for the status line and once for the setup's
+ * Program summary, and both counted an operation that *holds* a tool rather
+ * than one that *changes* to it. The post writes no tool change for an
+ * operation that produced no moves (post/core.js `silent`), and none for a
+ * number already in the spindle: a drill that found no holes between two
+ * passes on the same end mill posted one M6, and both counts said three — on a
+ * machine changed by hand, two minutes of cycle time that is not in the file.
+ *
+ * An operation not generated yet is assumed to cut, which is what it is for.
+ *
+ * @param inSpindle the tool number already fitted when this run starts
+ * @returns { changes, inSpindle } — the second so a caller can carry it on
+ */
+export function toolChangesIn(doc, ops, inSpindle = null) {
+  let changes = 0;
+  let fitted = inSpindle;
+  for (const op of ops) {
+    if (!op.enabled || op.type === 'command') continue;
+    const tool = doc.project.tools.find((t) => t.id === op.toolId);
+    if (!tool) continue;
+    const cl = doc.toolpaths.get(op.id);
+    if (cl && cl.count === 0) continue;
+    if (tool.number !== fitted) { changes++; fitted = tool.number; }
+  }
+  return { changes, inSpindle: fitted };
+}
+
 /** Whether any enabled operation in this setup runs before `op`. */
 function earlierEnabledOp(setup, op) {
   for (const previous of setup.operations ?? []) {
