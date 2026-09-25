@@ -55,6 +55,14 @@ export function openToolPicker({
   const count = el('span', { class: 'lib-count' }, ['']);
   const catalogBar = el('div', { class: 'lib-catalogs' });
   let checkboxes = [];
+  // What is ticked, by where it came from and what it is called — held apart
+  // from the checkboxes, which are thrown away on every rebuild. They used to be
+  // the only record, so typing in the search box untied everything: tick the
+  // end mill, search for the drill, tick that, clear the search, and "Add"
+  // added nothing. Pulling several cutters at once is what the ticks are for,
+  // and the search is how anybody finds the second one.
+  const picked = new Map();          // key → tool
+  const keyOf = (tool, source) => `${source ?? ''}/${tool.name}`;
   let query = '';
   // which drawer is open. 'all' is every one of them at once, which is what the
   // dialog did before catalogues existed and is still the right default: most
@@ -102,6 +110,7 @@ export function openToolPicker({
       out.push({
         title: selected === ALL ? `${group.catalogName} · ${group.group}` : group.group,
         tools: group.tools,
+        source: group.catalog,
       });
     }
     return out;
@@ -126,12 +135,9 @@ export function openToolPicker({
         el('div', { class: 'lib-grid' }, visible.map((tool) => card(tool, widest, {
           catalogId: group.catalogId ?? null,
           catalogName: group.title,
+          source: group.catalogId ?? group.source,
           onDelete: group.catalogId
-            ? () => {
-              removeUserTool(tool.name, group.catalogId);
-              say(`${tool.name} removed from ${group.title}`);
-              refresh();
-            }
+            ? () => removeFromCatalog(tool, group.catalogId, group.title)
             : null,
         }))),
       ]));
@@ -164,8 +170,12 @@ export function openToolPicker({
    * The whole card is the label, so clicking anywhere on it ticks the box —
    * a checkbox you have to hit exactly is a checkbox you miss.
    */
-  function card(tool, widest, { onDelete, catalogId = null, catalogName = '' }) {
+  function card(tool, widest, {
+    onDelete, catalogId = null, catalogName = '', source = null,
+  }) {
+    const key = keyOf(tool, source);
     const box = el('input', { type: 'checkbox', class: 'lib-check' });
+    box.checked = picked.has(key);
     checkboxes.push({ box, tool });
 
     const children = [
@@ -197,9 +207,13 @@ export function openToolPicker({
       children.push(remove);
     }
 
-    const node = el('label', { class: 'lib-item', title: describeTool(tool) }, children);
+    const node = el('label', {
+      class: `lib-item${box.checked ? ' checked' : ''}`, title: describeTool(tool),
+    }, children);
     box.addEventListener('change', () => {
       node.classList.toggle('checked', box.checked);
+      if (box.checked) picked.set(key, tool);
+      else picked.delete(key);
       updateAddLabel();
     });
     // double-click is "this one, now" — the same shortcut the strategy picker has
@@ -292,16 +306,25 @@ export function openToolPicker({
       { separator: true },
       {
         label: `Remove from ${catalogName}`, danger: true,
-        onclick: () => {
-          if (!confirm(`Remove ${tool.name} from ${catalogName}?\n\n`
-            + 'It goes out of this browser’s library. Projects already using it '
-            + 'keep their own copy, and the built-in presets are untouched.')) return;
-          removeUserTool(tool.name, catalogId);
-          say(`${tool.name} removed from ${catalogName}`);
-          refresh();
-        },
+        onclick: () => removeFromCatalog(tool, catalogId, catalogName),
       },
     ];
+  }
+
+  /**
+   * Take a cutter out of one of the user's drawers — asked about first, from
+   * the menu and from the ✕ on the card alike. The ✕ used to remove it on the
+   * spot: the same loss behind a smaller button, with no undo, since the
+   * library lives in this browser and nowhere else.
+   */
+  function removeFromCatalog(tool, catalogId, catalogName) {
+    if (!confirm(`Remove ${tool.name} from ${catalogName}?\n\n`
+      + 'It goes out of this browser’s library. Projects already using it '
+      + 'keep their own copy, and the built-in presets are untouched.')) return;
+    removeUserTool(tool.name, catalogId);
+    picked.delete(keyOf(tool, catalogId));
+    say(`${tool.name} removed from ${catalogName}`);
+    refresh();
   }
 
   /**
@@ -520,12 +543,12 @@ export function openToolPicker({
 
   const add = el('button', { class: 'primary' }, ['Add selected']);
   function updateAddLabel() {
-    const n = checkboxes.filter((c) => c.box.checked).length;
+    const n = picked.size;
     add.textContent = n === 0 ? 'Add selected' : `Add ${n} tool${n === 1 ? '' : 's'}`;
     add.disabled = n === 0;
   }
   add.addEventListener('click', () => {
-    const chosen = checkboxes.filter((c) => c.box.checked).map((c) => c.tool);
+    const chosen = [...picked.values()];
     dialog.close();
     if (chosen.length) onAdd(chosen);
   });

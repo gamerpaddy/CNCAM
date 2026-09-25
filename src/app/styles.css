@@ -13,6 +13,11 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* The reset above also took the browser's `margin: auto` off a modal dialog,
+   which is the whole of what centres one — so every dialog in the app opened
+   pinned to the top-left corner of the window. */
+dialog { margin: auto; }
+
 html, body, #app { height: 100%; overflow: hidden; }
 
 body {

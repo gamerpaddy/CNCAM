@@ -17,6 +17,7 @@ import {
 import { POSTS, postsFor } from '../post/index.js';
 import { numberInput, parseNumber, formatNumber } from './number-input.js';
 import { propRow } from './props/fields.js';
+import { whenSettled, rebuildKeepingFocus } from './keep-focus.js';
 
 const KIND_LABELS = { mill: 'Mill', turn: 'Lathe' };
 
@@ -155,6 +156,16 @@ export function openMachineManager(doc, { onDone } = {}) {
     return pool.find((m) => m.id === selectedId) ?? pool[0] ?? null;
   }
 
+  /**
+   * Rebuild after an edit — once the gesture that committed it has finished,
+   * and with the caret put back. Every field here commits on `change`, and
+   * rebuilding synchronously replaced the next field before the click on it
+   * landed; see app/keep-focus.js.
+   */
+  function rebuild() {
+    whenSettled('machines', [dialog], () => rebuildKeepingFocus(dialog, build));
+  }
+
   function build() {
     const pool = machines();
     if (!pool.some((m) => m.id === selectedId)) selectedId = pool[0]?.id ?? null;
@@ -243,7 +254,7 @@ export function openMachineManager(doc, { onDone } = {}) {
       input.value = rotaryKindOf(machine);
       input.addEventListener('change', () => {
         doc.updateItem(machine, { rotary: rotaryPreset(input.value) }, 'machine rotary');
-        build();
+        rebuild();
       });
       return propRow(label, input);
     }
@@ -256,7 +267,7 @@ export function openMachineManager(doc, { onDone } = {}) {
       input.value = value ?? options[0];
       input.addEventListener('change', () => {
         doc.updateItem(machine, write(machine, field.key, input.value), `machine ${field.key}`);
-        build();
+        rebuild();
       });
     } else if (field.type === 'multiline') {
       // A box rather than a field: these are programs, several lines long, and
@@ -265,7 +276,7 @@ export function openMachineManager(doc, { onDone } = {}) {
       input.value = value ?? '';
       input.addEventListener('change', () => {
         doc.updateItem(machine, write(machine, field.key, input.value), `machine ${field.key}`);
-        build();
+        rebuild();
       });
       // Full width, under its label rather than beside it: a four-line box in
       // the right-hand column of a two-column row is forty characters wide.
@@ -275,18 +286,25 @@ export function openMachineManager(doc, { onDone } = {}) {
       input.checked = !!value;
       input.addEventListener('change', () => {
         doc.updateItem(machine, write(machine, field.key, input.checked), `machine ${field.key}`);
-        build();
+        rebuild();
       });
     } else {
       const numeric = field.type === 'number';
       input = numeric ? numberInput(field) : el('input', { type: 'text' });
       input.value = numeric ? formatNumber(value) : (value ?? '');
       input.addEventListener('change', () => {
-        const next = numeric
-          ? Math.max(field.min ?? -Infinity, parseNumber(input.value) || 0)
-          : input.value;
+        const typed = numeric ? parseNumber(input.value) : input.value;
+        // An entry that is not a number puts the old one back, as every other
+        // number box in the app does. It used to become 0, raised to the
+        // field's minimum — a cleared Rapid box was a machine that traverses at
+        // 1 mm/min, and every estimate went with it.
+        if (numeric && !Number.isFinite(typed)) {
+          input.value = formatNumber(value);
+          return;
+        }
+        const next = numeric ? Math.max(field.min ?? -Infinity, typed) : typed;
         doc.updateItem(machine, write(machine, field.key, next), `machine ${field.key}`);
-        build();
+        rebuild();
       });
     }
     return propRow(label, input);

@@ -172,6 +172,12 @@ export function firesWhileTyping(shortcut) {
 export function bindShortcuts(target, ctx) {
   const table = shortcuts(ctx);
   const onKeyDown = (event) => {
+    // A modal dialog owns the keyboard. Every key here acts on the project
+    // behind it, which the dialog is hiding: with a button focused in the
+    // Machines dialog, Delete deleted the selected operation, S started a
+    // simulation and A opened a second dialog on top of the first. Escape is
+    // the dialog's own (it closes it), and nothing else is meant for the app.
+    if (modalOpen()) return;
     const typing = /INPUT|SELECT|TEXTAREA/.test(event.target.tagName)
       || event.target.isContentEditable;
     for (const shortcut of table) {
@@ -185,6 +191,16 @@ export function bindShortcuts(target, ctx) {
   };
   target.addEventListener('keydown', onKeyDown);
   return () => target.removeEventListener('keydown', onKeyDown);
+}
+
+/** Whether a modal dialog is up — `:modal` where the browser knows it. */
+function modalOpen() {
+  if (typeof document === 'undefined') return false;
+  try {
+    return !!document.querySelector('dialog:modal');
+  } catch {
+    return !!document.querySelector('dialog[open]');
+  }
 }
 
 /** The table as the help dialog wants it: grouped, aliases folded away. */
