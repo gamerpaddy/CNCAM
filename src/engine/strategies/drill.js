@@ -22,7 +22,7 @@ import { computeBounds } from '../../geom/mesh.js';
 import { sliceMeshZ } from '../../geom/slice.js';
 import { unionLoops, loopArea } from '../../geom/clipper.js';
 import { applyCutting } from '../cutting.js';
-import { entryGapOf } from '../heights.js';
+import { holeApproachZ } from '../heights.js';
 import { regionAllowsPoint } from '../regions.js';
 import { tipLengthOf, tipAngleOf } from '../tool-geometry.js';
 
@@ -30,7 +30,7 @@ const EPS = 1e-3;
 const MAX_SLICES = 96;      // scan budget; slicing a real mesh is not free
 
 export function generateDrill({
-  mesh, tool, params, regions, drawing,
+  mesh, tool, params, regions, drawing, stock,
 }) {
   const clearance = params.clearanceHeight;
   const bounds = computeBounds(mesh.positions);
@@ -89,7 +89,8 @@ export function generateDrill({
   // every other entry uses. It used to be read from `params.retract`, which no
   // schema ever wrote, so every program retracted to exactly 2mm whatever the
   // field said.
-  const retractZ = topZ + Math.max(entryGapOf(params), 0.5);
+  // Above the billet as well as the part — see heights.js holeSurfaceZ.
+  const retractZ = holeApproachZ(topZ, stock, params, 0.5);
 
   holes.sort((a, b) => a.cy - b.cy || a.cx - b.cx);   // stable, roughly shortest path
   const perHole = (params.depthMode ?? 'bottomZ') === 'hole';

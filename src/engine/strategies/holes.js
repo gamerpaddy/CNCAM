@@ -17,7 +17,7 @@ import { CLBuilder, FEED } from '../cl.js';
 import { plural, pluralEs, verb, allOf } from '../text.js';
 import { computeBounds } from '../../geom/mesh.js';
 import { applyCutting, effectiveCutting } from '../cutting.js';
-import { entryGapOf } from '../heights.js';
+import { holeApproachZ, holeSurfaceZ } from '../heights.js';
 import { regionAllowsPoint } from '../regions.js';
 import { tipAngleOf } from '../tool-geometry.js';
 import { findHoles, findBosses } from './drill.js';
@@ -107,7 +107,9 @@ function holesFor(cl, {
  * for that is asking somebody to do trigonometry to get a chamfer, with a
  * different answer for every tool in the drawer.
  */
-export function generateSpot({ mesh, tool, params, regions }) {
+export function generateSpot({
+  mesh, tool, params, regions, stock,
+}) {
   const cl = new CLBuilder();
   cl.toolChange(tool.number);
   applyCutting(cl, { params }, tool);
@@ -136,7 +138,7 @@ export function generateSpot({ mesh, tool, params, regions }) {
 
   const half = (angle * Math.PI) / 360;
   const clearance = params.clearanceHeight;
-  const retractZ = topZ + Math.max(entryGapOf(params), 0.5);
+  const retractZ = holeApproachZ(topZ, stock, params, 0.5);
   const maxR = Math.max(0.05, tool.diameter / 2);
 
   cl.rapid(holes[0].cx, holes[0].cy, clearance);
@@ -186,7 +188,9 @@ export function generateSpot({ mesh, tool, params, regions }) {
  * into a 5mm hole, and searching for 6mm holes finds every clearance hole on
  * the part and none of the ones to be tapped.
  */
-export function generateTap({ mesh, tool, params, regions }) {
+export function generateTap({
+  mesh, tool, params, regions, stock,
+}) {
   const cl = new CLBuilder();
   cl.toolChange(tool.number);
   applyCutting(cl, { params }, tool);
@@ -221,7 +225,7 @@ export function generateTap({ mesh, tool, params, regions }) {
   if (feed > 0) cl.event('feeds', { cut: feed, plunge: feed });
 
   const clearance = params.clearanceHeight;
-  const retractZ = topZ + Math.max(entryGapOf(params), 1);
+  const retractZ = holeApproachZ(topZ, stock, params, 1);
   const perHole = (params.depthMode ?? 'bottomZ') === 'hole';
   // A tap cannot reach the bottom of a blind hole: the lead is ground away over
   // the first few threads and cuts nothing at full depth. Backing off by the
@@ -264,7 +268,9 @@ export function generateTap({ mesh, tool, params, regions }) {
  * than a couple of hundred. See post/arcs.js — a Z on an arc is what makes it a
  * helix, and that is already there for helical boring.
  */
-export function generateThreadMill({ mesh, tool, params, regions }) {
+export function generateThreadMill({
+  mesh, tool, params, regions, stock,
+}) {
   const cl = new CLBuilder();
   cl.toolChange(tool.number);
   applyCutting(cl, { params }, tool);
@@ -376,7 +382,8 @@ export function generateThreadMill({ mesh, tool, params, regions }) {
     // solid metal, so it is a cutter's width further out than the orbit.
     const entryR = internal ? 0 : orbit + cutter;
     cl.rapid(h.cx + entryR, h.cy, clearance);
-    cl.rapid(h.cx + entryR, h.cy, topZ + 0.5);
+    // clear of the billet as well as the part — see heights.js holeSurfaceZ
+    cl.rapid(h.cx + entryR, h.cy, holeSurfaceZ(topZ, stock) + 0.5);
     cl.cut(h.cx + entryR, h.cy, floor, FEED.PLUNGE);
     // and on to the thread on a quarter-turn arc, so the cutter is never fed
     // straight into the wall

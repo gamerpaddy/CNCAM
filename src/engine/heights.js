@@ -134,6 +134,29 @@ export function entryGapOf(params) {
 }
 
 /**
+ * The top of the material a hole goes down through: the hole's own top, or the
+ * billet's where it stands higher.
+ *
+ * Every hole strategy measured its approach from the *part* — the top of the
+ * hole, capped at the model's own top — and never from the stock. On a billet
+ * with anything left on top of the part, which is how a job arrives before it
+ * is faced, that put the drill's R plane, the tap's, the spot drill's, the
+ * helical bore's feed plane and the thread mill's rapid inside the metal:
+ * measured with 3mm on top, R at Z−2 under a billet top at Z0, and a canned
+ * cycle rapids to R. The billet is the most metal there can be, so above it is
+ * always clear.
+ */
+export function holeSurfaceZ(topZ, stock) {
+  const stockTop = stock?.max?.[2];
+  return Number.isFinite(stockTop) ? Math.max(topZ, stockTop) : topZ;
+}
+
+/** Where a hole's cycle starts feeding from — an entry gap above holeSurfaceZ. */
+export function holeApproachZ(topZ, stock, params, minGap = 0.5) {
+  return holeSurfaceZ(topZ, stock) + Math.max(entryGapOf(params), minGap);
+}
+
+/**
  * How far down the tool may rapid before it has to start feeding, for one pass
  * of a multi-level cut.
  *

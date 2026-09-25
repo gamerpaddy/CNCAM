@@ -281,6 +281,12 @@ export function estimateSeconds(cl, rapidFeed = 3000) {
     }
     const synced = sync.at(n);
     if (d[o] === OP.DRILL) {
+      // the approach to the hole's R plane, at rapid — the simulator counts the
+      // same move (see simulate.js), and the two clocks have to agree
+      if (prev) {
+        seconds += rapidSeconds(Math.hypot(d[o + 1] - prev[0], d[o + 2] - prev[1]),
+          d[o + 4] - prev[2], rapid);
+      }
       // plunge down + rapid back up; pecking retracts are ignored (estimate)
       const depth = Math.max(0, d[o + 4] - d[o + 3]);
       seconds += (depth / feeds.plunge) * 60 + rapidSeconds(0, depth, rapid);

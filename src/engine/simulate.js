@@ -250,6 +250,28 @@ export function simulateRemoval({
 
       if (opcode === OP.DRILL) {
         const [x, y, zBottom, retractZ] = [d[o + 1], d[o + 2], d[o + 3], d[o + 4]];
+        // The approach, at rapid: from wherever the tool is to the hole's R
+        // plane — straight down to it for the first hole, across at it to the
+        // next, which is how a long-hand cycle moves and is the lower of the two
+        // ways a canned one can. It was not swept at all: a cycle whose R sat
+        // inside the billet rapided through metal and the simulation showed the
+        // hole drilled cleanly from R down, with nothing in `rapidCut`.
+        if (prev) {
+          const to = [x, y, retractZ];
+          const subs = subStepsFor(prev, to, subStepLength);
+          for (let s = 1; s <= subs; s++) {
+            const came = cut(heights, mask, log, step, grid,
+              lerp(prev, to, (s - 1) / subs), lerp(prev, to, s / subs), cutter, stockTop, columns);
+            if (came.depth > RAPID_CUT_EPS) {
+              rapidCut.count++;
+              if (came.depth > rapidCut.depth) {
+                rapidCut.depth = came.depth;
+                rapidCut.step = step;
+              }
+            }
+          }
+          seconds += moveSeconds(prev, to, FEED.RAPID, feeds, rapidFeed);
+        }
         const took = cut(heights, mask, log, step, grid,
           [x, y, retractZ], [x, y, zBottom], cutter, stockTop, columns);
         // a hole is full width by definition and travels no distance across the

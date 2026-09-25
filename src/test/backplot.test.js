@@ -636,3 +636,18 @@ test('an ordinary milling program still reads clean', () => {
   assert.close(r.speeds.maxFeed, 700, 1e-9, 'and the feeds are the feeds');
   assert.eq(r.speeds.maxRpm, 9000, 'and the speed is the speed');
 });
+
+test('a canned cycle whose R is inside the metal is a rapid that takes metal', () => {
+  // A cycle rapids down to R before it feeds. The simulation drew the hole
+  // drilled cleanly from R and never swept the move that got there, so an R
+  // 12mm down in a billet topped at Z10 said nothing at all.
+  const r = readGcode(program('G21 G90', 'G0 X20 Y20 Z30', 'G98 G81 X20 Y20 Z-10 R-2 F100', 'G80', 'M30'));
+  const sim = simulateRemoval({ stock: STOCK, ops: [{ cl: r.cl, tool: TOOL }] });
+  assert.ok(sim.rapidCut.count > 0, 'the approach to R is swept as the rapid it is');
+  assert.ok(sim.rapidCut.depth > 1, `and it took metal: ${sim.rapidCut.depth}mm`);
+
+  // and one whose R is above the billet is not
+  const clear = readGcode(program('G21 G90', 'G0 X20 Y20 Z30', 'G98 G81 X20 Y20 Z-10 R12 F100', 'G80', 'M30'));
+  const ok = simulateRemoval({ stock: STOCK, ops: [{ cl: clear.cl, tool: TOOL }] });
+  assert.eq(ok.rapidCut.count, 0, 'an R clear of the top is clear');
+});

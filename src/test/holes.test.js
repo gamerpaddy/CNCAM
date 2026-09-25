@@ -383,3 +383,41 @@ test('and it still ends exactly at the top of the thread', () => {
   });
   assert.close(highest, 20, 1e-6, 'the last turn reaches topZ and does not overshoot it');
 });
+
+test('every hole strategy approaches from above the billet, not just the part', () => {
+  // The part is 20 tall in a 23mm billet — 3mm left on top, as a job arrives
+  // before it is faced. Every hole strategy measured its approach from the
+  // part's top, which put R (and the bore's feed plane, and the thread mill's
+  // rapid) inside that 3mm: a canned cycle rapids down to R.
+  const TALL = { kind: 'box', min: [0, 0, 0], max: [40, 40, 23] };
+  const BIT = {
+    number: 7, type: 'flat', diameter: 4, flutes: 3, fluteLength: 25,
+    spindleRpm: 9000, feedCut: 600, feedPlunge: 200,
+  };
+  const DRILL5 = { ...SPOT, type: 'drill', diameter: 5, tipAngle: 118, fluteLength: 30 };
+  const cases = [
+    ['drill', DRILL5, TAPPED, {}],
+    ['spot', SPOT, TAPPED, {}],
+    ['tap', TAP, TAPPED, { diameterTol: 0.3 }],
+    ['threadMill', MILL, BORED, {}],
+    ['bore', BIT, BORED, { stepdown: 1, stepover: 0.4 }],
+  ];
+  for (const [type, tool, mesh, extra] of cases) {
+    const cl = generateToolpath({
+      type, name: type, tool, mesh, stock: TALL,
+      params: {
+        topZ: 23, bottomZ: 0, clearanceHeight: 30, tolerance: 0.01,
+        diameterTol: 0.5, entryGap: 1, ...extra,
+      },
+    });
+    assert.ok(cl.count > 0, `${type} made something: ${notes(cl)}`);
+    let lowestRapid = Infinity;
+    let lowestR = Infinity;
+    eachMove(cl, (opcode, x, y, z, retract) => {
+      if (opcode === OP.RAPID) lowestRapid = Math.min(lowestRapid, z);
+      if (opcode === OP.DRILL) lowestR = Math.min(lowestR, retract);
+    });
+    assert.ok(lowestRapid >= 23 - 1e-6, `${type} rapids down to Z${lowestRapid}, inside the billet`);
+    assert.ok(lowestR >= 23 + 0.5 - 1e-6, `${type} feeds from R${lowestR}, inside the billet`);
+  }
+});

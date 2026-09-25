@@ -19,11 +19,13 @@ import { CLBuilder, FEED, lastXY } from '../cl.js';
 import { plural, verb, allOf } from '../text.js';
 import { computeBounds } from '../../geom/mesh.js';
 import { applyCutting } from '../cutting.js';
-import { approach, entryPlane } from '../heights.js';
+import { approach, entryPlane, holeSurfaceZ } from '../heights.js';
 import { regionAllowsPoint } from '../regions.js';
 import { findHoles } from './drill.js';
 
-export function generateBore({ mesh, tool, params, regions }) {
+export function generateBore({
+  mesh, tool, params, regions, stock,
+}) {
   const clearanceZ = params.clearanceHeight;
   const tolerance = params.tolerance ?? 0.01;
   const toolR = tool.diameter / 2;
@@ -87,7 +89,12 @@ export function generateBore({ mesh, tool, params, regions }) {
   const done = [];
   let tooDeep = 0;
   for (const hole of sized) {
-    const zTop = Math.min(params.topZ, hole.top);
+    // From the top of the metal over the hole, not the top of the hole: where
+    // the billet stands above the part, the helix started at the part and its
+    // feed plane — a gap above that — was inside the billet, reached at rapid.
+    // The column over a hole is not part of the part, so boring it is always
+    // allowed; Top Z still caps it. See heights.js holeSurfaceZ.
+    const zTop = Math.min(params.topZ, holeSurfaceZ(hole.top, stock));
     const zBottom = perHole ? Math.max(hole.bottom, params.bottomZ) : params.bottomZ;
     if (!(zTop > zBottom + 1e-6)) continue;
     if (tool.fluteLength > 0 && zTop - zBottom > tool.fluteLength) tooDeep++;
