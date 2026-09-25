@@ -509,18 +509,34 @@ export class Document extends EventTarget {
   }
 
   /** The subset of those the viewport should draw. */
-  visibleToolpaths() {
+  /**
+   * The paths the viewport should draw: the active setup's.
+   *
+   * The scene is drawn in the active setup's frame — the part turned the way
+   * that fixturing holds it, zero where that datum is — and a toolpath is in
+   * the frame of the setup it was made for. Every setup's paths were drawn in
+   * the one frame, so a second setup flipped over to drill from the underside
+   * was drawn over the first setup's part as though it drilled the top. One
+   * fixturing at a time, which is the rule the simulation already keeps;
+   * selecting anything in the other setup shows its paths on its own part.
+   */
+  visibleToolpaths(setup = this.activeSetup()) {
     const out = [];
-    for (const { op } of this.allOperations()) {
+    for (const { setup: owner, op } of this.allOperations()) {
+      if (setup && owner !== setup) continue;
       const cl = this.toolpaths.get(op.id);
       if (op.enabled && cl && !this.hiddenPaths.has(op.id)) out.push(cl);
     }
     return out;
   }
 
-  /** What is currently drawable, as a string — changes when a toggle changes. */
-  toolpathSignature() {
-    const parts = [];
+  /**
+   * What is currently drawable, as a string — changes when a toggle changes,
+   * and when the setup being looked at does (see visibleToolpaths).
+   * @param view false leaves the active setup out, for the program's own key
+   */
+  toolpathSignature(view = true) {
+    const parts = view ? [`active:${this.activeSetup()?.id ?? ''}`] : [];
     for (const { op } of this.allOperations()) {
       if (!this.toolpaths.has(op.id)) continue;
       parts.push(`${op.id}:${op.enabled ? 1 : 0}${this.hiddenPaths.has(op.id) ? 'h' : ''}`);

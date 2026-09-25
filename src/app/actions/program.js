@@ -753,7 +753,7 @@ export function makeProgramActions(ctx, space) {
    */
   function programKey() {
     return JSON.stringify([
-      doc.toolpathSignature(), doc.postId(), postSettings(),
+      doc.toolpathSignature(false), doc.postId(), postSettings(),
       postableOps().map((o) => [o.name, o.wcs, o.setup, o.setupName, o.orientation, o.wrap]),
     ]);
   }
