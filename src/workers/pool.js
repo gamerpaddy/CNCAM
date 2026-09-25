@@ -94,6 +94,12 @@ export class WorkerPool {
     const j = this.all.indexOf(worker);
     if (j >= 0) this.all.splice(j, 1);
     worker.terminate();
+    // A job waiting in the queue was waiting for *this* worker to finish, and it
+    // never will. Nothing else dispatches the queue until another job is run,
+    // so a crash with work queued behind it left Generate on "Generating…"
+    // for good. A replacement takes the next one.
+    const next = this.queue.shift();
+    if (next) this.dispatch(this.spawn(), next);
   }
 
   /** Cooperative cancel: worker checks between slices. */

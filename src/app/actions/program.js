@@ -64,6 +64,11 @@ export function makeProgramActions(ctx, space) {
     let disabled = 0;
     let unusable = 0;
     let orphaned = 0;
+    // Operations whose strategy threw. One of them used to reject the whole
+    // Promise.all: the status said "Generation failed: <a message>" without
+    // naming the operation, and the ones that had finished were never drawn or
+    // posted. Each failure is now the failing operation's own.
+    const failed = [];
     for (const setup of doc.setups()) {
       const { meshes, stock, matrix, offset } = resolveSetupSpace(setup);
       const mesh = meshes.length ? mergeMeshes(meshes) : null;
@@ -113,12 +118,25 @@ export function makeProgramActions(ctx, space) {
         // before it would serialise a pool that exists to run them at once.
         if (op.params?.restMachining && jobs.length) await Promise.all(jobs);
 
+        // What this toolpath is *of*, taken now — as the job is sent, not when it
+        // comes back. Taken on the way back, it described whatever the operation
+        // had become in the meantime: a stepdown changed from 12 to 6 while a
+        // clearing pass was still in the worker stamped the 12mm path as up to
+        // date with the 6mm settings, so Simulate and Export trusted it and the
+        // file cut the stepdown that had been replaced.
+        const fingerprint = opFingerprint(doc, op, setup);
         jobs.push(
           ctx.pool.run('toolpath', {
             // No name: what an operation is called is the *program's* business,
             // and the post writes it. A strategy that also wrote it into its own
             // CL made every block in the file name itself twice.
-            type: op.type, params: op.params, tool, stock, mesh,
+            //
+            // The settings are copied as they are now, because a job the pool
+            // has to queue is posted to a worker later — and a live object read
+            // then carries whatever was typed in the meantime, which is not what
+            // the fingerprint above describes.
+            type: op.type, params: structuredClone(op.params), tool: structuredClone(tool),
+            stock, mesh,
             // the tool goes through because a picked wall only becomes a region
             // once it has the width the cutter machines it at — see regions-ui.js
             // the mesh goes through as well as the tool: rest machining has to
@@ -133,10 +151,15 @@ export function makeProgramActions(ctx, space) {
             // a chuck does not take away a patch of the table, it takes away
             // everything past a Z. The strategies need the fixtures themselves
             // to work that out. See engine/fixtures.js chuckLimit.
-            fixtures: setup.fixtures ?? [],
+            fixtures: structuredClone(setup.fixtures ?? []),
           }).then((cl) => {
             doc.toolpaths.set(op.id, cl);
-            doc.fingerprints.set(op.id, opFingerprint(doc, op, setup));
+            doc.fingerprints.set(op.id, fingerprint);
+          }, (err) => {
+            console.error(err);
+            doc.toolpaths.delete(op.id);
+            doc.fingerprints.delete(op.id);
+            failed.push({ op, message: err?.message ?? String(err) });
           }),
         );
       }
@@ -275,9 +298,14 @@ export function makeProgramActions(ctx, space) {
         said.push(`${plural(flagged.length, 'operation')} cut, but with something to `
           + `say about it: ${flagged.join(', ')}`);
       }
+      if (failed.length) {
+        said.unshift(`${failed.length} failed: ${failed
+          .map(({ op, message }) => `${op.name} (${message})`).join(', ')}`);
+      }
       const tail = said.length ? `. ${said.join('; ')} — see Result in the panel` : '';
       ctx.ui.setStatus(
-        `Generated ${plural(jobs.length, 'toolpath')} — est. ${formatTime(seconds)}${suffix}${tail}`,
+        `Generated ${plural(jobs.length - failed.length, 'toolpath')} — est. ${formatTime(seconds)}`
+          + `${suffix}${tail}`,
         limits.length > 0 || said.length > 0);
     } catch (err) {
       console.error(err);
