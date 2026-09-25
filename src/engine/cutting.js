@@ -125,4 +125,16 @@ export function applyCutting(cl, op, tool) {
   // is asked to be, exactly as it does for the tool and the spindle.
   cl.coolant(p.coolant ?? 'off');
   cl.event('feeds', { cut: c.feedCut, plunge: c.feedPlunge });
+  // Said on the program itself as well as in the panel's preflight, so the
+  // warning is on the result and in the status line after Generate, not only
+  // before it: S0 is a stopped cutter fed into the work, and a feed of 0 was
+  // quietly taken as the other one.
+  if (!(c.spindleRpm > 0)) {
+    cl.warn('no spindle speed — this posts S0, a stopped cutter fed into the work. '
+      + 'Set one on the tool or on this operation');
+  }
+  if (!(c.feedCut > 0) || !(c.feedPlunge > 0)) {
+    cl.warn(`no ${!(c.feedCut > 0) ? 'cutting' : 'plunge'} feed — set one on the tool or on `
+      + 'this operation');
+  }
 }

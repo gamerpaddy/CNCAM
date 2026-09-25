@@ -2,7 +2,8 @@
 // thread (tests) and inside job-worker.js (app).
 
 import {
-  MOVE_STRIDE, OP, FEED, eachMove, syncTrack, rapidRates, rapidSeconds, feedRate, descentOf,
+  CLBuilder, MOVE_STRIDE, OP, FEED, eachMove, syncTrack, rapidRates, rapidSeconds, feedRate,
+  descentOf,
 } from './cl.js';
 import { fixtureTop } from './fixtures.js';
 import { generateCommand } from './strategies/command.js';
@@ -188,6 +189,15 @@ function clampTopToStock(args) {
 export function generateToolpath(args) {
   const generate = strategies[args.type];
   if (!generate) throw new Error(`operation type not implemented: ${args.type}`);
+  // A milling cutter with no width is not a cutter, and the strategies do not
+  // expect one: a contour offset by a radius of nothing ran out of memory
+  // before it returned. Refused here, once, with the reason.
+  if (!BOTH_MACHINES.has(args.type) && !TURNING_OPS.includes(args.type)
+    && !(args.tool?.diameter > 0)) {
+    const cl = new CLBuilder();
+    cl.warn(`${args.tool?.name ?? 'this cutter'} has no diameter — set its size before generating`);
+    return cl.finish();
+  }
   const { args: clamped, lowered } = clampTopToStock(clampSafeArgs(args));
   const cl = generate(clamped);
   if (lowered > 0.001) {

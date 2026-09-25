@@ -78,7 +78,7 @@ const FIELDS = {
       onChange: applyToolType,
     },
     {
-      path: 'diameter', label: 'Diameter (mm)', type: 'number', when: (t) => !isInsertTool(t),
+      path: 'diameter', label: 'Diameter (mm)', type: 'number', min: 0.01, when: (t) => !isInsertTool(t),
     },
     // --- lathe inserts ---
     {
@@ -150,11 +150,18 @@ const FIELDS = {
       hint: 'The width of the groove the blade cuts — the material it takes out '
         + 'of the bar with every part.',
     },
-    { path: 'fluteLength', label: 'Flute length', type: 'number', when: (t) => !isLatheTool(t.type) },
-    { path: 'flutes', label: 'Flutes', type: 'number', when: (t) => !isLatheTool(t.type) },
-    { path: 'spindleRpm', label: 'Spindle (RPM)', type: 'number' },
-    { path: 'feedCut', label: 'Feed (mm/min)', type: 'number' },
-    { path: 'feedPlunge', label: 'Plunge (mm/min)', type: 'number' },
+    { path: 'fluteLength', label: 'Flute length', type: 'number', min: 0, when: (t) => !isLatheTool(t.type) },
+    {
+      path: 'flutes', label: 'Flutes', type: 'number', min: 1, step: 1, integer: true,
+      when: (t) => !isLatheTool(t.type),
+    },
+    // None of these has a zero that means anything. A 0 rpm spindle posts
+    // M3 S0 and feeds a stopped cutter into the work; a 0 feed was quietly
+    // replaced by the plunge feed. See op-status.js opPreflight for a tool that
+    // arrives with one from an older file.
+    { path: 'spindleRpm', label: 'Spindle (RPM)', type: 'number', min: 1 },
+    { path: 'feedCut', label: 'Feed (mm/min)', type: 'number', min: 1 },
+    { path: 'feedPlunge', label: 'Plunge (mm/min)', type: 'number', min: 1 },
   ],
   setup: [
     { path: 'name', label: 'Name', type: 'text' },

@@ -13,6 +13,7 @@ import { isLatheTool } from '../engine/insert.js';
 import { noSideToCutWith } from '../engine/tool-match.js';
 import { chuckLimit, fixtureTop } from '../engine/fixtures.js';
 import { setupModelIds } from './actions/setup-space.js';
+import { effectiveCutting } from '../engine/cutting.js';
 
 /** Strategies whose depth does not come from a stepdown. */
 const NO_STEPDOWN = new Set([
@@ -253,7 +254,22 @@ export function opPreflight(doc, op) {
   if (tool && !(Number.isInteger(tool.number) && tool.number >= 1)) {
     notes.push(`T${tool.number} is not a tool number a control has — give ${tool.name ?? 'the tool'} `
       + 'a whole number from 1. T0 means no tool, and its length offset is none.');
-  } else if (tool && tool.number > 99 && (setup?.mode ?? 'mill') === 'turn') {
+  }
+  // Speeds with nothing in them, from a tool that arrived that way — an older
+  // file or a hand-edited library; the fields no longer take a zero. S0 is a
+  // stopped spindle fed into the work.
+  if (tool && op.type !== 'command') {
+    const { spindleRpm, feedCut, feedPlunge } = effectiveCutting(op, tool);
+    if (!(spindleRpm > 0)) {
+      notes.push(`${tool.name ?? 'The tool'} has no spindle speed — the program would say `
+        + 'S0 and feed a stopped cutter into the work.');
+    }
+    if (!(feedCut > 0) || !(feedPlunge > 0)) {
+      notes.push(`${tool.name ?? 'The tool'} has no ${!(feedCut > 0) ? 'cutting' : 'plunge'} feed — `
+        + 'set one on the tool or on this operation.');
+    }
+  }
+  if (tool && tool.number > 99 && (setup?.mode ?? 'mill') === 'turn') {
     // the lathe word is two digits of station and two of offset — see post/lathe.js
     notes.push(`T${tool.number} cannot be written as a lathe tool word: T0101 is station 01 `
       + `and offset 01, and ${tool.number} is three digits. Number it 1 to 99.`);

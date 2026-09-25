@@ -1409,3 +1409,21 @@ test('a tool number no control has is said, not posted', () => {
   doc.updateItem(tool, { number: 3 }, 'fine');
   assert.ok(!opPreflight(doc, op).some((n) => /tool number/.test(n)), 'a real number says nothing');
 });
+
+test('a tool with no speed or no width is refused or named, not posted as S0', () => {
+  // Measured before: diameter 0 ran the contour out of memory, spindle 0 posted
+  // M3 S0 and fed a stopped cutter into the work, and a feed of 0 was quietly
+  // replaced by the plunge feed. None of them said a word.
+  const s = scene();
+  const at = (overrides) => build('contour2d', s, { ...toolFor('flat', 6), spindleRpm: 9000,
+    feedCut: 800, feedPlunge: 200, ...overrides });
+  const widthless = at({ diameter: 0 });
+  assert.eq(widthless.count, 0, 'no cutter width, no toolpath');
+  assert.ok(widthless.notes.some((n) => /no diameter/.test(n.text)), 'and why');
+  assert.ok(at({ spindleRpm: 0 }).notes.some((n) => n.level === 'warn' && /S0/.test(n.text)),
+    'a stopped spindle is named on the result');
+  assert.ok(at({ feedCut: 0 }).notes.some((n) => n.level === 'warn' && /no cutting feed/.test(n.text)),
+    'and so is a missing feed');
+  assert.ok(!at({}).notes.some((n) => /S0|no cutting feed|no diameter/.test(n.text)),
+    'a tool with all three says none of it');
+});
