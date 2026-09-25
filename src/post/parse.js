@@ -89,7 +89,10 @@ const INVERSE_TIME = 93;
 /** Surface speed is quoted in metres a minute, or in feet a minute under G20. */
 const SURFACE_UNIT = { mm: 1000, inch: 304.8 };
 
-const WORD = /([A-Za-z])\s*(-?\d*\.?\d+)/g;
+// A sign is either sign: `X+20` is as valid a word as `X20`, and without the
+// plus the X was not read at all — the move lost from the backplot, and nothing
+// reported as unread.
+const WORD = /([A-Za-z])\s*([+-]?\d*\.?\d+)/g;
 
 /** The G codes that set state and produce no motion of their own. */
 const MODAL_G = new Set([

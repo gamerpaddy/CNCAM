@@ -76,6 +76,14 @@ test('and G98 comes back to where the run started, not to R', () => {
   assert.close(r.parsed.cycles[0].retract, 10, 1e-9, 'the initial plane');
 });
 
+test('a word written with a plus sign is read', () => {
+  // `X+20` is valid G-code; without the plus in the pattern the X was not read,
+  // and the move vanished from the backplot with nothing reported as unread.
+  const r = readGcode(program('G21 G90', 'G0 X0 Y0 Z5', 'G1 Z-1 F300', 'G1 X+20 Y+.5'));
+  assert.close(r.extent.max[0], 20, 1e-9, 'the X is there');
+  assert.close(r.extent.max[1], 0.5, 1e-9, 'and a signed decimal with no leading digit');
+});
+
 test('what the parser cannot read, it says rather than skips', () => {
   const r = readGcode(program('G21 G90', 'G12.1 X5', 'M62 P1', 'G1 X1 F100'));
   const codes = r.parsed.unsupported.map((u) => u.code);
