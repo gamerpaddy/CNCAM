@@ -153,13 +153,52 @@ function clampSafeArgs(args) {
 }
 
 /**
+ * The strategies whose Top Z is simply "where the cut starts" — as opposed to a
+ * chamfer's edge, an engraving's surface or a hole's top, which are features.
+ */
+const CUT_FROM_TOP = new Set(['face', 'contour2d', 'pocket', 'clear2d', 'adaptive', 'slot']);
+
+/**
+ * Start the cut at the top of the billet, not above it.
+ *
+ * There is nothing to cut above the stock, and these strategies step down from
+ * Top Z whatever is there — so a Top Z left above the billet (the stock's top
+ * margin trimmed after the operations were made, a height handle dragged too
+ * far) fed full passes through air at cutting feed. Measured with Top Z 10mm
+ * over a small part: Z-level roughing ran 1.9m of air, a contour 0.4m, facing
+ * 0.35m. Left alone when the whole range is above the billet, because then
+ * there is no cut to start and the strategy's own refusal says so.
+ *
+ * @returns { args, lowered } — how far Top Z came down, 0 when it did not
+ */
+function clampTopToStock(args) {
+  const top = args.stock?.max?.[2];
+  const { topZ, bottomZ } = args.params ?? {};
+  if (!CUT_FROM_TOP.has(args.type) || !Number.isFinite(top) || !Number.isFinite(topZ)
+    || !(topZ > top + 1e-6) || !(bottomZ < top)) {
+    return { args, lowered: 0 };
+  }
+  return { args: { ...args, params: { ...args.params, topZ: top } }, lowered: topZ - top };
+}
+
+/**
  * @param args { type, params, tool, stock, mesh?, fixtures? }
  * @returns finished CL program { version, moves, count, events }
  */
 export function generateToolpath(args) {
   const generate = strategies[args.type];
   if (!generate) throw new Error(`operation type not implemented: ${args.type}`);
-  return generate(clampSafeArgs(args));
+  const { args: clamped, lowered } = clampTopToStock(clampSafeArgs(args));
+  const cl = generate(clamped);
+  if (lowered > 0.001) {
+    cl.notes = [...(cl.notes ?? []), {
+      level: 'info',
+      text: `Top Z is ${Math.round(lowered * 1000) / 1000}mm above the billet, so the cut `
+        + `starts at its top, Z${Math.round(clamped.params.topZ * 1000) / 1000}, rather than `
+        + 'feeding through air',
+    }];
+  }
+  return cl;
 }
 
 /**

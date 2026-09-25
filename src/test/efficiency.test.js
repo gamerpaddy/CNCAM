@@ -723,3 +723,29 @@ test('roughing does not lap the billet edge where the cutter cannot reach it', (
       + `billet edge with the cutter tangent to it (finishPasses ${finishPasses})`);
   }
 });
+
+test('a Top Z left above the billet does not feed passes through the air over it', () => {
+  // Trim the stock's top margin after the operations are made, or drag a height
+  // handle too far, and Top Z stands above the billet. These strategies step
+  // down from Top Z whatever is there: Z-level roughing on a small part fed
+  // 1.9m of passes through air before it reached metal.
+  const { mesh } = makePocketBlock({ size: 40, pocketSize: 20, height: 10, depth: 6 });
+  const stock = { min: [-2, -2, 0], max: [42, 42, 12] };
+  const params = {
+    topZ: 22, bottomZ: 4, stepdown: 2, stepover: 0.4, clearanceHeight: 30,
+    stockToLeave: 0, tolerance: 0.01, rampAngle: 3, engagement: 0.2,
+  };
+  for (const type of ['face', 'contour2d', 'pocket', 'clear2d', 'adaptive', 'slot']) {
+    const cl = generateToolpath({ type, tool: FLAT, stock, mesh, params: { ...params } });
+    let air = 0;
+    let prev = null;
+    for (const m of moves(cl)) {
+      if (prev && m.op === OP.LINE && m.feed !== FEED.RAPID && m.z > 12.01 && prev.z > 12.01) {
+        air += Math.hypot(m.x - prev.x, m.y - prev.y, m.z - prev.z);
+      }
+      prev = m;
+    }
+    assert.ok(air < 1e-6, `${type} fed ${air.toFixed(0)}mm through air above the billet`);
+    assert.ok(cl.notes.some((n) => /above the billet/.test(n.text)), `${type} says it started lower`);
+  }
+});
