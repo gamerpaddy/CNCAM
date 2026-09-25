@@ -28,6 +28,18 @@ export function makeFileActions(ctx, program) {
   const { doc } = ctx;
 
   /**
+   * Whether replacing the project would lose anything — asked once, for Clear
+   * and for opening a stored version alike. The two had their own lists, and
+   * neither counted a drawing: a job that was an imported DXF and nothing else
+   * was cleared, with no question and no undo.
+   */
+  function hasWork() {
+    const { models, tools, setups, drawings } = doc.project;
+    return models.length > 0 || tools.length > 0 || setups.length > 0
+      || (drawings ?? []).length > 0;
+  }
+
+  /**
    * @param file an already-read { name, buffer } — how the harness and any
    *   future drop target get in. The toolbar passes nothing and gets the dialog.
    */
@@ -217,7 +229,7 @@ export function makeFileActions(ctx, program) {
       currentName: doc.project.name,
       currentId: ctx.storeProjectId ?? null,
       currentJSON: () => doc.toJSON(),
-      hasWork: doc.project.models.length > 0 || doc.project.setups.length > 0,
+      hasWork: hasWork(),
       files: {
         open: () => openFile(ACCEPT.project),
         save: (name, text) => saveFile(name, text, ACCEPT.project),
@@ -255,9 +267,8 @@ export function makeFileActions(ctx, program) {
    * there is nothing to lose.
    */
   function clearProject() {
-    const { models, tools, setups } = doc.project;
-    const hasWork = models.length || tools.length || setups.length;
-    if (hasWork && !confirm('Clear the project? Models, tools, setups and operations will be discarded.')) {
+    if (hasWork() && !confirm('Clear the project? Models, drawings, tools, setups and '
+      + 'operations will be discarded.')) {
       return;
     }
     if (ctx.simulation) program.closeSimulation();

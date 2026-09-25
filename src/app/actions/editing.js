@@ -13,17 +13,16 @@ import {
   defaultParamsFor, retypeParams, retoolParams, depthRangeFor, depthMeaningDiffers,
 } from '../../engine/op-defaults.js';
 import { createFixture } from '../../engine/fixtures.js';
-import { deriveCylinder } from '../../engine/stock.js';
 import { pickToolFor } from '../../engine/tool-match.js';
 import { drillOversize } from '../../engine/lathe.js';
 import { tipLengthOf } from '../../engine/tool-geometry.js';
-import { placedPaths, boundsOfPaths } from '../../engine/drawing.js';
 import { getSetting } from '../settings.js';
 
 export function makeEditActions(ctx, space) {
   const { doc } = ctx;
   const {
     resolveSetupSpace, ensureSetup, setupModelBounds, setupBoreBottom, setupBoreProfile,
+    sizeNewStock,
   } = space;
 
   function addOperation() {
@@ -416,57 +415,6 @@ export function makeEditActions(ctx, space) {
 
   function round3(v) { return Math.round(v * 1000) / 1000; }
 
-  /**
-   * Fill in a new setup's stock from the part, before anybody sees it.
-   *
-   * Round stock resolves to a sensible bar whether or not the size has been
-   * filled in (see engine/stock.js), but resolving and *displaying* are two
-   * different things: leaving the fields empty means the viewport shows a ⌀31
-   * bar while the panel beside it shows nothing at all, and the user's first
-   * job is to work out which of the two is lying. Writing the derived size into
-   * the setup when it is created makes the panel and the picture the same
-   * statement.
-   */
-  function sizeStockToModels(setup) {
-    if (setup.stock.kind !== 'cylinder' && setup.stock.kind !== 'tube') {
-      return sizeStockToDrawings(setup);
-    }
-    const meshes = [...doc.meshes.values()];
-    const derived = deriveCylinder(meshes);
-    if (derived) setup.stock.cylinder = derived;
-    return undefined;
-  }
-
-  /**
-   * A plate to engrave on, when the job is a drawing and nothing else.
-   *
-   * Engraving a plate is a real job with no solid in it at all, and the auto
-   * "box around the model" stock has no model to size itself from — so the
-   * setup comes up with no stock, the operation has nothing to hang heights
-   * off, and the whole thing reads as broken. A billet the size of the drawing
-   * plus a margin is the answer anybody would have typed in.
-   */
-  function sizeStockToDrawings(setup) {
-    if (doc.project.models.length > 0) return;
-    const drawings = doc.project.drawings ?? [];
-    if (drawings.length === 0) return;
-    const placed = drawings.flatMap((d) => placedPaths(d, null));
-    const bounds = boundsOfPaths(placed);
-    if (!bounds) return;
-
-    const margin = 5;
-    setup.stock.kind = 'box';
-    setup.stock.box = {
-      size: [
-        round3(bounds.max[0] - bounds.min[0] + margin * 2),
-        round3(bounds.max[1] - bounds.min[1] + margin * 2),
-        6,
-      ],
-      align: 'center',
-      offset: [0, 0, 0],
-    };
-  }
-
   function uniqueFixtureName(setup, base) {
     const taken = new Set((setup.fixtures ?? []).map((f) => f.name));
     if (!taken.has(base)) return base;
@@ -500,7 +448,7 @@ export function makeEditActions(ctx, space) {
       // requirement operations already meet through `uniqueOpName`.
       const setup = createSetup(uniqueSetupName(`Setup ${doc.project.setups.length + 1}`),
         doc.machine);
-      sizeStockToModels(setup);
+      sizeNewStock(setup);   // one rule for every new setup — see setup-space.js
       doc.addSetup(setup);
       doc.select('setup', setup.id);
     },

@@ -11,6 +11,7 @@ import { computeStock, deriveCylinder, isRoundStock } from '../../engine/stock.j
 import { resolveSetup } from '../../engine/setup.js';
 import { computeBounds, mergeMeshes } from '../../geom/mesh.js';
 import { boreProfile } from '../../engine/lathe.js';
+import { placedPaths, boundsOfPaths } from '../../engine/drawing.js';
 
 /**
  * Which models a setup actually machines.
@@ -52,12 +53,64 @@ export function makeSetupSpace(doc) {
     const mine = doc.setups();
     if (mine.length > 0) return mine[0];
     const setup = createSetup(`Setup ${doc.project.setups.length + 1}`, doc.machine);
-    // round stock arrives sized to the part, so the panel and the viewport are
-    // the same statement from the first frame — see actions/editing.js
-    const derived = isRoundStock(setup.stock) ? deriveCylinder([...doc.meshes.values()]) : null;
-    if (derived) setup.stock.cylinder = derived;
+    sizeNewStock(setup);
     doc.addSetup(setup);
     return setup;
+  }
+
+  /**
+   * Fill in a new setup's stock from what there is to cut, before anybody sees
+   * it — for every way a setup gets made.
+   *
+   * There were two: "+ Setup" sized a plate for a drawing-only job, and the
+   * setup made on the way to a first operation ("Add operation", "Engrave this
+   * drawing") did not — so the one path a DXF-only job actually takes came up
+   * with no stock at all, and Generate said the operations needed "a model"
+   * for a job the app exists to do without one.
+   *
+   * Round stock resolves to a sensible bar whether or not the size has been
+   * filled in (see engine/stock.js), but resolving and *displaying* are two
+   * different things: leaving the fields empty means the viewport shows a ⌀31
+   * bar while the panel beside it shows nothing at all. Writing the derived size
+   * into the setup when it is created makes the panel and the picture the same
+   * statement.
+   */
+  function sizeNewStock(setup) {
+    if (isRoundStock(setup.stock)) {
+      const derived = deriveCylinder([...doc.meshes.values()]);
+      if (derived) setup.stock.cylinder = derived;
+      return;
+    }
+    sizeStockToDrawings(setup);
+  }
+
+  /**
+   * A plate to engrave on, when the job is a drawing and nothing else.
+   *
+   * Engraving a plate is a real job with no solid in it at all, and the auto
+   * "box around the model" stock has no model to size itself from — so the
+   * setup comes up with no stock, the operation has nothing to hang heights
+   * off, and the whole thing reads as broken. A billet the size of the drawing
+   * plus a margin is the answer anybody would have typed in.
+   */
+  function sizeStockToDrawings(setup) {
+    if (doc.project.models.length > 0) return;
+    const drawings = doc.project.drawings ?? [];
+    if (drawings.length === 0) return;
+    const bounds = boundsOfPaths(drawings.flatMap((d) => placedPaths(d, null)));
+    if (!bounds) return;
+    const margin = 5;
+    const round3 = (v) => Math.round(v * 1000) / 1000;
+    setup.stock.kind = 'box';
+    setup.stock.box = {
+      size: [
+        round3(bounds.max[0] - bounds.min[0] + margin * 2),
+        round3(bounds.max[1] - bounds.min[1] + margin * 2),
+        6,
+      ],
+      align: 'center',
+      offset: [0, 0, 0],
+    };
   }
 
   /**
@@ -114,6 +167,6 @@ export function makeSetupSpace(doc) {
 
   return {
     setupMeshes, resolveSetupSpace, ensureSetup, setupModelBounds, setupBoreBottom,
-    setupBoreProfile,
+    setupBoreProfile, sizeNewStock,
   };
 }
