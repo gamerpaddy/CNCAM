@@ -92,6 +92,7 @@ function refresh(kind) {
   syncStock();
   syncDrawings();
   syncToolpaths();
+  ctx.actions?.syncGcodePreview?.();
   syncRegionOverlays(doc, viewport);
   syncHeightGizmos(kind);
   syncHeightGizmoVisibility();

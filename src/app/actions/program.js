@@ -739,7 +739,34 @@ export function makeProgramActions(ctx, space) {
     return ops;
   }
 
+  // What the preview was built from, so a change to any of it can be noticed.
+  let previewKey = null;
+
+  /**
+   * Everything the post reads, as one comparable string.
+   *
+   * The preview was rebuilt only when the set of toolpaths changed — so a new
+   * machine, a machine's start block, the project's name, an operation's name
+   * or a setup's work offset left it showing the program as it was, and undo
+   * did the same the other way: undo the removal of a machine and the panel,
+   * and its Copy button, went on holding the other machine's dialect.
+   */
+  function programKey() {
+    return JSON.stringify([
+      doc.toolpathSignature(), doc.postId(), postSettings(),
+      postableOps().map((o) => [o.name, o.wcs, o.setup, o.setupName, o.orientation, o.wrap]),
+    ]);
+  }
+
+  /** Rebuild the preview when anything the post reads has changed since. */
+  function syncGcodePreview() {
+    // a file being checked is shown on purpose, until the check is closed
+    if (ctx.lastProgram?.imported) return;
+    if (programKey() !== previewKey) refreshGcodePreview(false);
+  }
+
   function refreshGcodePreview(show = true) {
+    previewKey = programKey();
     const ops = postableOps();
     if (ops.length === 0) {
       ctx.lastProgram = null;
@@ -1054,6 +1081,7 @@ export function makeProgramActions(ctx, space) {
     toggleToolpaths,
     clearToolpaths,
     refreshGcodePreview,
+    syncGcodePreview,
     setPost,
     setMachineRecord,
     openMachines,
