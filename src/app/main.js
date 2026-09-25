@@ -4,7 +4,7 @@
 import { Document } from '../doc/document.js';
 import { plural } from '../engine/text.js';
 import {
-  loadSaved, attachAutosave, sessionProjectId, setSessionProjectId,
+  loadSaved, attachAutosave, clearSaved, sessionProjectId, setSessionProjectId,
 } from '../doc/autosave.js';
 import { computeNormals, mergeMeshes } from '../geom/mesh.js';
 import { sliceMeshZ } from '../geom/slice.js';
@@ -499,11 +499,30 @@ function applySettings(key = null) {
   if (touches('showHolder')) viewport.simulation.setShowHolder(getSetting('showHolder'));
   if (touches('ghostTool')) viewport.simulation.setGhostTool(getSetting('ghostTool'));
   if (touches('showCutMarker')) viewport.simulation.setShowCutMarker(getSetting('showCutMarker'));
+  if (touches('autosave')) keepSession(getSetting('autosave'));
   if (touches('hintStyle') && key !== null) {
     ctx.hintStyle = getSetting('hintStyle');
     ctx.rerenderProps?.();
   }
   viewport.requestRender();
+}
+
+/**
+ * Start or stop keeping the session, as the setting says — now, not after a
+ * reload. Switched off, what was kept is thrown away as well, because a session
+ * file nothing is updating is a stale job waiting to be restored.
+ */
+let stopAutosave = null;
+function keepSession(on) {
+  if (on && !stopAutosave) {
+    stopAutosave = attachAutosave(ctx.doc, {
+      onError: (err) => ctx.ui.setStatus(`Autosave failed (${err.name}) — export to keep your work`, true),
+    });
+  } else if (!on && stopAutosave) {
+    stopAutosave();
+    stopAutosave = null;
+    clearSaved();
+  }
 }
 
 function boot() {
@@ -519,11 +538,11 @@ function boot() {
   // from one table and cannot drift apart.
   bindShortcuts(window, ctx);
 
-  restoreSaved();   // async: the store is a filesystem, and the boot does not wait on it
+  // Only when the session is being kept. With the switch off, the file left
+  // behind by the last session that kept one was restored on every reload
+  // anyway — the same stale job, forever, since nothing was writing it.
   if (getSetting('autosave')) {
-    attachAutosave(ctx.doc, {
-      onError: (err) => ctx.ui.setStatus(`Autosave failed (${err.name}) — export to keep your work`, true),
-    });
+    restoreSaved();   // async: the store is a filesystem, and the boot does not wait on it
   }
 
   refresh('boot');

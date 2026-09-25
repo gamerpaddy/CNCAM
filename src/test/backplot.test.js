@@ -94,6 +94,55 @@ test('a parsed program is CL data the rest of the app can use', () => {
   assert.close(r.extent.max[0], 20, 1e-9, 'and the extent it needs');
 });
 
+test('a file with two tools in it is checked with two cutters', async () => {
+  // app/ is browser-only (io/files.js reads `window` as it loads)
+  if (typeof document === 'undefined') return;
+  const { piecesByTool } = await import('../app/actions/check.js');
+  // It was simulated whole with the first tool the file named, so a ⌀3 profile
+  // after a ⌀12 roughing pass was run with the ⌀12 and verified as a gouge.
+  const text = program(
+    'G21 G90', 'T1 M6', 'S8000 M3', 'G0 X0 Y0 Z5', 'G1 Z-1 F600', 'G1 X20',
+    'G0 Z5', 'T2 M6', 'S12000 M3', 'G0 X0 Y5', 'G1 Z-1 F300', 'G1 X20', 'M30',
+  );
+  const r = readGcode(text);
+  const tools = [
+    { number: 1, name: 'twelve', diameter: 12 },
+    { number: 2, name: 'three', diameter: 3 },
+  ];
+  const { pieces, lineMap } = piecesByTool('f.ngc', r.cl, r.lineOf, tools);
+  assert.eq(pieces.map((p) => p.tool.name).join(','), 'twelve,three', 'each piece its own cutter');
+  assert.eq(pieces.reduce((n, p) => n + p.cl.count, 0), r.cl.count, 'no move lost or doubled');
+  // the second piece starts on the feed that was in force, not on none
+  assert.ok(pieces[1].cl.events.some((e) => e.type === 'feeds' && e.index === 0),
+    'the modal feed is carried into the second piece');
+  // and a line after the change still finds its move
+  const lines = text.split('\n');
+  const at = lineMap.get(lines.indexOf('G1 X20', lines.indexOf('T2 M6')));
+  assert.eq(at.op, 1, 'the second tool\'s line is in the second piece');
+  const d = pieces[1].cl.moves;
+  assert.close(d[at.move * 8 + 2], 5, 1e-9, 'at the move it wrote');
+});
+
+test('every move of a file is kept, and each still knows its line', () => {
+  // A retract followed by a rapid straight back down is a pair a strategy
+  // tidies away. In a file being checked it is what the file says — and
+  // dropping it moved every later move one place off its line, so clicking a
+  // block in the G-code panel marked the move before it.
+  const r = readGcode(program(
+    'G21 G90', 'G0 Z10', 'G0 X0 Y0', 'G1 Z-1 F100', 'G1 X10',
+    'G0 Z10', 'G0 Z1', 'G1 Z-2', 'G1 X0', 'M2',
+  ));
+  assert.eq(r.cl.count, r.lineOf.length, 'one move for every line that moved');
+  const d = r.cl.moves;
+  for (let n = 0; n < r.cl.count; n++) {
+    const z = d[n * 8 + 3];
+    const line = program('G21 G90', 'G0 Z10', 'G0 X0 Y0', 'G1 Z-1 F100', 'G1 X10',
+      'G0 Z10', 'G0 Z1', 'G1 Z-2', 'G1 X0', 'M2').split('\n')[r.lineOf[n]];
+    const said = /Z(-?[\d.]+)/.exec(line);
+    if (said) assert.close(z, Number(said[1]), 1e-9, `move ${n} is line ${r.lineOf[n]} (${line})`);
+  }
+});
+
 // --- the post's own check ---
 
 /** A real operation, posted and read back. */

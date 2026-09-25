@@ -12,6 +12,7 @@ import {
 import { numberInput, parseNumber, formatNumber } from './number-input.js';
 import { resetCatalogs } from '../doc/tool-library.js';
 import { plural } from '../engine/text.js';
+import { whenSettled, rebuildKeepingFocus } from './keep-focus.js';
 
 /**
  * @param onChange called with (key, value) after every change, so the app can
@@ -20,6 +21,13 @@ import { plural } from '../engine/text.js';
 export function openOptions({ onChange, onStatus } = {}) {
   const dialog = el('dialog', { class: 'lib-dialog options-dialog' });
   const body = el('div', { class: 'lib-body options-body' });
+
+  // After an edit has finished committing, with the caret put back — the rows
+  // are rebuilt on every change, and a rebuild in the middle of the click on
+  // the next row lost that click. See app/keep-focus.js.
+  function rebuild() {
+    whenSettled('options', [dialog], () => rebuildKeepingFocus(body, build));
+  }
 
   function build() {
     const groups = SETTING_GROUPS.map((group) => {
@@ -30,13 +38,13 @@ export function openOptions({ onChange, onStatus } = {}) {
           // goes to the status line the way every other report does.
           if (setting.type === 'action') {
             if (value) onStatus?.(value);
-            build();
+            rebuild();
             return;
           }
           setSetting(setting.key, value);
           onChange?.(setting.key, value);
           // a change can enable or disable another row, so the group is rebuilt
-          build();
+          rebuild();
         });
         return el('div', { class: 'options-row' }, [
           el('div', { class: 'prop-row' }, [
@@ -138,7 +146,13 @@ function controlFor(setting, commit) {
   input.value = formatNumber(value);
   input.addEventListener('change', () => {
     const next = parseNumber(input.value);
-    commit(Number.isFinite(next) ? next : setting.default);
+    // an entry that is not a number puts back what was there, as every other
+    // number box does — not the factory default, which is a different setting
+    if (!Number.isFinite(next)) {
+      input.value = formatNumber(value);
+      return;
+    }
+    commit(next);
   });
   return input;
 }

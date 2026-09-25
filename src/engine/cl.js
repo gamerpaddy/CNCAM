@@ -259,19 +259,25 @@ export class CLBuilder {
   }
 
   /** Finished, trimmed program. `data` buffer is transferable to workers. */
-  finish() {
+  /**
+   * @param exact keep every move exactly as it was recorded — for a program
+   *   read back from a file, whose moves are the file's and whose line map
+   *   points into them one for one
+   */
+  finish({ exact = false } = {}) {
     this.merger?.flush();
-    // The link moves nobody needs: a retract to clearance followed by a rapid
-    // straight back down at the same XY, which is what every depth level of
-    // every 2.5D strategy emits between its passes. See engine/simplify.js.
-    return dropRedundantRapids({
+    const program = {
       version: 0,
       moves: this.data.slice(0, this.count * MOVE_STRIDE),
       count: this.count,
       events: this.events,
       notes: this.notes,
       resolution: this.resolution,
-    }, MOVE_STRIDE, OP.RAPID);
+    };
+    // The link moves nobody needs: a retract to clearance followed by a rapid
+    // straight back down at the same XY, which is what every depth level of
+    // every 2.5D strategy emits between its passes. See engine/simplify.js.
+    return exact ? program : dropRedundantRapids(program, MOVE_STRIDE, OP.RAPID);
   }
 }
 

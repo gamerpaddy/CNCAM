@@ -121,7 +121,12 @@ export function clFromGcode(parsed) {
   flushEventsTo(Infinity);
 
   return {
-    cl: cl.finish(),
+    // Exact: this is somebody's file, and what is being checked is what it says.
+    // Tidying away a "retract, then straight back down" pair — right for a
+    // program this app is writing — shifted every move after it one place from
+    // the line it came from, so a click in the G-code panel marked the move
+    // before the one clicked, and the path on screen was not the file's.
+    cl: cl.finish({ exact: true }),
     lineOf,
     extent: Number.isFinite(min[0]) ? { min, max } : null,
     speeds: {

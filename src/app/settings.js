@@ -272,8 +272,9 @@ export const SETTINGS = [
     group: 'Editing',
     type: 'checkbox',
     default: true,
-    hint: 'Restores what you had open after a reload. Geometry is stored too, '
-      + 'when it fits. Takes effect on the next reload.',
+    hint: 'Restores what you had open after a reload, geometry included. '
+      + 'Switching it off also forgets the session already kept, so a reload '
+      + 'starts empty rather than on whatever was open when it was last on.',
   },
 ];
 
