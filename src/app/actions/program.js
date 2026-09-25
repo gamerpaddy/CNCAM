@@ -120,6 +120,7 @@ export function makeProgramActions(ctx, space) {
           doc.toolpaths.delete(op.id);
           doc.fingerprints.delete(op.id);
           failed.push({ op, message: opBlockedReason(doc, op) });
+          doc.failures.set(op.id, opBlockedReason(doc, op));
           continue;
         }
         // Rest machining reads what the operations above this one actually cut,
@@ -165,11 +166,13 @@ export function makeProgramActions(ctx, space) {
           }).then((cl) => {
             doc.toolpaths.set(op.id, cl);
             doc.fingerprints.set(op.id, fingerprint);
+            doc.failures.delete(op.id);
           }, (err) => {
             console.error(err);
             doc.toolpaths.delete(op.id);
             doc.fingerprints.delete(op.id);
             failed.push({ op, message: err?.message ?? String(err) });
+            doc.failures.set(op.id, err?.message ?? String(err));
           }),
         );
       }

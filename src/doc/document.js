@@ -16,6 +16,10 @@ export class Document extends EventTarget {
     this.project = createProject();
     this.meshes = new Map();     // modelId -> { positions, indices, normals, faceRanges? }
     this.toolpaths = new Map();  // opId -> finished CL program (runtime, not persisted)
+    // opId -> why its last generation failed (runtime, not persisted). Without
+    // it an operation whose strategy threw looked exactly like one never
+    // generated: "Not generated yet — press Generate", after pressing it.
+    this.failures = new Map();
     // opId -> what the operation looked like when that toolpath was made, so
     // the UI can tell a current path from one the settings have moved past
     this.fingerprints = new Map();
@@ -635,6 +639,7 @@ export class Document extends EventTarget {
     this.meshes = new Map(meshes);
     this.toolpaths.clear();
     this.fingerprints.clear();
+    this.failures.clear();
     this.undoStack = new UndoStack();
     this.selection = null;
     this.emitChange('load');

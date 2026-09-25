@@ -226,7 +226,10 @@ export function resultSection(doc, op) {
 
   const status = opStatus(doc, op);
   if (!status) {
-    rows.push(el('div', { class: 'prop-note' }, ['Not generated yet — press Generate (Ctrl+G).']));
+    const failure = doc.failures?.get(op.id);
+    rows.push(failure
+      ? el('div', { class: 'prop-note warn' }, [`Generating this failed: ${failure}`])
+      : el('div', { class: 'prop-note' }, ['Not generated yet — press Generate (Ctrl+G).']));
     return rows;
   }
   if (status.stale) {

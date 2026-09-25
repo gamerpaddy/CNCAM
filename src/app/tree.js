@@ -562,6 +562,10 @@ function statusBadges(doc, op) {
   }
   const status = opStatus(doc, op);
   if (!status) {
+    const failure = doc.failures?.get(op.id);
+    if (failure) {
+      return [el('span', { class: 'tree-badge warn', title: `Generating this failed: ${failure}` }, ['!'])];
+    }
     // never generated: say whether it *would* work, so a problem is found
     // while the settings are on screen rather than after a wait
     const problems = opPreflight(doc, op);
