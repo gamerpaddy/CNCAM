@@ -83,6 +83,35 @@ test('an arc runs counter-clockwise from its start angle to its end', () => {
   assert.close(totalLength(paths), (Math.PI * 10) / 2, 0.02, 'a quarter of a circle');
 });
 
+test('an arc drawn on a flipped plane lands where it was drawn', () => {
+  // Extrusion 0,0,−1: the arc is in its own coordinates, whose X axis is world
+  // −X, and it runs counter-clockwise *seen from below*. Centre (5,0), 0°→90°
+  // in those coordinates is centre (−5,0), from 180° clockwise round to 90° in
+  // the world — joined to a LINE that ends at (−15,0), which is in the world.
+  const { paths } = parseDXF(dxf([
+    '0', 'ARC', '10', '5', '20', '0', '40', '10', '50', '0', '51', '90',
+    '210', '0', '220', '0', '230', '-1',
+    '0', 'LINE', '10', '-15', '20', '-20', '11', '-15', '21', '0',
+  ]));
+  const arc = paths[0].points;
+  assert.close(arc[0], -15, 1e-6, 'starts where the line ends, at world (−15, 0)');
+  assert.close(arc[1], 0, 1e-6);
+  assert.close(arc[arc.length - 2], -5, 1e-6, 'ends on top of its centre');
+  assert.close(arc[arc.length - 1], 10, 1e-6);
+  const line = paths[1].points;
+  assert.close(line[2], arc[0], 1e-9, 'and the line meets it');
+
+  // a circle and a polyline on that plane are mirrored the same way
+  const flipped = parseDXF(dxf([
+    '0', 'CIRCLE', '10', '5', '20', '5', '40', '4', '230', '-1',
+    '0', 'LWPOLYLINE', '90', '2', '70', '0', '10', '1', '20', '0', '10', '3', '20', '0',
+    '230', '-1',
+  ])).paths;
+  const circleXs = flipped[0].points.filter((_, i) => i % 2 === 0);
+  assert.close((Math.min(...circleXs) + Math.max(...circleXs)) / 2, -5, 0.01, 'the circle is at x −5');
+  assert.eq(flipped[1].points.join(), '-1,0,-3,0', 'the polyline at x −1…−3');
+});
+
 test('a bulged polyline segment is an arc, on the right segment', () => {
   // a square whose *second* segment bulges out into a semicircle
   const { paths } = parseDXF(dxf(['0', 'LWPOLYLINE', '90', '3', '70', '0',

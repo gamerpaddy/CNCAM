@@ -205,6 +205,18 @@ function text(entity, code, fallback = '') {
 function entityToPaths(type, entity, tol) {
   const layer = text(entity, 8, '0');
   const path = (points, closed = false) => [{ points, closed, layer }];
+  // CIRCLE, ARC and the polylines are written in the entity's own coordinate
+  // system (OCS), which is the drawing plane seen along the extrusion direction
+  // (210/220/230). For a sketch on a flipped plane that direction is −Z, and by
+  // the DXF arbitrary-axis rule the OCS X axis is then world −X: every X is
+  // mirrored and every arc runs the other way round. LINE and SPLINE are always
+  // in world coordinates. Read as world, a drawing with both came apart — the
+  // lines where they were drawn and the arcs and outlines mirrored about Y.
+  const flipped = number(entity, 230, 1) < 0;
+  const ocs = (points) => {
+    if (flipped) for (let k = 0; k < points.length; k += 2) points[k] = -points[k];
+    return points;
+  };
 
   switch (type) {
     case 'LINE':
@@ -221,22 +233,22 @@ function entityToPaths(type, entity, tol) {
       // out of the raw pair order instead — see bulgesFor.
       const bulges = bulgesFor(entity, xs.length);
       const closed = (number(entity, 70, 0) & 1) === 1;
-      return path(polylinePoints(xs, ys, bulges, closed, tol), closed);
+      return path(ocs(polylinePoints(xs, ys, bulges, closed, tol)), closed);
     }
 
     case 'POLYLINE': {
       const vertices = entity.get('vertices') ?? [];
       const closed = (number(entity, 70, 0) & 1) === 1;
-      return path(polylinePoints(
+      return path(ocs(polylinePoints(
         vertices.map((v) => v.x), vertices.map((v) => v.y),
         vertices.map((v) => v.bulge), closed, tol,
-      ), closed);
+      )), closed);
     }
 
     case 'CIRCLE': {
       const r = number(entity, 40);
       if (!(r > 0)) return [];
-      return path(arcPoints(number(entity, 10), number(entity, 20), r, 0, Math.PI * 2, tol), true);
+      return path(ocs(arcPoints(number(entity, 10), number(entity, 20), r, 0, Math.PI * 2, tol)), true);
     }
 
     case 'ARC': {
@@ -246,7 +258,7 @@ function entityToPaths(type, entity, tol) {
       let to = number(entity, 51) * DEG;
       // DXF arcs always run counter-clockwise from start to end
       while (to <= from) to += Math.PI * 2;
-      return path(arcPoints(number(entity, 10), number(entity, 20), r, from, to - from, tol));
+      return path(ocs(arcPoints(number(entity, 10), number(entity, 20), r, from, to - from, tol)));
     }
 
     case 'ELLIPSE':
@@ -370,7 +382,11 @@ function ellipsePoints(entity, tol) {
 
   const major = Math.hypot(mx, my);
   if (!(major > 0)) return [];
-  const minor = major * ratio;
+  // An ellipse is in world coordinates, but its minor axis is the extrusion
+  // crossed with the major one — so an extrusion of −Z turns the minor axis
+  // round, and the parameter runs clockwise. A partial ellipse read without it
+  // is mirrored across its own major axis.
+  const minor = major * ratio * (number(entity, 230, 1) < 0 ? -1 : 1);
   const rot = Math.atan2(my, mx);
   const cos = Math.cos(rot);
   const sin = Math.sin(rot);
