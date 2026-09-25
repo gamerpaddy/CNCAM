@@ -136,7 +136,7 @@ function jobSummarySection(doc, setup) {
     const status = opStatus(doc, op);
     if (status) { seconds += status.seconds; generated++; if (status.stale) stale++; }
     lines.push(el('div', { class: 'job-row' }, [
-      el('span', { class: 'job-tool' }, [tool ? `T${tool.number}` : '—']),
+      el('span', { class: 'job-tool' }, [tool && op.type !== 'command' ? `T${tool.number}` : '—']),
       el('span', { class: 'job-name' }, [op.name]),
       el('span', { class: 'job-time' }, [status ? status.timeText : '·']),
     ]));

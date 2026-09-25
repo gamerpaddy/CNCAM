@@ -79,7 +79,8 @@ export function makeEditActions(ctx, space) {
     op.name = uniqueOpName(setup, OP_LABELS[type] ?? type);
     doc.addOperation(setup, op);
     doc.select('op', op.id);
-    if (!op.toolId) ctx.ui.setStatus('Operation added — create and assign a tool', true);
+    if (type === 'command') ctx.ui.setStatus(`Added ${op.name} — type the lines it writes`);
+    else if (!op.toolId) ctx.ui.setStatus('Operation added — create and assign a tool', true);
     else ctx.ui.setStatus(`Added ${op.name} with T${tool.number} ${tool.name}`);
   }
 
@@ -144,6 +145,12 @@ export function makeEditActions(ctx, space) {
     // strategy's own label (with or without the number that made it unique) was
     // never a decision, so it moves with the strategy.
     const patch = { type, params };
+    // A command holds no cutter, and an operation that was one has none to
+    // bring — so the tool goes with the change in either direction.
+    if (type === 'command') patch.toolId = null;
+    else if (op.type === 'command' || !op.toolId) {
+      patch.toolId = pickToolFor(type, doc.project.tools)?.id ?? null;
+    }
     const label = OP_LABELS[type] ?? type;
     if (setup && isAutoName(op.name, op.type)) {
       patch.name = uniqueOpName(setup, label, op.id);

@@ -230,8 +230,11 @@ export class Document extends EventTarget {
     let operations = 0;
     if (kind === 'tool') {
       // both machines share the rack, so both are counted
+      // a command never uses the cutter it may hold from an older file
       for (const setup of this.project.setups) {
-        for (const op of setup.operations) if (op.toolId === id) operations++;
+        for (const op of setup.operations) {
+          if (op.toolId === id && op.type !== 'command') operations++;
+        }
       }
     } else if (kind === 'setup') {
       operations = this.project.setups.find((s) => s.id === id)?.operations.length ?? 0;

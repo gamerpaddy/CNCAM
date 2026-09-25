@@ -175,6 +175,11 @@ function heldBy(type, tools) {
  */
 export function pickToolFor(type, tools) {
   if (!tools || tools.length === 0) return null;
+  // A command is lines of G-code and holds no cutter. Handed the first one in
+  // the rack, it showed as "T1" in the running order, counted as a user of that
+  // tool when it was deleted, and marked itself stale when the tool changed —
+  // for a tool the post never writes for it. See strategies/command.js.
+  if (type === 'command') return null;
   const held = heldBy(type, tools);
   if (held.length === 0) return null;
   // A preference that cannot be met still falls back to whatever is in the

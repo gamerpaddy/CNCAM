@@ -1367,7 +1367,16 @@ kbd {
   max-height: 96vh;
   overflow: hidden;
 }
+/* Title, body, action bar — a column in which the body scrolls and the bar is
+   the floor. With only `overflow: hidden` on the dialog, a window shorter than
+   the wizard (1024×768 is enough) simply cut the bottom off: the name row and
+   the Create button were not scrolled out of view, they were unreachable, and
+   the tool could not be made. Only while open — an author `display` on a
+   dialog would otherwise override the closed one's `display: none`. */
+.wiz-dialog[open] { display: flex; flex-direction: column; }
 .wiz-body { display: flex; flex-direction: column; gap: 10px; }
+.wiz-dialog > .wiz-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.wiz-dialog > .lib-actions { flex: 0 0 auto; }
 
 .wiz-families {
   display: grid;

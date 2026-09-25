@@ -503,16 +503,24 @@ function operationRow(doc, setup, op, app) {
  * image and the drop target all come from the platform.
  */
 function makeReorderable(node, doc, setup, op, app) {
+  // Which setup the dragged row came from, carried as a data *type*: a drop
+  // target cannot read the data until the drop, but it can read the types while
+  // the row is over it. A row from another setup was shown a drop line and then
+  // silently ignored on release — moving between setups is not supported, so
+  // it is not offered.
+  const fromHere = `text/cncam-setup-${String(setup.id).toLowerCase()}`;
   node.setAttribute('draggable', 'true');
   node.addEventListener('dragstart', (e) => {
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/cncam-op', op.id);
+    e.dataTransfer.setData(fromHere, '');
     node.classList.add('dragging');
   });
   node.addEventListener('dragend', () => node.classList.remove('dragging'));
 
   node.addEventListener('dragover', (e) => {
     if (!e.dataTransfer.types.includes('text/cncam-op')) return;
+    if (!e.dataTransfer.types.includes(fromHere)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     // which half of the row the pointer is over decides above or below, so a

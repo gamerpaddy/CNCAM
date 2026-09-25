@@ -94,6 +94,26 @@ test('with nothing suitable in the rack, the operation is still editable', () =>
   assert.eq(pickToolFor('contour2d', null), null);
 });
 
+test('a command holds no cutter, and is not counted as using one', () => {
+  // It is lines of G-code: the post writes no tool for it. Handed the first
+  // cutter in the rack it showed as T1 in the running order and was counted
+  // among the operations that "will stop generating" when that tool was deleted.
+  assert.eq(pickToolFor('command', RACK), null, 'nothing is picked for a command');
+
+  const doc = new Document();
+  const tool = createTool('flat');
+  doc.addTool(tool);
+  const setup = createSetup('Setup 1');
+  doc.addSetup(setup);
+  const cut = createOperation('contour2d');
+  cut.toolId = tool.id;
+  const command = createOperation('command');
+  command.toolId = tool.id;          // as an older project may still have it
+  doc.addOperation(setup, cut);
+  doc.addOperation(setup, command);
+  assert.eq(doc.usageOf('tool', tool.id).operations, 1, 'only the cut uses the cutter');
+});
+
 test('a drill is never chosen for an operation that mills', () => {
   const rack = [RACK[4], RACK[0]];   // drill first in the list
   for (const type of ['bore', 'contour2d', 'pocket', 'clear2d', 'adaptive', 'face']) {
@@ -312,7 +332,8 @@ test('a lathe setup is offered turning strategies and nothing else', async () =>
     for (const type of TURNING_OPS) {
       assert.ok(names.includes(OP_LABELS[type]), `${type} is missing`);
     }
-    for (const type of MILLING_OPS) {
+    // a command is on both machines, by design — see BOTH_MACHINES
+    for (const type of MILLING_OPS.filter((t) => !BOTH_MACHINES.has(t))) {
       assert.ok(!names.includes(OP_LABELS[type]),
         `${type} is a milling strategy and should not be offered on a lathe`);
     }
