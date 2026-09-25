@@ -49,9 +49,11 @@ export function shortcuts(ctx) {
     {
       group: 'Operations',
       keys: 'A',
-      label: 'Add an operation to the first setup',
+      label: 'Add an operation to the setup you are working in',
       run: () => {
-        const setup = ctx.doc.setups()[0];
+        // the one being worked on — whatever is selected in it — not always the
+        // first: in the second setup of a flipped part, A added to the first
+        const setup = ctx.doc.activeSetup();
         if (!setup) return ctx.ui.setStatus('Add a setup first', true);
         openStrategyPicker({
           title: `Add an operation to ${setup.name}`,
