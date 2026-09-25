@@ -325,7 +325,13 @@ The session autosaves to the same store as a single whole-project file —
 geometry included, because OPFS has no meaningful size limit where localStorage
 had three megabytes and silently dropped every mesh past it. A browser without an
 OPFS falls back to the old localStorage pair, and a session saved there is
-migrated on the first save. A **Clear** button discards everything and starts over.
+migrated on the first save. The session remembers which stored project it is a
+version of (beside it, in `cncam.sessionProject`), so a reload still saves into
+the same drawer; a save still waiting on its debounce is made at once when the
+page is hidden or closed; and one failed write does not stop the ones after it.
+Switching "Keep the session" off forgets the kept session rather than restoring
+it forever. A **Clear** button discards everything and starts over — asking
+first whenever there is anything to lose, drawings included.
 
 **Hand-written G-code.** Two places the app writes lines it does not understand,
 and one function (`post/format.js` `customBlock`) that decides how. A machine
@@ -340,6 +346,12 @@ operation with no cutter, no geometry and no moves, whose CL carries a single
 `raw` event that the post writes where the operation stands. It is an operation
 rather than a note to edit the file, because being one is what puts it in the
 tree, the undo stack, the project and the reorder.
+
+A command operation belongs to the setup it sits in: it has no moves, but it
+crosses a setup boundary like any other operation — the re-fixturing stop and
+the next work offset are written *before* a command at the start of a setup, so
+a probe block there runs on the new fixturing, in the new offset, with the
+spindle stopped.
 
 After either block the post drops what it believed about position, the spindle
 and coolant, and keeps what it believed about the tool. The asymmetry is the
@@ -971,6 +983,31 @@ src/
   test it against `makeMushroom()` (an overhanging cap) — the fixture exists
   because a bare slice passes every flat-part test and still cuts air under an
   overhang.
+- **A panel rebuilt on `change` goes through `app/keep-focus.js`.** A field
+  commits as it loses focus, which is in the middle of the click or Tab moving
+  to the next one; rebuilding there replaced the control being clicked, the
+  caret went to `<body>` and the next keys were read as shortcuts — Delete,
+  pressed to clear the next field, deleted the operation. `whenSettled` holds
+  the rebuild until the gesture is over and `rebuildKeepingFocus` puts the caret
+  back. The props panel, the tree, Machines and Options all use it; a new
+  dialog that rebuilds itself on edit should too. And app shortcuts never fire
+  while a modal dialog is open.
+- **Nothing is approached from below the billet's top.** A hole cycle's R
+  plane, a bore's feed plane and a thread mill's rapid stop are an entry gap
+  above the hole's top *or the billet's*, whichever is higher
+  (`engine/heights.js` holeSurfaceZ) — a job arrives unfaced, and a canned cycle
+  rapids down to R. The simulator sweeps a cycle's approach as the rapid it is,
+  so an R inside the metal is a `rapidCut`, not a clean hole.
+- **Where Top Z only means "start here", the cut starts no higher than the
+  billet** (`engine/toolpath.js` clampTopToStock, and the lathe's facing and
+  grooving the same way at the end of the bar). There is nothing to cut above
+  it, and a Top Z left there fed whole passes through air.
+- **A number field that has no meaningful zero says so with `min`** — and
+  `integer: true` where a fraction is not a word the control reads (tool
+  numbers, flutes). T0 is "no tool" and its length offset is none; S0 is a
+  stopped cutter; a cutter of no diameter ran a contour out of memory. What a
+  field refuses, `opPreflight` and the strategy's notes still name when it
+  arrives from an older file.
 - Also run it against `samples/clamp1.stl` via `real-model.test.js`. Synthetic
   fixtures are clean in ways real exports never are: exactly vertical walls,
   exactly meeting vertices, unions that collapse neatly. Anything that unions
