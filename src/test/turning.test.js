@@ -671,3 +671,28 @@ test('every roughing pass takes the depth of cut it was set, plateaus and all', 
   // and the plateaus are still landed on exactly, which is what they are for
   assert.ok(radii.some((r) => Math.abs(r - 15.3) < 1e-6), 'the ⌀30 plateau + 0.3');
 });
+
+test('facing starts at the end of the bar, not at a Z start left beyond it', () => {
+  // Shorten the bar after the operation is made and Z start is past its end:
+  // every stepdown out there faced air.
+  const at = (topZ) => generateToolpath({
+    type: 'turnFace', name: 'face', tool: INSERT, mesh: shaft.mesh, stock: BAR,
+    params: { ...base, topZ, bottomZ: 60, stepdown: 1 },
+  });
+  const flush = at(65);
+  const beyond = at(85);
+  const passes = (cl) => new Set(cutPoints(cl).map(([, z]) => Math.round(z * 1000))).size;
+  assert.eq(passes(beyond), passes(flush), 'the same passes as from the bar end');
+  assert.ok(/past the end of the bar/.test(notes(beyond, 'info')), 'and it says why');
+});
+
+test('a groove asked to leave more than its depth cuts nothing, and says so', () => {
+  // The plunge "down" to a floor above its own surface ran outward forever:
+  // a hundred thousand millimetres to leave was over a million moves.
+  const cl = generateToolpath({
+    type: 'turnGroove', name: 'groove', tool: BLADE, mesh: shaft.mesh, stock: BAR,
+    params: { ...base, topZ: 30, bottomZ: 24, grooveRadius: 12, stockToLeave: 100000 },
+  });
+  assert.eq(cl.count, 0, 'no moves');
+  assert.ok(/more than the groove is deep/.test(notes(cl, 'warn')), notes(cl));
+});

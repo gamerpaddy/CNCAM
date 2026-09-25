@@ -260,8 +260,19 @@ export function generateTurnFace({ mesh, tool, params, stock, fixtures }) {
     return cl.finish();
   }
 
+  // Nothing to face past the end of the bar. A Z start left beyond it — the bar
+  // shortened after the operation was made — faced air a stepdown at a time,
+  // the lathe's version of a milling pass starting above the billet. See
+  // engine/toolpath.js clampTopToStock.
+  let zStart = ctx.zStart;
+  if (Number.isFinite(bar.zMax) && zStart > bar.zMax + 1e-6 && bar.zMax > zEnd + 1e-6) {
+    cl.info(`Z start is ${round(zStart - bar.zMax)}mm past the end of the bar, so facing `
+      + `starts at the bar's end, Z${round(bar.zMax)}`);
+    zStart = bar.zMax;
+  }
+
   const passes = [];
-  for (let z = ctx.zStart - step; z > zEnd + 1e-9; z -= step) passes.push(z);
+  for (let z = zStart - step; z > zEnd + 1e-9; z -= step) passes.push(z);
   passes.push(zEnd);
 
   // On a tube there is nothing to face inside the bore, and running the insert
@@ -281,7 +292,7 @@ export function generateTurnFace({ mesh, tool, params, stock, fixtures }) {
     cl.rapid(clearX, 0, cutZ);
   }
 
-  cl.info(`faced ${(ctx.zStart - zEnd).toFixed(2)}mm off the end in ${pluralEs(passes.length, 'pass')}`
+  cl.info(`faced ${(zStart - zEnd).toFixed(2)}mm off the end in ${pluralEs(passes.length, 'pass')}`
     + (bar.innerRadius > 0 ? `, stopping at the ⌀${dia(bar.innerRadius)} bore` : ''));
   return cl.finish();
 }
@@ -626,7 +637,11 @@ export function generateTurnGroove({ mesh, tool, params, stock, fixtures }) {
   const zEnd = limitToChuck(cl, ctx, internal ? 'internal' : 'external');
 
   const blade = Math.max(0.2, tool?.bladeWidth || tool?.diameter || 3);
-  const zHi = Math.max(ctx.zStart, zEnd);
+  // A groove is a width *on the bar*. Past its free end there is nothing to
+  // plunge into, and a span running out there was plunged a blade at a time
+  // through air — a mistyped Z by a few zeros was hundreds of thousands of them.
+  const zHi = Math.min(Math.max(ctx.zStart, zEnd),
+    Number.isFinite(bar.zMax) ? bar.zMax : Infinity);
   const zLo = Math.min(ctx.zStart, zEnd);
   const width = zHi - zLo;
   // Where the plunge starts: the bar for an outside groove, the bore for one
@@ -676,6 +691,13 @@ export function generateTurnGroove({ mesh, tool, params, stock, fixtures }) {
 
   const peck = Math.max(0, params.peck ?? 0);
   const target = internal ? floor - allowance : floor + allowance;
+  // Leaving more than the groove is deep leaves the whole groove, and a plunge
+  // "down" to a floor above the surface it starts from ran outward forever.
+  if (allowance > 0 && !(internal ? target > from + 1e-6 : target < from - 1e-6)) {
+    cl.warn(`${allowance}mm to leave is more than the groove is deep (${depth.toFixed(2)}mm) — `
+      + 'there is nothing left for this pass to cut');
+    return cl.finish();
+  }
   // Half a millimetre off the surface the blade plunges from. Every plunge
   // starts and ends there, and the step along the bar between them happens
   // there too: it is outside the material by definition, so going back out to
