@@ -54,7 +54,12 @@ export function makeFileActions(ctx, program) {
       // one thing a solid cannot give you, because a logo or a part number is
       // not a feature of the part.
       if (file.name.toLowerCase().endsWith('.dxf')) return importDrawing(file);
-      const parts = await importModelFile(file);
+      // A model with no triangles is not a model: it has no bounds, so the stock
+      // sized round it is NaN, and every operation after that is built on
+      // nothing — while the status line said "Imported". Refused, or, from a
+      // multi-body file, left out.
+      const parts = (await importModelFile(file)).filter((p) => p.mesh?.indices?.length > 0);
+      if (parts.length === 0) throw new Error(`${file.name} has no triangles in it`);
       // Measured before the new part lands, and asked about after it has: the
       // counts have to be of the job being replaced, but a parse that throws
       // must not have cost anybody their setups on the way to failing.

@@ -12,7 +12,17 @@ function isBinary(buffer) {
   // A well-formed binary STL has exactly this size; ASCII files starting with
   // "solid" will not match. Size check beats sniffing the "solid" keyword,
   // because some binary exporters also write "solid" into the header.
-  return buffer.byteLength === 84 + triCount * 50;
+  const needs = 84 + triCount * 50;
+  if (buffer.byteLength === needs) return true;
+  // Longer than it needs, by a few bytes of padding or a trailer some exporters
+  // append: still binary, unless it reads as text. Demanding the exact size
+  // sent such a file to the ASCII reader, which found no "vertex" in it and
+  // imported a model of no triangles as though that were a success.
+  if (triCount > 0 && buffer.byteLength > needs) {
+    const head = new TextDecoder('latin1').decode(new Uint8Array(buffer, 0, Math.min(1024, buffer.byteLength)));
+    return !/\bfacet\b|\bvertex\b/.test(head);
+  }
+  return false;
 }
 
 function parseBinary(buffer) {
@@ -20,15 +30,21 @@ function parseBinary(buffer) {
   const triCount = view.getUint32(80, true);
   const positions = new Float32Array(triCount * 9);
   let offset = 84;
+  let kept = 0;
   for (let t = 0; t < triCount; t++) {
     offset += 12; // skip facet normal (recomputed later)
+    let finite = true;
     for (let i = 0; i < 9; i++) {
-      positions[t * 9 + i] = view.getFloat32(offset, true);
+      const value = view.getFloat32(offset, true);
+      positions[kept * 9 + i] = value;
+      if (!Number.isFinite(value)) finite = false;
       offset += 4;
     }
     offset += 2; // attribute byte count
+    // a corner that is not a number is a model with no bounds — see io/obj.js
+    if (finite) kept++;
   }
-  return positions;
+  return kept === triCount ? positions : positions.slice(0, kept * 9);
 }
 
 function parseAscii(buffer) {
