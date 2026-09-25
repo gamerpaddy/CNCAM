@@ -330,6 +330,10 @@ const BASE = {
  */
 export function toolFromPreset(preset, number = 1) {
   const merged = { ...BASE, ...preset };
+  // A file's T number is kept, but only as a pocket a control has: a whole
+  // number from 1. See the tool number field in app/props.js for what 0 does.
+  // eslint-disable-next-line no-param-reassign
+  number = Number.isFinite(Number(number)) && Number(number) >= 1 ? Math.round(Number(number)) : 1;
   const type = merged.type ?? 'flat';
   const lathe = machineForType(type) === 'turn';
   // an ISO code in the preset is the authority on the geometry it encodes

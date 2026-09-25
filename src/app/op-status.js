@@ -247,6 +247,18 @@ export function opPreflight(doc, op) {
   const sideways = noSideToCutWith(op.type, tool);
   if (sideways) notes.push(sideways);
 
+  // An older project, or one edited by hand, can still carry a number no
+  // control has a pocket for — and T0 M6 / G43 H0 is an empty spindle with no
+  // length offset, every Z after it off by the length of the tool.
+  if (tool && !(Number.isInteger(tool.number) && tool.number >= 1)) {
+    notes.push(`T${tool.number} is not a tool number a control has — give ${tool.name ?? 'the tool'} `
+      + 'a whole number from 1. T0 means no tool, and its length offset is none.');
+  } else if (tool && tool.number > 99 && (setup?.mode ?? 'mill') === 'turn') {
+    // the lathe word is two digits of station and two of offset — see post/lathe.js
+    notes.push(`T${tool.number} cannot be written as a lathe tool word: T0101 is station 01 `
+      + `and offset 01, and ${tool.number} is three digits. Number it 1 to 99.`);
+  }
+
   // A chamfer is the exception to both of the checks below: its Bottom Z is a
   // limit rather than a floor, and its depth comes from the cone, not a
   // stepdown. Everything else takes the pair as the top and bottom of a cut.

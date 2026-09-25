@@ -1389,3 +1389,23 @@ test('a stepdown that swallows the whole depth says so rather than blaming the h
   assert.ok(fine.count > 0, 'it cuts');
   assert.ok(!fine.notes.some((n) => /covers the whole/.test(n.text)), 'and says nothing about the stepdown');
 });
+
+test('a tool number no control has is said, not posted', () => {
+  // T0 M6 / G43 H0 on LinuxCNC is an empty spindle with no length offset: every
+  // Z after it is off by the length of the tool. The field took any number and
+  // an imported library carried whatever its file said.
+  const doc = new Document();
+  const tool = toolFor('flat', 6);
+  tool.number = 0;
+  doc.addTool(tool);
+  const setup = createSetup('Setup 1');
+  doc.addSetup(setup);
+  const op = createOperation('contour2d');
+  op.toolId = tool.id;
+  doc.addOperation(setup, op);
+  assert.ok(opPreflight(doc, op).some((n) => /T0 is not a tool number/.test(n)), 'T0 is named');
+  doc.updateItem(tool, { number: 2.5 }, 'fraction');
+  assert.ok(opPreflight(doc, op).some((n) => /is not a tool number/.test(n)), 'and so is a fraction');
+  doc.updateItem(tool, { number: 3 }, 'fine');
+  assert.ok(!opPreflight(doc, op).some((n) => /tool number/.test(n)), 'a real number says nothing');
+});

@@ -63,7 +63,11 @@ const FIELDS = {
   ],
   tool: [
     { path: 'name', label: 'Name', type: 'text' },
-    { path: 'number', label: 'Tool number', type: 'number' },
+    // A whole number from 1: T0 is "no tool" on most controls, and the post
+    // writes the number into the length offset too — T0 M6 / G43 H0 is an
+    // empty spindle with its length comp cancelled, and every Z after it off by
+    // the length of the tool. A fraction is not a word any control reads.
+    { path: 'number', label: 'Tool number', type: 'number', min: 1, step: 1, integer: true },
     {
       path: 'type', label: 'Type', type: 'select',
       options: TOOL_TYPES, labels: TOOL_TYPE_LABELS,

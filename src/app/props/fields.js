@@ -118,7 +118,7 @@ export function fieldRow(doc, item, field, beforeEdit, afterEdit, app) {
         input.value = formatNumber(value);
         return undefined;
       }
-      let next = roundMicron(parsed);
+      let next = field.integer ? Math.round(parsed) : roundMicron(parsed);
       if (field.min != null && next < field.min) next = field.min;
       if (field.max != null && next > field.max) next = field.max;
       if (custom(next)) return undefined;
