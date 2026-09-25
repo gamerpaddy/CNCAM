@@ -378,7 +378,11 @@ test('an autosaved CAD model keeps its B-rep faces', async () => {
 
   // this test writes over whatever the running session last autosaved — the
   // OPFS file where that now lives, and the legacy keys on a browser without one
+  // — so both are put back afterwards. Only the keys used to be: running the
+  // test page left the app on this origin to restore a test cube, or nothing.
   const kept = ['cncam.project', 'cncam.meshes'].map((k) => [k, localStorage.getItem(k)]);
+  const store = await import('../doc/project-store.js');
+  const keptSession = store.storeAvailable() ? await store.loadSession() : null;
   const stop = attachAutosave(doc);
   try {
     doc.emitChange('test');
@@ -395,6 +399,10 @@ test('an autosaved CAD model keeps its B-rep faces', async () => {
     stop();
     for (const [k, v] of kept) {
       if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v);
+    }
+    if (store.storeAvailable()) {
+      if (keptSession) await store.saveSession(keptSession);
+      else await store.clearSession();
     }
   }
 });
