@@ -122,7 +122,11 @@ function gcodeBar(program, lineCount, ctx) {
   });
 
   return el('div', { class: 'gcode-bar' }, [
-    el('span', { class: 'gcode-count' }, [`${lineCount} lines · ${plural(program.ops.length, 'operation')}`]),
+    el('span', { class: 'gcode-count' }, [program.imported
+      // somebody's file being checked, not this project's program — said, so
+      // the two cannot be mistaken for each other
+      ? `${program.imported} — a file being checked, not this project · ${lineCount} lines`
+      : `${lineCount} lines · ${plural(program.ops.length, 'operation')}`]),
     el('span', { class: 'spacer' }),
     copy,
   ]);

@@ -158,9 +158,32 @@ export function attachAutosave(doc, { onError } = {}) {
     timer = setTimeout(save, SAVE_DELAY);
   };
 
+  // A save still waiting on its debounce when the page goes away is an edit
+  // lost: change a number and press F5, or close the tab, inside the delay —
+  // and a hidden tab's timers are throttled by the browser, so "inside the
+  // delay" can be a minute. Hidden is the last moment a page is reliably given
+  // to finish work, so a pending save is made there rather than waited for.
+  const flush = () => {
+    if (!timer) return;
+    clearTimeout(timer);
+    save();
+  };
+  const onVisibility = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') flush();
+  };
+  const hasWindow = typeof window !== 'undefined' && typeof document !== 'undefined';
+  if (hasWindow) {
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', flush);
+  }
+
   doc.addEventListener('change', onChange);
   return () => {
     doc.removeEventListener('change', onChange);
+    if (hasWindow) {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', flush);
+    }
     if (timer) clearTimeout(timer);
   };
 }

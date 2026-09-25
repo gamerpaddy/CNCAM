@@ -694,6 +694,15 @@ export function makeProgramActions(ctx, space) {
     ctx.viewport.simulation.clear();
     ctx.viewport.setSimulationMode(false);
     ctx.ui.timeline.hide();
+    // A checked file is shown in place of the project's program — its path in
+    // the viewport and its text in the G-code panel. Closing the check left
+    // both there, unlabelled, reading as this project's own program until
+    // something happened to replace them. Closing it puts the project back.
+    if (ctx.lastProgram?.imported) {
+      ctx.viewport.setToolpaths(doc.visibleToolpaths());
+      ctx.viewport.setMarker(null);
+      refreshGcodePreview(false);
+    }
     if (!quiet) ctx.ui.setStatus('Simulation closed');
   }
 
