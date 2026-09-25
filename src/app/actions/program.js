@@ -684,6 +684,7 @@ export function makeProgramActions(ctx, space) {
     const count = doc.toolpaths.size;
     doc.toolpaths.clear();
     doc.fingerprints.clear();
+    doc.failures.clear();
     if (ctx.simulation) closeSimulation();
     ctx.viewport.setToolpaths(null);
     ctx.viewport.setMarker(null);
