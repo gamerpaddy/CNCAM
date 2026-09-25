@@ -30,7 +30,14 @@ export function openStrategyPicker({
   // too, so the picker offers one set or the other rather than a list with four
   // entries that cannot work here.
   const cards = opsForMode(mode).map(strategyCard);
-  let chosen = current ?? cards[0].type;
+  // With nothing chosen yet, the first card *as laid out* — the top-left one,
+  // under "Prepare the stock". It was the first in the engine's list, which
+  // since the command operation arrived is "Command (G-code)" on both machines:
+  // "Add operation" opened with the one strategy that cuts nothing selected, in
+  // the last group at the bottom of the dialog, and a click on the button made
+  // one.
+  const laidOut = OP_GROUPS.flatMap((group) => cards.filter((c) => c.group === group));
+  let chosen = current ?? (laidOut[0] ?? cards[0]).type;
 
   const dialog = el('dialog', { class: 'lib-dialog strategy-dialog' });
   const accept = el('button', { class: 'primary' }, [confirm]);
