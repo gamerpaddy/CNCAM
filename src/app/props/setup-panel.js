@@ -16,7 +16,7 @@ import {
 import { orientationFor, indexKind } from '../../engine/indexing.js';
 import { wrapFor, linearExtent, WRAP_AXES, WRAP_AXIS_LABELS } from '../../engine/wrap.js';
 import { setupModelIds } from '../actions/setup-space.js';
-import { boreProfile } from '../../engine/lathe.js';
+import { boreProfile, boreNarrowestSection } from '../../engine/lathe.js';
 import { computeBounds, mergeMeshes } from '../../geom/mesh.js';
 import { opStatus, formatTime, toolChangesIn } from '../op-status.js';
 import { machineWarnings } from '../../doc/machines.js';
@@ -327,12 +327,10 @@ function snapDiameterRow(doc, setup) {
 function snapBoreRow(doc, setup) {
   const { meshes } = placed(doc, setup);
   if (meshes.length === 0) return el('span', {});
-  const bore = boreProfile(mergeMeshes(meshes));
-  let smallest = Infinity;
-  for (let i = 0; i < bore.samples; i++) {
-    if (bore.r[i] > 0 && bore.r[i] < smallest) smallest = bore.r[i];
-  }
-  if (!Number.isFinite(smallest)) {
+  // the narrowest parallel section — not the tip of the drill point, which is
+  // what the smallest sample is (see engine/lathe.js boreNarrowestSection)
+  const smallest = boreNarrowestSection(boreProfile(mergeMeshes(meshes)));
+  if (!(smallest > 0)) {
     return el('div', { class: 'prop-note' }, [
       'The part has no bore, so the tube\'s hole is whatever the material came with.',
     ]);

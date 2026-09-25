@@ -364,6 +364,19 @@ test('a wider slot is cut down the middle and then out to each wall', () => {
   assert.ok(wide.count > cl.count, 'a wider slot is more work than a single lane');
 });
 
+test('a slot typed far wider than the billet stops at the billet', () => {
+  // The width has no upper limit in the panel, and every lane is an offset of
+  // the whole line: 100 metres asked for tens of thousands of lanes and ran the
+  // worker out of memory.
+  const started = Date.now();
+  const cl = generateToolpath({
+    ...slotArgs(), params: { ...slotArgs().params, slotWidth: 100000 },
+  });
+  assert.ok(Date.now() - started < 5000, 'it finishes');
+  assert.ok(cl.notes.some((n) => n.level === 'warn' && /wider than the billet/.test(n.text)),
+    'and says the width was more than there is');
+});
+
 test('a slot ramps down rather than plunging into a full-width cut', () => {
   // Top 5, bottom 2, 1.5mm stepdown: two levels, at 3.5 and 2. A plunge to a
   // *previous* level's floor is through the slot the last pass already cut and

@@ -43,7 +43,7 @@ import { chuckLimit } from '../fixtures.js';
 import { mergeTolerance } from '../simplify.js';
 import {
   turningProfile, radiusAtZ, barFromStock, offsetProfile, profilePoints, profileRange,
-  boreProfile, hasBore, drillOversize,
+  boreProfile, hasBore, drillOversize, boreNarrowestSection,
 } from '../lathe.js';
 import { tipLengthOf } from '../tool-geometry.js';
 import { insertEngagement, recommendedDepthOfCut } from '../insert.js';
@@ -1305,34 +1305,9 @@ export function generateTurnBore({ mesh, tool, params, stock, fixtures }) {
   return cl.finish();
 }
 
-/**
- * The narrowest *section* of the part's own bore over a Z range — the pilot,
- * when nothing else says what was drilled.
- *
- * A parallel section, not a sample and not a stretch below some size. Every
- * bore ends in a drill point or a radius, and those pass through every radius
- * down to nothing on the way: the smallest sample on the test shaft's ⌀16/⌀12
- * bore is ⌀2.16 and the whole taper below ⌀10 is 2.5mm long, so neither the
- * bare minimum nor a run-length floor answers it. What a drill leaves is a
- * *parallel* section, so that is what is looked for — ⌀12 over 13mm there, and
- * nothing constant anywhere on the taper.
- */
-function boreSmallestRadius(bore, zLo, zHi, minLength = 2, flat = 0.05) {
-  const { zMin, dz, r, samples } = bore;
-  let best = Infinity;
-  let start = -1;
-  const close = (i) => {
-    if (start >= 0 && (i - start) * dz >= minLength && r[start] < best) best = r[start];
-    start = -1;
-  };
-  for (let i = 0; i < samples; i++) {
-    const z = zMin + i * dz;
-    if (z < zLo - dz || z > zHi + dz || !(r[i] > 1e-6)) { close(i); continue; }
-    if (start < 0) start = i;
-    else if (Math.abs(r[i] - r[start]) > flat) { close(i); start = i; }
-  }
-  close(samples);
-  return Number.isFinite(best) ? best : 0;
+/** The pilot, when nothing else says what was drilled — see lathe.js. */
+function boreSmallestRadius(bore, zLo, zHi) {
+  return boreNarrowestSection(bore, zLo, zHi);
 }
 
 /** The largest bore radius the part asks for over a Z range. */

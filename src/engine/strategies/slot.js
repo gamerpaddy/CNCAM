@@ -102,8 +102,20 @@ export function generateSlot({
     return cl.finish();
   }
 
-  const lanes = laneOffsets(Math.max(0, (width - diameter) / 2 - allowance),
-    Math.max(0.05, (params.stepover ?? 0.5) * diameter));
+  // Every lane is an offset of the whole line, so a lane count is paid for in
+  // full, and the width has no upper limit in the panel: a slot typed with a few
+  // zeros too many asked for tens of thousands of lanes and ran the worker out
+  // of memory — which in a browser can take the tab and the session with it.
+  // No lane further out than the billet reaches can cut anything, so none is
+  // made past that, and the width that was asked for is said to be too much.
+  let reach = Math.max(0, (width - diameter) / 2 - allowance);
+  const span = stock ? Math.hypot(stock.max[0] - stock.min[0], stock.max[1] - stock.min[1]) : Infinity;
+  if (reach > span) {
+    cl.warn(`a ${width}mm slot is wider than the billet is across — the passes stop `
+      + `${Math.round(span)}mm either side of the line, where the billet ends`);
+    reach = span;
+  }
+  const lanes = laneOffsets(reach, Math.max(0.05, (params.stepover ?? 0.5) * diameter));
   // One line for the whole cut, read at the bottom of it — not the outline as
   // it stands at each depth.
   //

@@ -250,6 +250,41 @@ export function drillOversize(profile, { diameter, tipLength = 0 }, zTop, zBotto
   return { oversize: Math.max(0, diameter - 2 * narrowest), bore: 2 * narrowest };
 }
 
+/**
+ * The narrowest *section* of the part's own bore over a Z range, as a radius —
+ * the hole a drill leaves, or a tube arrives with; 0 when there is none.
+ *
+ * A parallel section, not a sample and not a stretch below some size. Every
+ * bore ends in a drill point or a radius, and those pass through every radius
+ * down to nothing on the way: the smallest sample on the test shaft's ⌀16/⌀12
+ * bore is the tip of its drill point, and the whole taper below ⌀10 is 2.5mm
+ * long, so neither the bare minimum nor a run-length floor answers it. What a
+ * drill leaves is a *parallel* section, so that is what is looked for — ⌀12
+ * over 13mm there, and nothing constant anywhere on the taper.
+ *
+ * One answer for both places that ask: the boring pass's pilot, and the
+ * setup's "fit the tube to the part" — which asked the bare minimum and offered
+ * the test shaft a tube with a ⌀0.54 hole.
+ */
+export function boreNarrowestSection(bore, zLo = -Infinity, zHi = Infinity,
+  minLength = 2, flat = 0.05) {
+  const { zMin, dz, r, samples } = bore;
+  let best = Infinity;
+  let start = -1;
+  const close = (i) => {
+    if (start >= 0 && (i - start) * dz >= minLength && r[start] < best) best = r[start];
+    start = -1;
+  };
+  for (let i = 0; i < samples; i++) {
+    const z = zMin + i * dz;
+    if (z < zLo - dz || z > zHi + dz || !(r[i] > 1e-6)) { close(i); continue; }
+    if (start < 0) start = i;
+    else if (Math.abs(r[i] - r[start]) > flat) { close(i); start = i; }
+  }
+  close(samples);
+  return Number.isFinite(best) ? best : 0;
+}
+
 /** Does this profile have a bore anywhere in the Z range? */
 export function hasBore(profile, zLo = -Infinity, zHi = Infinity) {
   const { zMin, dz, r, samples } = profile;
