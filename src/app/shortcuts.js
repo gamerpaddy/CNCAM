@@ -193,9 +193,15 @@ export function bindShortcuts(target, ctx) {
   return () => target.removeEventListener('keydown', onKeyDown);
 }
 
-/** Whether a modal dialog is up — `:modal` where the browser knows it. */
+/**
+ * Whether a modal dialog is up — `:modal` where the browser knows it — or a
+ * popup menu, which owns the keys the same way while it is open: Delete pressed
+ * with a row's menu showing deleted the row and left its menu up, offering
+ * "Duplicate" and "Delete" on an operation that was gone.
+ */
 function modalOpen() {
   if (typeof document === 'undefined') return false;
+  if (document.querySelector('.context-menu')) return true;
   try {
     return !!document.querySelector('dialog:modal');
   } catch {
