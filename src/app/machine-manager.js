@@ -11,7 +11,7 @@
 
 import { el } from './layout.js';
 import {
-  MACHINE_PRESETS, createMachine, describeMachine, machinesFor,
+  MACHINE_PRESETS, createMachine, describeMachine, machinesFor, activeMachine,
   ROTARY_KINDS, rotaryKindOf, rotaryPreset,
 } from '../doc/machines.js';
 import { POSTS, postsFor } from '../post/index.js';
@@ -169,7 +169,9 @@ export function openMachineManager(doc, { onDone } = {}) {
   function build() {
     const pool = machines();
     if (!pool.some((m) => m.id === selectedId)) selectedId = pool[0]?.id ?? null;
-    const inUse = doc.project.machineIds?.[kind];
+    // the one the project posts for, which is the first of its kind when none
+    // was chosen or the chosen one was removed — not only an id that was set
+    const inUse = activeMachine(doc.project, kind)?.id;
 
     listHost.replaceChildren(...(pool.length === 0
       ? [el('div', { class: 'tree-empty' }, ['No machines of this kind yet.'])]
@@ -234,7 +236,15 @@ export function openMachineManager(doc, { onDone } = {}) {
           ? 'The last machine of its kind cannot be removed'
           : `Remove ${machine.name} from this project`,
         onclick: () => {
-          if (!confirm(`Remove ${machine.name}?`)) return;
+          // The one in use is not just a record: the project posts for it, and
+          // removing it hands the program to the next machine of its kind — a
+          // different dialect, envelope and spindle — which is worth saying.
+          const next = machines().find((m) => m.id !== machine.id);
+          const inUse = machine.id === activeMachine(doc.project, kind)?.id;
+          if (!confirm(inUse && next
+            ? `Remove ${machine.name}?\n\nThis project posts for it. The program will be `
+              + `posted for ${next.name} instead — its dialect, travels and spindle range.`
+            : `Remove ${machine.name}?`)) return;
           doc.removeMachine(machine.id);
           build();
         },
