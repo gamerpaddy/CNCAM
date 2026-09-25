@@ -15,13 +15,15 @@ import {
 import { createFixture } from '../../engine/fixtures.js';
 import { deriveCylinder } from '../../engine/stock.js';
 import { pickToolFor } from '../../engine/tool-match.js';
+import { drillOversize } from '../../engine/lathe.js';
+import { tipLengthOf } from '../../engine/tool-geometry.js';
 import { placedPaths, boundsOfPaths } from '../../engine/drawing.js';
 import { getSetting } from '../settings.js';
 
 export function makeEditActions(ctx, space) {
   const { doc } = ctx;
   const {
-    resolveSetupSpace, ensureSetup, setupModelBounds, setupBoreBottom,
+    resolveSetupSpace, ensureSetup, setupModelBounds, setupBoreBottom, setupBoreProfile,
   } = space;
 
   function addOperation() {
@@ -70,18 +72,47 @@ export function makeEditActions(ctx, space) {
     // and holding a cutter that can do the job: a chamfer born holding a flat
     // end mill cannot cut at all, which is a mistake to find rather than a
     // default (see engine/tool-match.js)
-    const tool = pickToolFor(type, doc.project.tools);
-    op.toolId = tool?.id ?? null;
+    let tool = pickToolFor(type, doc.project.tools);
     const { stock } = resolveSetupSpace(setup);
-    Object.assign(op.params, defaultParamsFor(type, {
-      stock, modelBounds: setupModelBounds(setup), tool, boreBottomZ: setupBoreBottom(setup),
-    }));
+    const defaults = (cutter) => defaultParamsFor(type, {
+      stock, modelBounds: setupModelBounds(setup), tool: cutter, boreBottomZ: setupBoreBottom(setup),
+    });
+    let params = defaults(tool);
+    if (type === 'turnDrill') {
+      const fitting = drillThatFits(setup, params);
+      if (fitting && fitting !== tool) {
+        tool = fitting;
+        params = defaults(tool);
+      }
+    }
+    op.toolId = tool?.id ?? null;
+    Object.assign(op.params, params);
     op.name = uniqueOpName(setup, OP_LABELS[type] ?? type);
     doc.addOperation(setup, op);
     doc.select('op', op.id);
     if (type === 'command') ctx.ui.setStatus(`Added ${op.name} — type the lines it writes`);
     else if (!op.toolId) ctx.ui.setStatus('Operation added — create and assign a tool', true);
     else ctx.ui.setStatus(`Added ${op.name} with T${tool.number} ${tool.name}`);
+  }
+
+  /**
+   * The biggest drill in the rack that goes down the part's bore without
+   * opening it up — or null when none does, or the part has no bore to spoil.
+   *
+   * "The biggest drill" is the right pick for a solid bar and the wrong one for
+   * a part whose bore is already drawn: it put a ½" drill down the test shaft's
+   * ⌀12 pilot, 0.7mm oversize. The strategy says so too (see turning.js
+   * generateTurnDrill); this is the same check, made before the choice.
+   */
+  function drillThatFits(setup, params) {
+    const profile = setupBoreProfile(setup);
+    if (!profile) return null;
+    const fits = doc.project.tools
+      .filter((t) => t.type === 'drill' && t.diameter > 0)
+      .filter((t) => drillOversize(profile, { diameter: t.diameter, tipLength: tipLengthOf(t) },
+        params.topZ, params.bottomZ).oversize <= 0.005)
+      .sort((a, b) => b.diameter - a.diameter);
+    return fits[0] ?? null;
   }
 
   /**

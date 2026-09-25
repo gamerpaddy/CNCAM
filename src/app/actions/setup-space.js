@@ -94,10 +94,9 @@ export function makeSetupSpace(doc) {
    * and not a hole), so the first sample or two of it are stepped over.
    */
   function setupBoreBottom(setup) {
-    if ((setup?.mode ?? 'mill') !== 'turn') return null;   // no bar, no axis to drill down
-    const { meshes } = resolveSetupSpace(setup);
-    if (meshes.length === 0) return null;
-    const { z, r, samples } = boreProfile(mergeMeshes(meshes));
+    const profile = setupBoreProfile(setup);
+    if (!profile) return null;
+    const { z, r, samples } = profile;
     let i = samples - 1;
     for (let skipped = 0; i >= 0 && r[i] === 0 && skipped < 3; skipped++) i--;
     if (i < 0 || r[i] === 0) return null;
@@ -105,7 +104,16 @@ export function makeSetupSpace(doc) {
     return z[i + 1];
   }
 
+  /** The part's bore, a radius for every Z — or null off the lathe or with no part. */
+  function setupBoreProfile(setup) {
+    if ((setup?.mode ?? 'mill') !== 'turn') return null;   // no bar, no axis to drill down
+    const { meshes } = resolveSetupSpace(setup);
+    if (meshes.length === 0) return null;
+    return boreProfile(mergeMeshes(meshes));
+  }
+
   return {
     setupMeshes, resolveSetupSpace, ensureSetup, setupModelBounds, setupBoreBottom,
+    setupBoreProfile,
   };
 }

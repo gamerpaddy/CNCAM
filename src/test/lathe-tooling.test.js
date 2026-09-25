@@ -17,7 +17,9 @@ import { toolSections, latheReachOf } from '../engine/tool-geometry.js';
 import { toolFromPreset, allPresets, machineCanHold } from '../doc/tool-library.js';
 import { computeStock, isRoundStock, deriveCylinder } from '../engine/stock.js';
 import { createFixture, chuckLimit } from '../engine/fixtures.js';
-import { boreProfile, hasBore, barFromStock, turningProfile } from '../engine/lathe.js';
+import {
+  boreProfile, hasBore, barFromStock, turningProfile, drillOversize,
+} from '../engine/lathe.js';
 import { generateToolpath, TURNING_OPS, toolpathStats } from '../engine/toolpath.js';
 import { FEED, OP, eachMove } from '../engine/cl.js';
 import { simulateTurning, SimulationPlayback, turnPositionAt } from '../engine/simulate.js';
@@ -696,6 +698,77 @@ test('boring on solid bar takes its pilot from the part, not from a fraction', (
   for (const [radius] of cutPoints(cl)) {
     assert.ok(radius >= 5.9, `a pass at ⌀${(radius * 2).toFixed(2)} is inside the pilot`);
   }
+});
+
+test('boring stops short of the shoulder at the bottom of a counterbore', () => {
+  // The bore profile is eroded by a sample so it is never *over*stated — a bore
+  // read larger than it is, is a bar cutting the wall it was meant to leave. It
+  // took the largest of three samples instead of the smallest, so at every step
+  // the wide section reached one sample down into the narrow one: a pass that
+  // said "leaving 0.2mm on" cut 0.13mm into the finished shoulder of a ⌀16
+  // counterbore on the test shaft.
+  const part = makeSteppedBore();          // ⌀20 down to Z30, then the ⌀12 pilot
+  const stock = computeStock([part], {
+    kind: 'cylinder',
+    cylinder: { diameter: 44, height: 50, align: 'center', offset: [0, 0, 0] },
+  });
+  const bar = tool('S08K CCMT 04 bar ⌀8');
+  const nose = bar.noseRadius ?? 0.4;
+  const cl = generateToolpath({
+    type: 'turnBore',
+    name: 'bore',
+    params: {
+      ...createOperation('turnBore').params,
+      topZ: stock.max[2], bottomZ: 20, stepdown: 0.8, stockToLeave: 0.2,
+    },
+    tool: bar,
+    stock,
+    mesh: part,
+    fixtures: [],
+  });
+  assert.ok(cl.count > 0, 'it bores');
+  // how far the nose reaches into the finished part below the step
+  let into = 0;
+  for (const [x, , z] of cutPoints(cl)) {
+    for (let k = 0; k < 72; k++) {
+      const a = (k / 72) * Math.PI * 2;
+      const r = x + nose * Math.cos(a);
+      const zz = z + nose * Math.sin(a);
+      if (zz < 30 && r > 6) into = Math.max(into, Math.min(r - 6, 30 - zz));
+    }
+  }
+  assert.ok(into < 1e-3, `the bar reaches ${into.toFixed(3)}mm into the shoulder it was to leave`);
+});
+
+test('a drill wider than the bore it goes down says it cuts that bore oversize', () => {
+  // The default pick was the biggest drill in the rack, and a ½" drill went down
+  // the test shaft's ⌀12 pilot without a word — 0.7mm off a finished diameter.
+  const part = makeSteppedBore();          // ⌀20 to Z30, ⌀12 below it
+  const stock = computeStock([part], {
+    kind: 'cylinder',
+    cylinder: { diameter: 44, height: 50, align: 'center', offset: [0, 0, 0] },
+  });
+  const drillOf = (diameter) => ({
+    ...tool('10mm drill'), diameter, name: `${diameter}mm drill`,
+  });
+  const drill = (diameter) => generateToolpath({
+    type: 'turnDrill',
+    name: 'drill',
+    params: { ...createOperation('turnDrill').params, topZ: stock.max[2], bottomZ: 5 },
+    tool: drillOf(diameter),
+    stock,
+    mesh: part,
+    fixtures: [],
+  });
+  const warned = (cl) => cl.notes.some((n) => n.level === 'warn' && /oversize/.test(n.text));
+  assert.ok(warned(drill(12.7)), 'a ½" drill in a ⌀12 bore is said to be oversize');
+  assert.ok(!warned(drill(12)), 'a ⌀12 drill fits it exactly');
+  assert.ok(!warned(drill(10)), 'and a ⌀10 leaves metal to bore');
+
+  const profile = boreProfile(part, { samples: 600 });
+  const { oversize, bore } = drillOversize(profile, { diameter: 12.7 }, 50, 5);
+  assert.close(bore, 12, 1e-6, 'the narrowest bore it passes is the pilot');
+  assert.close(oversize, 0.7, 1e-6, 'and it opens it by 0.7');
 });
 
 test('a boring bar refuses a hole it cannot fit down', () => {

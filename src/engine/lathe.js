@@ -214,9 +214,40 @@ export function boreProfile(mesh, { samples = 400, minGap = 0.2 } = {}) {
     const a = r[Math.max(0, i - 1)];
     const b = r[i];
     const c = r[Math.min(n - 1, i + 1)];
-    eroded[i] = a === 0 || b === 0 || c === 0 ? 0 : Math.max(a, b, c);
+    eroded[i] = a === 0 || b === 0 || c === 0 ? 0 : Math.min(a, b, c);
   }
   return { z, r: eroded, zMin, zMax, dz, samples: n };
+}
+
+/**
+ * How far a drill down the axis would open up a bore the part already has.
+ *
+ * A turned part's bore is drilled first and bored after, and the drill is
+ * picked as the biggest in the rack. Where that is wider than the narrowest
+ * section of the finished bore it goes down, it cuts that section oversize —
+ * and no later pass can put the metal back. Only the drill's full diameter
+ * counts: its point is in the cone at the bottom, which is where a drilled hole
+ * ends anyway.
+ *
+ * @param profile a boreProfile of the part
+ * @param drill { diameter, tipLength } — how far its point runs below the full
+ *   diameter
+ * @param zTop, zBottom where the hole starts, and how deep the point goes
+ * @returns { oversize, bore } — millimetres over on the diameter (0 when it
+ *   fits) and the narrowest diameter it passes, or null where it passes none
+ */
+export function drillOversize(profile, { diameter, tipLength = 0 }, zTop, zBottom) {
+  const { zMin, dz, r, samples } = profile;
+  const from = Math.min(zTop, zBottom) + Math.max(0, tipLength);
+  const to = Math.max(zTop, zBottom);
+  let narrowest = Infinity;
+  for (let i = 0; i < samples; i++) {
+    const z = zMin + i * dz;
+    if (z < from - 1e-9 || z > to + 1e-9 || !(r[i] > 0)) continue;
+    if (r[i] < narrowest) narrowest = r[i];
+  }
+  if (!Number.isFinite(narrowest)) return { oversize: 0, bore: null };
+  return { oversize: Math.max(0, diameter - 2 * narrowest), bore: 2 * narrowest };
 }
 
 /** Does this profile have a bore anywhere in the Z range? */

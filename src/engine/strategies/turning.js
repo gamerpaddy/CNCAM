@@ -43,8 +43,9 @@ import { chuckLimit } from '../fixtures.js';
 import { mergeTolerance } from '../simplify.js';
 import {
   turningProfile, radiusAtZ, barFromStock, offsetProfile, profilePoints, profileRange,
-  boreProfile, hasBore,
+  boreProfile, hasBore, drillOversize,
 } from '../lathe.js';
+import { tipLengthOf } from '../tool-geometry.js';
 import { insertEngagement, recommendedDepthOfCut } from '../insert.js';
 
 /** Everything the strategies share: the profile, the bar, and where safety is. */
@@ -1169,6 +1170,20 @@ export function generateTurnDrill({ mesh, tool, params, stock, fixtures }) {
       + 'tool, and a hole on the centreline can only be made by a drill or a '
       + 'centre drill. Fit one, or use Bore to open a hole that is already there.');
     return cl.finish();
+  }
+
+  // A drill wider than the bore it goes down cuts that bore oversize, and the
+  // part cannot be put back. It was drilled without a word: the default pick is
+  // the biggest drill in the rack, so a ½" drill went down the test shaft's ⌀12
+  // pilot and took 0.7mm off the diameter of a finished bore.
+  if (mesh) {
+    const { oversize, bore } = drillOversize(boreProfile(mesh, { samples: 600 }),
+      { diameter: tool.diameter, tipLength: tipLengthOf(tool) }, ctx.zStart, zEnd);
+    if (oversize > 0.005) {
+      cl.warn(`a ⌀${tool.diameter} drill is wider than the ⌀${round(bore)} bore it goes `
+        + `down — it cuts that bore ${oversize.toFixed(2)}mm oversize. Drill no bigger `
+        + `than ⌀${round(bore)} and bore the rest.`);
+    }
   }
 
   cl.rapid(0, 0, retract);
