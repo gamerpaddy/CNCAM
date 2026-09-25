@@ -520,8 +520,37 @@ export function opBlockedReason(doc, op) {
   }
   if (!op.toolId) return 'no tool assigned';
   if (!doc.project.tools.some((t) => t.id === op.toolId)) return 'its tool was deleted';
-  if (doc.project.models.length === 0) return 'no model imported';
+  // A pass that follows a drawing needs no solid — engraving a plate is the job
+  // a DXF is imported for — and the badge said "cannot generate: no model
+  // imported" over an operation that generated perfectly well.
+  if (doc.project.models.length === 0 && !op.params?.drawingId) return 'no model imported';
+  const stale = stalePicks(doc, op);
+  if (stale) {
+    return `${stale === 1 ? 'a face or edge it was picked on is' : `${stale} faces or edges it was picked on are`} `
+      + 'on a model no longer in the project — re-pick, or clear the picks';
+  }
   return null;
+}
+
+/**
+ * How many of an operation's picks point at geometry that is not there.
+ *
+ * A pick is a face or edge *of one model*. Delete that model, or import the
+ * next revision of the part (which is a new model), and the pick refers to
+ * nothing — and regions-ui.js skipped it in silence. For an include list that
+ * turned "machine only this face" into no restriction at all: measured, the
+ * pocket came out byte-for-byte the program with no picks, the whole new part.
+ * An avoided face going missing is the same failure the other way round. The
+ * operation is refused instead, and says why.
+ */
+export function stalePicks(doc, op) {
+  let n = 0;
+  for (const mode of ['include', 'avoid']) {
+    for (const ref of op.regions?.[mode] ?? []) {
+      if (!doc.meshes.has(ref.modelId)) n++;
+    }
+  }
+  return n;
 }
 
 export function formatTime(seconds) {

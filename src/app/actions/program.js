@@ -26,6 +26,7 @@ import { buildGcode, postsFor, defaultPostFor } from '../../post/index.js';
 import { renderGcodePanel } from '../gcode-panel.js';
 import {
   opStatus, formatTime, opFingerprint, toolNumberClashes, toolChangesIn, opBlockedReason,
+  stalePicks,
 } from '../op-status.js';
 import { resolveRegions } from '../regions-ui.js';
 import {
@@ -112,6 +113,15 @@ export function makeProgramActions(ctx, space) {
           orphaned++;
           continue;
         }
+        // Picks on a model that has gone would be skipped — and an include list
+        // with nothing in it is no restriction, so the pass would machine the
+        // whole part. Refused, the way a drawing that has gone is refused.
+        if (stalePicks(doc, op)) {
+          doc.toolpaths.delete(op.id);
+          doc.fingerprints.delete(op.id);
+          failed.push({ op, message: opBlockedReason(doc, op) });
+          continue;
+        }
         // Rest machining reads what the operations above this one actually cut,
         // so those have to have finished before this one is described. Only
         // then, and only in that setup: making every job wait for the one
@@ -165,6 +175,10 @@ export function makeProgramActions(ctx, space) {
       }
     }
     if (jobs.length === 0) {
+      if (failed.length) {
+        return ctx.ui.setStatus(`Nothing to generate — ${failed
+          .map(({ op, message }) => `${op.name}: ${message}`).join('; ')}`, true);
+      }
       if (unusable) {
         return ctx.ui.setStatus('Nothing to generate — operations need a tool, a model and a setup', true);
       }

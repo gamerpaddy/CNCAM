@@ -14,6 +14,7 @@ import {
 } from '../doc/schema.js';
 import {
   formatTime, opPreflight, opFingerprint, toolNumberClashes, toolChangesIn,
+  opBlockedReason, stalePicks,
 } from '../app/op-status.js';
 import { defaultParamsFor, retypeParams, depthRangeFor } from '../engine/op-defaults.js';
 import { generateToolpath, toolpathStats } from '../engine/toolpath.js';
@@ -859,6 +860,43 @@ test('two cutters on one T number are named as the clash they are', () => {
   assert.eq(clash.get(1).length, 2, 'by two cutters');
   assert.ok(opPreflight(doc, op).some((n) => /different cutters/.test(n)),
     'and the operation holding it says so');
+});
+
+test('picks on a model that has gone stop the operation, rather than vanishing', () => {
+  // A pick is a face of one model. Delete that model — or import the next
+  // revision of the part, which is a new model — and the pick pointed at
+  // nothing and was skipped: an include list with nothing in it is no
+  // restriction, so "machine only this face" machined the whole new part.
+  const doc = new Document();
+  const first = createModel('rev A');
+  doc.addModel(first, makeBox(40, 40, 10));
+  const tool = toolFor('flat', 6);
+  doc.addTool(tool);
+  const setup = createSetup('Setup 1');
+  doc.addSetup(setup);
+  const op = createOperation('pocket');
+  op.toolId = tool.id;
+  op.regions = { include: [{ modelId: first.id, faceId: 0 }], avoid: [] };
+  doc.addOperation(setup, op);
+  assert.eq(stalePicks(doc, op), 0, 'a pick on a model that is there is fine');
+  assert.eq(opBlockedReason(doc, op), null);
+
+  doc.removeModel(first.id);
+  doc.addModel(createModel('rev B'), makeBox(40, 40, 10));
+  assert.eq(stalePicks(doc, op), 1, 'the pick now points at nothing');
+  assert.ok(/no longer in the project/.test(opBlockedReason(doc, op) ?? ''),
+    'and the operation says it cannot generate, and why');
+
+  // and a pass that follows a drawing needs no model at all
+  const plate = new Document();
+  const engrave = createOperation('engrave');
+  engrave.toolId = tool.id;
+  engrave.params.drawingId = 'drawing_1';
+  plate.addTool(tool);
+  const s = createSetup('Setup 1');
+  plate.addSetup(s);
+  plate.addOperation(s, engrave);
+  assert.eq(opBlockedReason(plate, engrave), null, 'a drawing-only engraving is not blocked');
 });
 
 test('tool changes are counted the way the post writes them', () => {
