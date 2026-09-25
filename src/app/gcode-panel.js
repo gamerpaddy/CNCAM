@@ -139,6 +139,20 @@ function markMove(lineIndex, program, ctx) {
 
   const cl = program.ops[ref.op]?.cl;
   if (!cl) return;
+  // The viewport draws one setup at a time, in that setup's frame, and a move
+  // is in the frame of the setup it belongs to. A line from another setup is
+  // shown on that setup's part: its operation is selected first, which turns
+  // the scene round to it, and only then is the marker placed — otherwise it
+  // landed at the other setup's coordinates on this one's part.
+  const doc = ctx?.doc;
+  if (doc && !program.imported) {
+    for (const [opId, path] of doc.toolpaths) {
+      if (path !== cl) continue;
+      const owner = doc.findSetupOf(opId);
+      if (owner && owner !== doc.activeSetup()) doc.select('op', opId);
+      break;
+    }
+  }
   const o = ref.move * MOVE_STRIDE;
   const d = cl.moves;
   // for drill moves, mark the hole top rather than the bottom
