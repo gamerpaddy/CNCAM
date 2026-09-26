@@ -156,6 +156,33 @@ export function generateWaterline({
     .sort((a, b) => b - a);
   for (const at of asked) shadows.set(at, silhouette.down(at));
 
+  // The same silhouette is asked about at many levels — `down` hands back the
+  // very array it gave last time until something new comes into the band, and
+  // a shaped cutter asks each one again at every radius of its profile. The
+  // offsets and the unions of them are the whole cost of this operation, and
+  // most of them were being worked out again from exactly the same inputs:
+  // 770 offsets and 116 unions on the sample clamp, of which 336 and 66 were
+  // different. Each is kept by what it was made from and handed out as a copy,
+  // so nothing downstream can reach back into another level's loops.
+  const offsets = new Map();    // silhouette -> Map(radius -> loops)
+  const unions = new Map();     // "silhouette@radius|…" -> loops
+  const shadowIds = new Map();  // silhouette -> a small number to key unions by
+  const offsetOf = (shadow, radius) => {
+    let byRadius = offsets.get(shadow);
+    if (!byRadius) {
+      byRadius = new Map();
+      offsets.set(shadow, byRadius);
+      shadowIds.set(shadow, shadowIds.size);
+    }
+    let loops = byRadius.get(radius);
+    if (!loops) {
+      loops = offsetLoops(shadow, radius + stockToLeave, tolerance);
+      byRadius.set(radius, loops);
+    }
+    return loops;
+  };
+  const copyOf = (loops) => loops.map((loop) => loop.slice());
+
   const levels = [];
   for (const z of passZs) {
     // the union of "how close may the tool get to what stands above *this*
@@ -172,11 +199,16 @@ export function generateWaterline({
       widest.set(shadow, Math.max(widest.get(shadow) ?? 0, step.radius));
     }
     const pieces = [];
-    for (const [shadow, radius] of widest) {
-      pieces.push(...offsetLoops(shadow, radius + stockToLeave, tolerance));
-    }
+    for (const [shadow, radius] of widest) pieces.push(...offsetOf(shadow, radius));
     if (pieces.length === 0) continue;
-    const raw = widest.size === 1 ? pieces : unionLoops(pieces);
+    let raw;
+    if (widest.size === 1) {
+      raw = copyOf(pieces);
+    } else {
+      const key = [...widest].map(([shadow, radius]) => `${shadowIds.get(shadow)}@${radius}`).join('|');
+      if (!unions.has(key)) unions.set(key, unionLoops(pieces));
+      raw = copyOf(unions.get(key));
+    }
     if (raw.length === 0) continue;
     const { closed, open } = applyRegionsToPaths(raw, regions, { ...clip, z });
     levels.push({ z, region: raw, closed, open });

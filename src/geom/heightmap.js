@@ -234,8 +234,16 @@ export function buildToolKernel(tool, cellSize) {
       rows.push(dj, start, end, minC, offsets[start * 3], offsets[(end - 1) * 3]);
     }
   }
+  const packed = new Float32Array(offsets);
+  // The clearances on their own, in the same order. A row of the disc is a run
+  // of neighbouring cells — `di` counts up by one from the row's first to its
+  // last — so the scan below walks the map and this array side by side and
+  // needs nothing else from the offsets.
+  const clearance = new Float32Array(packed.length / 3);
+  for (let n = 0; n < clearance.length; n++) clearance[n] = packed[n * 3 + 2];
   return {
-    offsets: new Float32Array(offsets),
+    offsets: packed,
+    clearance,
     count: offsets.length / 3,
     radius: r,
     rows: new Float64Array(rows),
@@ -276,11 +284,14 @@ export function downhillAt(map, i, j, minSlope = 1e-3) {
  * Returns `map.floor` when the tool covers no geometry at all.
  */
 export function dropCutter(map, kernel, x, y) {
-  const { data, width, height, cellSize } = map;
+  const {
+    data, width, height, cellSize, floor,
+  } = map;
   const ci = Math.round((x - map.min[0]) / cellSize);
   const cj = Math.round((y - map.min[1]) / cellSize);
-  const k = kernel.offsets;
+  const clearance = kernel.clearance;
   const win = map.window;
+  const winData = win ? win.data : null;
 
   const rows = kernel.rows;
   const half = win ? win.half : 0;
@@ -295,33 +306,41 @@ export function dropCutter(map, kernel, x, y) {
     const rowStart = rows[at + 1];
     const rowEnd = rows[at + 2];
     const minC = rows[at + 3];
+    const first = ci + rows[at + 4];     // the map column under the row's first offset
 
     // The row's ceiling, in one or two reads rather than fifty. Skipping is
     // only ever an optimisation: `ceiling` is an upper bound on every candidate
     // the row could produce, so a row that cannot beat `best` cannot change the
     // answer. Exact, not approximate — there is no tolerance in it.
-    if (win && best > -Infinity) {
-      const lo = ci + rows[at + 4];
+    if (winData && best > -Infinity) {
+      const lo = first;
       const hi = ci + rows[at + 5];
       let top = -Infinity;
       // windows of 2·half+1 cells, enough of them to cover the run
       for (let c = lo + half; ; c += span) {
         const i = c < 0 ? 0 : c > width - 1 ? width - 1 : c;
-        const v = win.data[base + i];
+        const v = winData[base + i];
         if (v > top) top = v;
         if (c >= hi - half) break;
       }
       if (top - minC <= best) continue;
     }
 
-    for (let n = rowStart; n < rowEnd; n++) {
-      const i = ci + k[n * 3];
-      if (i < 0 || i >= width) continue;
-      const h = data[base + i];
-      if (h === map.floor) continue;
-      const candidate = h - k[n * 3 + 2];
+    // The row is a run of neighbouring cells, so it is clipped to the map once
+    // and then walked straight through — the same cells the per-cell bounds
+    // test used to pick out, in the same order, with nothing tested per cell.
+    let n0 = rowStart;
+    let n1 = rowEnd;
+    if (first < 0) n0 -= first;
+    const last = first + (rowEnd - rowStart) - 1;
+    if (last > width - 1) n1 -= last - (width - 1);
+    let cell = base + first + (n0 - rowStart);
+    for (let n = n0; n < n1; n++, cell++) {
+      const h = data[cell];
+      if (h === floor) continue;
+      const candidate = h - clearance[n];
       if (candidate > best) best = candidate;
     }
   }
-  return best === -Infinity ? map.floor : best;
+  return best === -Infinity ? floor : best;
 }
