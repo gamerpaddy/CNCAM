@@ -10,12 +10,49 @@ import { computeNormals } from '../geom/mesh.js';
 import { activeMachine } from './machines.js';
 import { postsFor, defaultPostFor } from '../post/index.js';
 
+/**
+ * The toolpath store, counting its own changes.
+ *
+ * Which operations *have* a toolpath is not enough to tell a picture that is
+ * current from one that is not: regenerating an operation replaces its path
+ * and leaves that list exactly as it was. The count is what changes, so
+ * anything that shows the paths — the viewport, the G-code panel — can say
+ * "nothing new since I last drew" in one comparison, and draw once per real
+ * change instead of once per caller that happens to ask.
+ */
+class ToolpathStore extends Map {
+  constructor() {
+    super();
+    this.epoch = 0;
+  }
+
+  set(key, value) {
+    this.epoch += 1;
+    return super.set(key, value);
+  }
+
+  delete(key) {
+    const had = super.delete(key);
+    if (had) this.epoch += 1;
+    return had;
+  }
+
+  clear() {
+    if (this.size > 0) this.epoch += 1;
+    super.clear();
+  }
+}
+
 export class Document extends EventTarget {
   constructor() {
     super();
     this.project = createProject();
     this.meshes = new Map();     // modelId -> { positions, indices, normals, faceRanges? }
-    this.toolpaths = new Map();  // opId -> finished CL program (runtime, not persisted)
+    this.toolpaths = new ToolpathStore();  // opId -> finished CL program (runtime, not persisted)
+    // Operations a Generate is computing right now (runtime). The tree marks
+    // them, so a long job shows which of its passes are still running rather
+    // than one spinner for all of them.
+    this.pending = new Set();
     // opId -> why its last generation failed (runtime, not persisted). Without
     // it an operation whose strategy threw looked exactly like one never
     // generated: "Not generated yet — press Generate", after pressing it.
@@ -537,6 +574,9 @@ export class Document extends EventTarget {
    */
   toolpathSignature(view = true) {
     const parts = view ? [`active:${this.activeSetup()?.id ?? ''}`] : [];
+    // which paths, not only whose: a regenerated operation keeps its place in
+    // the list below and changes this
+    parts.push(`epoch:${this.toolpaths.epoch}`);
     for (const { op } of this.allOperations()) {
       if (!this.toolpaths.has(op.id)) continue;
       parts.push(`${op.id}:${op.enabled ? 1 : 0}${this.hiddenPaths.has(op.id) ? 'h' : ''}`);
@@ -617,22 +657,26 @@ export class Document extends EventTarget {
 
   findSelected() {
     const sel = this.selection;
-    if (!sel) return null;
+    return sel ? this.findItem(sel.kind, sel.id) : null;
+  }
+
+  /** Any item in the job by its kind and id, or null. */
+  findItem(kind, id) {
     const pools = {
       model: this.project.models,
       drawing: this.project.drawings,
       tool: this.project.tools,
       setup: this.project.setups,
     };
-    if (sel.kind === 'op') {
+    if (kind === 'op') {
       for (const s of this.project.setups) {
-        const op = s.operations.find((o) => o.id === sel.id);
+        const op = s.operations.find((o) => o.id === id);
         if (op) return op;
       }
       return null;
     }
-    if (sel.kind === 'fixture') return this.findFixture(sel.id);
-    return pools[sel.kind]?.find((x) => x.id === sel.id) ?? null;
+    if (kind === 'fixture') return this.findFixture(id);
+    return pools[kind]?.find((x) => x.id === id) ?? null;
   }
 
   removeById(array, id) {

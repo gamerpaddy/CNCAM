@@ -8,7 +8,6 @@
 //
 // `keys` is the spec and the label at once — 'Ctrl+G' both matches and reads.
 
-import { openStrategyPicker } from './strategy-picker.js';
 import { beginRename } from './tree.js';
 import { getSetting } from './settings.js';
 
@@ -20,47 +19,46 @@ export function shortcuts(ctx) {
   const selectedOp = () => (ctx.doc.selection?.kind === 'op' ? ctx.doc.findSelected() : null);
 
   return [
-    { group: 'Job', keys: 'Ctrl+G', label: 'Generate toolpaths', run: () => ctx.actions.generate() },
+    { id: 'generate', group: 'Job', keys: 'Ctrl+G', label: 'Generate toolpaths', run: () => ctx.actions.generate() },
     {
       group: 'Job',
+      id: 'simulate',
       keys: 'S',
       label: 'Simulate the program (generates first if needed)',
       run: () => ctx.actions.simulateOrGenerate(),
     },
     {
       group: 'Job',
+      id: 'export',
       keys: 'Ctrl+E',
       label: 'Export G-code',
       run: () => ctx.actions.exportGcode(),
     },
     {
       group: 'Job',
+      id: 'save',
       keys: 'Ctrl+S',
       label: 'Save the project',
       run: () => ctx.actions.saveProject(),
     },
     {
       group: 'Job',
+      id: 'import',
       keys: 'Ctrl+I',
       label: 'Import a model',
       run: () => ctx.actions.openModel(),
     },
 
     {
+      id: 'addOperation',
       group: 'Operations',
       keys: 'A',
       label: 'Add an operation to the setup you are working in',
-      run: () => {
-        // the one being worked on — whatever is selected in it — not always the
-        // first: in the second setup of a flipped part, A added to the first
-        const setup = ctx.doc.activeSetup();
-        if (!setup) return ctx.ui.setStatus('Add a setup first', true);
-        openStrategyPicker({
-          title: `Add an operation to ${setup.name}`,
-          mode: setup.mode ?? 'mill',
-          onPick: (type) => ctx.actions.addOperationTo(setup, type),
-        });
-      },
+      // The same action as "+ Add operation…" in the tree: to the setup being
+      // worked on — whatever is selected in it — and a first setup made if the
+      // machine has none. This key used to refuse with "Add a setup first"
+      // where the checklist quietly made one.
+      run: () => ctx.actions.addOperation(),
     },
     {
       group: 'Operations',
@@ -92,9 +90,9 @@ export function shortcuts(ctx) {
       run: () => ctx.actions.deleteSelected(),
     },
 
-    { group: 'Editing', keys: 'Ctrl+Z', label: 'Undo', run: () => ctx.doc.undo() },
-    { group: 'Editing', keys: 'Ctrl+Y', label: 'Redo', run: () => ctx.doc.redo() },
-    { group: 'Editing', keys: 'Ctrl+Shift+Z', label: 'Redo', run: () => ctx.doc.redo(), alias: true },
+    { id: 'undo', group: 'Editing', keys: 'Ctrl+Z', label: 'Undo', run: () => ctx.actions.undo() },
+    { id: 'redo', group: 'Editing', keys: 'Ctrl+Y', label: 'Redo', run: () => ctx.actions.redo() },
+    { group: 'Editing', keys: 'Ctrl+Shift+Z', label: 'Redo', run: () => ctx.actions.redo(), alias: true },
 
     {
       group: 'Operations',
@@ -104,7 +102,7 @@ export function shortcuts(ctx) {
       run: () => beginRename(ctx.doc, ctx.doc.selection.id),
     },
 
-    { group: 'View', keys: 'F', label: 'Fit everything in view', run: () => ctx.actions.fitView() },
+    { id: 'fit', group: 'View', keys: 'F', label: 'Fit everything in view', run: () => ctx.actions.fitView() },
     {
       group: 'View',
       keys: 'P',
@@ -118,12 +116,14 @@ export function shortcuts(ctx) {
     },
     {
       group: 'View',
+      id: 'options',
       keys: 'Ctrl+,',
       label: 'Options',
       run: () => ctx.actions.openOptions(),
     },
     {
       group: 'View',
+      id: 'machines',
       keys: 'Ctrl+M',
       label: 'Machines',
       run: () => ctx.actions.openMachines(),
@@ -136,8 +136,44 @@ export function shortcuts(ctx) {
       run: () => ctx.setPickMode(null),
       enabled: () => !!ctx.pickMode,
     },
-    { group: 'View', keys: '?', label: 'This list', run: () => ctx.actions.showShortcuts() },
+    { id: 'help', group: 'View', keys: '?', label: 'This list', run: () => ctx.actions.showShortcuts() },
+
+    // While the simulation is open, the keys every player has. Its five
+    // buttons were the only transport in the app you could not drive from the
+    // keyboard, and the one place you most want your eyes on the part rather
+    // than on a row of small glyphs.
+    ...[
+      ['Space', 'Play or pause the simulation', (t) => t.togglePlay()],
+      ['←', 'Step the simulation back one move', (t) => t.step(-1)],
+      ['→', 'Step the simulation forward one move', (t) => t.step(1)],
+      ['Home', 'Back to the start of the simulation', (t) => t.step(-Infinity)],
+      ['End', 'Jump to the end of the simulation', (t) => t.step(Infinity)],
+    ].map(([keys, label, act]) => ({
+      group: 'Simulation',
+      keys,
+      label,
+      enabled: () => !!ctx.ui?.timeline?.visible,
+      run: () => act(ctx.ui.timeline),
+    })),
   ];
+}
+
+/**
+ * A tooltip with its key on the end — "Save the project (Ctrl+S)" — read from
+ * the table above rather than typed into each button.
+ *
+ * Five of the toolbar's buttons said their key and six did not, because each
+ * title was written by hand next to its button and nothing checked it against
+ * the table. The table is the one place a key is bound, so it is the one place
+ * a tooltip asks.
+ *
+ * @param id a shortcut's `id`
+ */
+export function withKey(title, id) {
+  // the closures in the table are never called here, so an empty context is
+  // enough to read the keys off it
+  const entry = shortcuts({}).find((s) => s.id === id);
+  return entry ? `${title} (${entry.keys})` : title;
 }
 
 /**
@@ -147,9 +183,14 @@ export function shortcuts(ctx) {
  * without a second table. A spec with no Shift in it does not *forbid* Shift,
  * because '?' is Shift+/ on most layouts and would never match if it did.
  */
+// Keys whose name in the table is what is printed on the key, not what the
+// browser calls it.
+const KEY_NAMES = { Space: ' ', '←': 'ArrowLeft', '→': 'ArrowRight' };
+
 export function matchesShortcut(spec, event) {
   const parts = spec.split('+');
-  const key = parts.pop();
+  const named = parts.pop();
+  const key = KEY_NAMES[named] ?? named;
   const wantsCtrl = parts.includes('Ctrl');
   const wantsShift = parts.includes('Shift');
   if (wantsCtrl !== (event.ctrlKey || event.metaKey)) return false;

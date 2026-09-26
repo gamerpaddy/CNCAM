@@ -7,7 +7,7 @@
 
 import { mergeMeshes } from '../../geom/mesh.js';
 import { plural, verb, allOf } from '../../engine/text.js';
-import { checkPost, rapidCutFinding } from '../../engine/backplot.js';
+import { rapidCutFinding } from '../../engine/backplot.js';
 
 /**
  * And how big a program is too big to re-read while somebody is waiting.
@@ -22,7 +22,9 @@ import { turningProfile, barFromStock } from '../../engine/lathe.js';
 import { estimateSeconds, generateToolpath } from '../../engine/toolpath.js';
 import { orientationFor, indexingWarnings } from '../../engine/indexing.js';
 import { wrapFor, wrapWarnings, wrapExtent, linearExtent } from '../../engine/wrap.js';
-import { buildGcode, postsFor, defaultPostFor } from '../../post/index.js';
+import {
+  buildGcode, postsFor, defaultPostFor, PackedLineMap,
+} from '../../post/index.js';
 import { renderGcodePanel } from '../gcode-panel.js';
 import {
   opStatus, formatTime, opFingerprint, toolNumberClashes, toolChangesIn, opBlockedReason,
@@ -53,7 +55,11 @@ export function makeProgramActions(ctx, space) {
     return drawing ? placedPaths(drawing, stock) : null;
   }
 
-  async function generate() {
+  /**
+   * @param force recompute every operation, not only the ones that changed —
+   *   the Generate button does this on Shift+click
+   */
+  async function generate({ force = false } = {}) {
     // A simulation is a picture of a program that no longer exists once this
     // finishes. Leaving it up meant the viewport went on showing cut material
     // from the old toolpaths while the new ones were drawn over it, and the
@@ -65,6 +71,24 @@ export function makeProgramActions(ctx, space) {
     let disabled = 0;
     let unusable = 0;
     let orphaned = 0;
+    // Operations whose toolpath is already the answer. See below.
+    let reused = 0;
+    // Each path is drawn as it arrives rather than all of them at the end. A
+    // job is a few quick passes and one slow one, and holding the quick ones
+    // back until the slow one finished made the whole of it feel as long as
+    // its longest part. One redraw a frame, however many land in it.
+    let drawQueued = false;
+    let finished = false;
+    const drawArrived = () => {
+      if (drawQueued || finished) return;
+      drawQueued = true;
+      requestAnimationFrame(() => {
+        drawQueued = false;
+        if (finished) return;
+        ctx.viewport.setToolpaths(doc.visibleToolpaths());
+        ctx.renderTree?.();
+      });
+    };
     // Operations whose strategy threw. One of them used to reject the whole
     // Promise.all: the status said "Generation failed: <a message>" without
     // naming the operation, and the ones that had finished were never drawn or
@@ -84,8 +108,13 @@ export function makeProgramActions(ctx, space) {
         // still becomes a toolpath, because being one is what puts it in the
         // program, the tree and the running order. See strategies/command.js.
         if (op.type === 'command') {
+          const fingerprint = opFingerprint(doc, op, setup);
+          if (!force && doc.toolpaths.has(op.id) && doc.fingerprints.get(op.id) === fingerprint) {
+            reused++;
+            continue;
+          }
           doc.toolpaths.set(op.id, generateToolpath({ type: 'command', params: op.params }));
-          doc.fingerprints.set(op.id, opFingerprint(doc, op, setup));
+          doc.fingerprints.set(op.id, fingerprint);
           jobs.push(Promise.resolve());
           continue;
         }
@@ -123,6 +152,20 @@ export function makeProgramActions(ctx, space) {
           doc.failures.set(op.id, opBlockedReason(doc, op));
           continue;
         }
+        // Nothing this operation is made from has changed since it was last
+        // generated, so the toolpath it has is the one it would get again.
+        //
+        // The fingerprint is the same one the tree's "out of date" badge and
+        // Simulate's regenerate-first check already trust, and it is built to
+        // err the safe way — anything it cannot rule out counts as a change.
+        // Recomputing all of them anyway made every Generate cost the whole
+        // job: change one stepover in a ten-operation program and wait for the
+        // waterline and the adaptive pass that nobody touched.
+        if (!force && doc.toolpaths.has(op.id)
+          && doc.fingerprints.get(op.id) === opFingerprint(doc, op, setup)) {
+          reused++;
+          continue;
+        }
         // Rest machining reads what the operations above this one actually cut,
         // so those have to have finished before this one is described. Only
         // then, and only in that setup: making every job wait for the one
@@ -136,6 +179,7 @@ export function makeProgramActions(ctx, space) {
         // date with the 6mm settings, so Simulate and Export trusted it and the
         // file cut the stepdown that had been replaced.
         const fingerprint = opFingerprint(doc, op, setup);
+        doc.pending.add(op.id);
         jobs.push(
           ctx.pool.run('toolpath', {
             // No name: what an operation is called is the *program's* business,
@@ -173,11 +217,14 @@ export function makeProgramActions(ctx, space) {
             doc.fingerprints.delete(op.id);
             failed.push({ op, message: err?.message ?? String(err) });
             doc.failures.set(op.id, err?.message ?? String(err));
+          }).finally(() => {
+            doc.pending.delete(op.id);
+            drawArrived();
           }),
         );
       }
     }
-    if (jobs.length === 0) {
+    if (jobs.length === 0 && reused === 0) {
       if (failed.length) {
         return ctx.ui.setStatus(`Nothing to generate — ${failed
           .map(({ op, message }) => `${op.name}: ${message}`).join('; ')}`, true);
@@ -204,17 +251,25 @@ export function makeProgramActions(ctx, space) {
           + `${elsewhere} are on the other machine`
         : 'No operations to generate', true);
     }
-    ctx.ui.setStatus(`Generating ${plural(jobs.length, 'toolpath')}…`);
-    ctx.ui.setBusy(true);
+    if (jobs.length > 0) {
+      ctx.ui.setStatus(`Generating ${plural(jobs.length, 'toolpath')}`
+        + `${reused ? ` — ${reused} unchanged` : ''}…`);
+      ctx.ui.setBusy(true);
+      ctx.renderTree?.();
+    }
     try {
       await Promise.all(jobs);
+      finished = true;
       const cls = doc.enabledToolpaths();
       ctx.viewport.setToolpaths(doc.visibleToolpaths());
-      refreshGcodePreview();
+      const posted = refreshGcodePreview();
       // the tree draws each operation's result badge, so it has to be told that
       // results exist — generation writes toolpaths straight onto the document
       // and would otherwise leave every row showing what it knew before
       doc.emitChange('toolpaths');
+      // The paths are on screen; the file is being posted and read back in a
+      // worker. What that says about the file is part of what is said below.
+      await posted;
       // the machine's own rapid rate, not a guess: on a job with a lot of
       // retracts the rapids are most of the cycle time
       const rapidFeed = doc.rapidFeed();
@@ -320,14 +375,19 @@ export function makeProgramActions(ctx, space) {
           .map(({ op, message }) => `${op.name} (${message})`).join(', ')}`);
       }
       const tail = said.length ? `. ${said.join('; ')} — see Result in the panel` : '';
-      ctx.ui.setStatus(
-        `Generated ${plural(jobs.length - failed.length, 'toolpath')} — est. ${formatTime(seconds)}`
-          + `${suffix}${tail}`,
+      // what was computed, and what was already current and left alone
+      const head = jobs.length === 0
+        ? (reused === 1 ? 'The toolpath is up to date' : `All ${reused} toolpaths are up to date`)
+        : `Generated ${plural(jobs.length - failed.length, 'toolpath')}`
+          + `${reused ? `, ${reused} unchanged` : ''}`;
+      ctx.ui.setStatus(`${head} — est. ${formatTime(seconds)}${suffix}${tail}`,
         limits.length > 0 || said.length > 0);
     } catch (err) {
       console.error(err);
       ctx.ui.setStatus(`Generation failed: ${err.message}`, true);
     } finally {
+      finished = true;
+      doc.pending.clear();
       ctx.ui.setBusy(false);
     }
   }
@@ -721,23 +781,32 @@ export function makeProgramActions(ctx, space) {
     const ops = [];
     const machine = doc.machineRecord();
     for (const setup of doc.setups()) {
-      // An indexed setup carries the rotary swing that reaches its face; the
-      // post applies it before the setup's operations and cancels it after.
-      // Plain setups get null and post exactly as they always have.
-      const orientation = orientationFor(setup, machine);
-      // And a wrapped setup carries the cylinder its flat program bends round.
-      const wrap = wrapFor(setup, machine);
       for (const op of setup.operations) {
         const cl = doc.toolpaths.get(op.id);
-        if (op.enabled && cl) {
-          ops.push({
-            name: op.name, cl, wcs: setup.wcs, setup: setup.id, setupName: setup.name,
-            orientation, wrap,
-          });
-        }
+        if (op.enabled && cl) ops.push(programEntry(setup, op, cl, machine));
       }
     }
     return ops;
+  }
+
+  /**
+   * One operation as the post wants it — for the whole program, for a file
+   * per operation, and for the single operation exported from the tree.
+   *
+   * That last one wrote its own copy of this and left out which setup the
+   * operation belongs to, which is what the post keys a work-offset change and
+   * a re-fixturing stop on. One entry, built in one place.
+   */
+  function programEntry(setup, op, cl, machine = doc.machineRecord()) {
+    return {
+      name: op.name, cl, wcs: setup.wcs, setup: setup.id, setupName: setup.name,
+      // An indexed setup carries the rotary swing that reaches its face; the
+      // post applies it before the setup's operations and cancels it after.
+      // Plain setups get null and post exactly as they always have.
+      orientation: orientationFor(setup, machine),
+      // And a wrapped setup carries the cylinder its flat program bends round.
+      wrap: wrapFor(setup, machine),
+    };
   }
 
   // What the preview was built from, so a change to any of it can be noticed.
@@ -766,47 +835,74 @@ export function makeProgramActions(ctx, space) {
     if (programKey() !== previewKey) refreshGcodePreview(false);
   }
 
+  // The build in flight, and a count of builds asked for, so one that lands
+  // after a newer one was asked for is dropped rather than shown.
+  let previewBuild = null;
+  let previewSeq = 0;
+
+  /**
+   * Post the program into the G-code panel, and read the file back against
+   * the paths it was printed from.
+   *
+   * Both happen in the worker pool. Together they are the most expensive thing
+   * that follows a Generate — a third of a second on a thirty-thousand-line
+   * program — and done here they froze the viewport for that long at the very
+   * moment the new paths had been drawn and somebody was about to turn them
+   * over to look. The panel shows the program when it arrives.
+   *
+   * @returns a promise that settles once `ctx.lastProgram` is this program
+   */
   function refreshGcodePreview(show = true) {
-    previewKey = programKey();
+    const key = programKey();
+    // Several things ask for this in one gesture. The key covers every input
+    // the post reads — the toolpaths themselves included, through the
+    // document's toolpath count — so an unchanged key is an unchanged file.
+    // A build of this very program already on its way counts as well: the
+    // first Generate of a job has nothing in the panel yet, and asking again
+    // while the post was still in the worker started a second one that
+    // superseded the first — which was the one meant to open the panel.
+    if (key === previewKey && (previewBuild || (ctx.lastProgram && !ctx.lastProgram.imported))) {
+      const ready = previewBuild ?? Promise.resolve();
+      return show ? ready.then(() => ctx.ui.showGcodePanel()) : ready;
+    }
+    previewKey = key;
+    const seq = ++previewSeq;
     const ops = postableOps();
     if (ops.length === 0) {
+      previewBuild = null;
       ctx.lastProgram = null;
       renderGcodePanel(ctx.ui.gcode, null, ctx);
-      return;
+      return Promise.resolve();
     }
+    // What the panel held when this was asked for. A checked file put in its
+    // place meanwhile is shown on purpose, and a program arriving late must
+    // not cover it up.
+    const shown = ctx.lastProgram;
     // The same settings the exports use, and not a second copy of them: the
     // preview is what the file is checked in, so a preview built from different
     // options than the file is worse than no preview.
-    const { text, lineMap } = buildGcode(doc.postId(), ops, postSettings());
-    ctx.lastProgram = { text, lineMap, ops, postCheck: postCheck(ops, text, lineMap) };
-    renderGcodePanel(ctx.ui.gcode, ctx.lastProgram, ctx);
-    if (show) ctx.ui.showGcodePanel();
-  }
-
-  /**
-   * How far the file that was just printed is from the path it was printed
-   * from.
-   *
-   * The post is the one stage nothing downstream checks: a strategy is verified
-   * against the part and the simulator against the CL data, and then the text
-   * that actually goes to the machine is trusted because it was printed by code
-   * that looked right. Reading it back closes that loop for free — the parser
-   * already exists for the test suite, and running it here means every program
-   * anybody posts is checked rather than only the ones a test happens to cover.
-   *
-   * Skipped on a program too big to re-read while somebody is waiting. That is
-   * a real gap and it is the honest place for one: the check is a courtesy on
-   * top of a preview, not something the preview may hang on.
-   */
-  function postCheck(ops, text, lineMap) {
-    if (text.length > MAX_CHECKED_PROGRAM) return null;
-    // eslint-disable-next-line no-use-before-define
-    try {
-      return checkPost({ ops, text, lineMap, fitTolerance: postSettings().arcTolerance });
-    } catch (err) {
+    const settings = postSettings();
+    const build = ctx.pool.run('post', {
+      postId: doc.postId(),
+      ops,
+      settings,
+      // Skipped on a program too big to re-read while somebody is waiting. The
+      // check is a courtesy on top of a preview, never something it may hang on.
+      check: { maxLength: MAX_CHECKED_PROGRAM, fitTolerance: settings.arcTolerance },
+    }).then(({ text, lineMap, postCheck }) => {
+      if (seq !== previewSeq || ctx.lastProgram !== shown) return;
+      ctx.lastProgram = { text, lineMap: new PackedLineMap(lineMap), ops, postCheck };
+      renderGcodePanel(ctx.ui.gcode, ctx.lastProgram, ctx);
+      if (show) ctx.ui.showGcodePanel();
+    }, (err) => {
       console.error(err);
-      return null;
-    }
+      // asked again next time, rather than remembered as built
+      if (seq === previewSeq) previewKey = null;
+    }).finally(() => {
+      if (previewBuild === build) previewBuild = null;
+    });
+    previewBuild = build;
+    return build;
   }
 
   function setPost(postId) {
@@ -897,8 +993,11 @@ export function makeProgramActions(ctx, space) {
     await freshenForExport();
     const ops = postableOps();
     if (ops.length === 0) return ctx.ui.setStatus('Generate toolpaths before exporting', true);
+    // Posted here, for the file, rather than taken from the panel: the panel's
+    // copy is built in the background and may be a moment behind the program.
+    const { text } = buildGcode(doc.postId(), ops, postSettings());
     refreshGcodePreview();
-    if (!(await saveFile(`${doc.project.name}.ngc`, ctx.lastProgram.text, ACCEPT.gcode))) {
+    if (!(await saveFile(`${doc.project.name}.ngc`, text, ACCEPT.gcode))) {
       return ctx.ui.setStatus('Export cancelled — nothing was written');
     }
     const left = leftOut();
@@ -1005,18 +1104,18 @@ export function makeProgramActions(ctx, space) {
       + left.text, left.count > 0);
   }
 
-  /** One operation, on its own, from the tree or the operation panel. */
+  /** One operation, on its own, from the operation's menu in the tree. */
   async function exportOneOperation(op) {
     await freshenForExport(op);
     const cl = doc.toolpaths.get(op?.id);
-    if (!cl) return ctx.ui.setStatus('Generate this operation before exporting it', true);
-    const setup = doc.findSetupOf(op.id);
-    const { text } = buildGcode(doc.postId(),
-      [{
-        name: op.name, cl, wcs: setup?.wcs,
-        orientation: setup ? orientationFor(setup, doc.machineRecord()) : null,
-        wrap: setup ? wrapFor(setup, doc.machineRecord()) : null,
-      }], postSettings());
+    const setup = cl ? doc.findSetupOf(op.id) : null;
+    if (!cl || !setup) {
+      const why = opBlockedReason(doc, op);
+      return ctx.ui.setStatus(why
+        ? `${op.name} cannot be exported: ${why}`
+        : `${op.name} did not generate, so there is nothing to export`, true);
+    }
+    const { text } = buildGcode(doc.postId(), [programEntry(setup, op, cl)], postSettings());
     if (!(await saveFile(`${safeFileName(op.name)}.ngc`, text, ACCEPT.gcode))) {
       return ctx.ui.setStatus('Export cancelled — nothing was written');
     }

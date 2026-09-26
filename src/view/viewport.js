@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { creaseNormals, creaseEdges } from '../geom/shading.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { buildToolpathObject, buildStockObject } from './toolpath.js';
+import { buildToolpathObject, buildStockObject, focusToolpath } from './toolpath.js';
 import { SimulationView } from './simulation.js';
 import { HeightGizmos } from './height-gizmo.js';
 import { MoveGizmo } from './move-gizmo.js';
@@ -16,20 +16,36 @@ import {
 } from './views.js';
 
 const FOV = 45;
+// A little air round the job when it is framed, so its edges are not the
+// edges of the screen.
+const FIT_MARGIN = 1.06;
+// Below this a viewport has not been laid out, and has no shape to frame to.
+const MIN_FIT_PX = 20;
+// How long a change of view takes to fly. Long enough to see which way the
+// part turned, short enough never to be waited for.
+const GLIDE_MS = 340;
 
 export class Viewport {
   constructor(container) {
     this.container = container;
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+    // Transparent, over a gradient the page draws (see #viewport in
+    // styles.css). A gradient drawn in WebGL bands into visible steps across a
+    // tall viewport; the browser dithers its own. Nothing in the scene is
+    // drawn with the background colour in mind — every material is opaque or
+    // blended over what is behind it — so the part looks the same either way.
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    this.renderer.setClearColor(0x000000, 0);
+    // Sharp on a high-density screen, but not past twice: a 3× phone-class
+    // panel would be asked for nine pixels per point, most of them invisible,
+    // and a simulated billet is hundreds of thousands of triangles to fill.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     // the corner triad is drawn as a second pass into the same buffer, which
     // means the buffer has to survive the first one
     this.renderer.autoClear = false;
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1c1e22);
 
     this.camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 10000);
     this.camera.up.set(0, 0, 1);
@@ -50,6 +66,8 @@ export class Viewport {
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.addEventListener('change', () => this.requestRender());
+    // a drag during a glide takes over from where the glide was going
+    this.controls.addEventListener('start', () => this.stopGlide());
     this.orbitUp = [0, 0, 1];
 
     this.machine = 'mill';
@@ -279,7 +297,9 @@ export class Viewport {
    * reference for anything, and this way the work always wins.
    */
   makeGrid(size, divisions) {
-    const grid = new THREE.GridHelper(size, divisions, 0x3a3e46, 0x2a2d33);
+    // lines a step lighter than the backdrop they are drawn on, with the two
+    // through zero a step lighter again
+    const grid = new THREE.GridHelper(size, divisions, 0x4a5261, 0x30353e);
     grid.rotation.x = Math.PI / 2;   // GridHelper is XZ by default; we want XY
     grid.position.z = -Math.max(0.02, size * 0.001);
     grid.material.depthWrite = false;
@@ -402,28 +422,139 @@ export class Viewport {
    * to see the other side of a feature you are zoomed in on should not throw
    * away the zoom, which is the thing that made the feature visible.
    */
-  setView(name, { distance: want = null } = {}) {
+  setView(name, {
+    distance: want = null, target: aim = null, orthoHeight = null, animate = false,
+  } = {}) {
+    this.stopGlide(false);
     const preset = VIEW_PRESETS[name] ?? VIEW_PRESETS.iso;
-    this.viewName = VIEW_PRESETS[name] ? name : 'iso';
-    const target = this.controls.target.clone();
+    const viewName = VIEW_PRESETS[name] ? name : 'iso';
+    const target = (aim ?? this.controls.target).clone();
     // From what is on screen, not from where the perspective camera happens to
     // be sitting: in an orthographic view that camera has not moved since the
     // projection was switched, so reading a distance off it threw away every
     // zoom the user had made since — the one thing this is careful not to do.
     const distance = want ?? (this.viewSpan() / (2 * Math.tan((FOV * Math.PI) / 360)));
-    const dir = new THREE.Vector3(...preset.dir).normalize().multiplyScalar(distance);
-    this.camera.up.set(...preset.up);
-    this.orthoCamera.up.set(...preset.up);
-    this.camera.position.copy(target).add(dir);
-    this.orthoCamera.position.copy(this.camera.position);
-    this.camera.lookAt(target);
-    this.orthoCamera.lookAt(target);
-    this.setOrbitAxis(orbitUpOf(preset));
-    this.controls.update();
-    this.applyAutoProjection();
-    this.requestRender();
-    this.onViewChange?.(this.viewName, this.projection);
+    const position = new THREE.Vector3(...preset.dir).normalize().multiplyScalar(distance).add(target);
+    const up = new THREE.Vector3(...preset.up);
+    const land = () => {
+      this.viewName = viewName;
+      this.controls.target.copy(target);
+      for (const camera of [this.camera, this.orthoCamera]) {
+        camera.up.copy(up);
+        camera.position.copy(position);
+        camera.lookAt(target);
+      }
+      if (orthoHeight != null) {
+        this.orthoHeight = orthoHeight;
+        this.orthoCamera.zoom = 1;
+        this.fitOrthoFrustum();
+      }
+      this.setOrbitAxis(orbitUpOf(preset));
+      this.controls.update();
+      this.applyAutoProjection();
+      this.requestRender();
+      this.onViewChange?.(this.viewName, this.projection);
+    };
+    if (animate) {
+      // the bar lights the view being flown to straight away
+      this.onViewChange?.(viewName, this.projection);
+      this.glideTo({
+        target, position, up, orthoHeight, projection: this.resolveProjection(viewName),
+      }, land);
+    } else {
+      land();
+    }
     return preset;
+  }
+
+  /**
+   * Fly the camera to a place instead of jumping to it, then `land` there.
+   *
+   * A view button that swaps the picture in one frame leaves you to work out
+   * which way the part went — the Back view of a symmetric bracket looks like
+   * the Front one until you find the feature that tells them apart. A third of
+   * a second of turning says it without anybody having to look for it.
+   *
+   * The camera's *orientation* is interpolated, not its position: a straight
+   * line between two views passes close to the part (or through it, from Front
+   * to Back), where a slerp turns about it at a steady distance. Distance is
+   * eased on a log scale, so zooming out by ten is as smooth as zooming in by
+   * two. A perspective destination is flown to in perspective; an orthographic
+   * one is flown to in whichever projection is up and switched on arrival,
+   * where the two show the same thing.
+   *
+   * Nothing waits on it: `land` puts the camera exactly where it would have
+   * gone without the flight, and runs if the flight is cut short — by a drag,
+   * another view, a hidden tab that stops drawing, or a reader who asked for
+   * less motion.
+   */
+  glideTo({
+    target, position, up, orthoHeight = null, projection,
+  }, land) {
+    this.stopGlide(false);
+    const reduced = typeof window !== 'undefined'
+      && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (reduced) return land();
+    if (projection === 'perspective' && this.projection === 'orthographic') this.setProjection('perspective');
+
+    const camera = this.activeCamera();
+    const fromTarget = this.controls.target.clone();
+    const fromQuat = camera.quaternion.clone();
+    const fromDistance = Math.max(1e-6, camera.position.distanceTo(fromTarget));
+    const toDistance = Math.max(1e-6, position.distanceTo(target));
+    const probe = new THREE.PerspectiveCamera();
+    probe.up.copy(up);
+    probe.position.copy(position);
+    probe.lookAt(target);
+    const toQuat = probe.quaternion.clone();
+    const fromHeight = (this.orthoHeight ?? 1) / (this.orthoCamera.zoom || 1);
+    const toHeight = orthoHeight ?? fromHeight;
+    const still = fromQuat.angleTo(toQuat) < 1e-3 && fromTarget.distanceTo(target) < 1e-6
+      && Math.abs(fromDistance - toDistance) < 1e-6 && Math.abs(fromHeight - toHeight) < 1e-9;
+    if (still) return land();
+
+    const start = performance.now();
+    const q = new THREE.Quaternion();
+    const at = new THREE.Vector3();
+    const back = new THREE.Vector3();
+    const glide = { land, frame: 0, timer: 0 };
+    const step = (now) => {
+      if (this.glide !== glide) return;
+      const k = Math.min(1, (now - start) / GLIDE_MS);
+      if (k >= 1) { this.stopGlide(); return; }
+      const e = 1 - (1 - k) ** 3;          // out, so it answers the click at once
+      q.slerpQuaternions(fromQuat, toQuat, e);
+      at.lerpVectors(fromTarget, target, e);
+      const r = fromDistance * (toDistance / fromDistance) ** e;
+      back.set(0, 0, 1).applyQuaternion(q);
+      for (const cam of [this.camera, this.orthoCamera]) {
+        cam.quaternion.copy(q);
+        cam.position.copy(at).addScaledVector(back, r);
+      }
+      this.controls.target.copy(at);
+      if (toHeight !== fromHeight) {
+        this.orthoHeight = fromHeight + (toHeight - fromHeight) * e;
+        this.orthoCamera.zoom = 1;
+        this.fitOrthoFrustum();
+      }
+      this.renderNow();
+      glide.frame = requestAnimationFrame(step);
+    };
+    this.glide = glide;
+    glide.frame = requestAnimationFrame(step);
+    // a tab that is not drawing never calls `step` again
+    glide.timer = setTimeout(() => { if (this.glide === glide) this.stopGlide(); }, GLIDE_MS + 150);
+    return undefined;
+  }
+
+  /** End a glide: where it was going (`finish`), or where it is now. */
+  stopGlide(finish = true) {
+    const glide = this.glide;
+    if (!glide) return;
+    this.glide = null;
+    cancelAnimationFrame(glide.frame);
+    clearTimeout(glide.timer);
+    if (finish) glide.land();
   }
 
   /**
@@ -448,11 +579,11 @@ export class Viewport {
     this.setProjection(this.resolveProjection());
   }
 
-  /** What `projectionMode` means for the view the camera is actually in. */
-  resolveProjection() {
+  /** What `projectionMode` means for a view — by default the one the camera is in. */
+  resolveProjection(view = this.viewName) {
     if (this.projectionMode === 'perspective') return 'perspective';
     if (this.projectionMode === 'orthographic') return 'orthographic';
-    return SQUARE_ON_VIEWS.has(this.viewName) ? 'orthographic' : 'perspective';
+    return SQUARE_ON_VIEWS.has(view) ? 'orthographic' : 'perspective';
   }
 
   /**
@@ -672,6 +803,7 @@ export class Viewport {
       0, 0, 0, 1,
     );
     if (next.equals(this.modelGroup.matrix)) return;
+    this.stopGlide();
 
     const anchor = this.modelAnchor();
     const before = anchor?.clone().applyMatrix4(this.modelGroup.matrix);
@@ -703,6 +835,10 @@ export class Viewport {
 
   /** stock: { min, max, kind?, cylinder? } or null to hide. */
   setStock(stock) {
+    // asked on every document change, and the billet rarely is one
+    const key = stock ? JSON.stringify(stock) : '';
+    if (key === this.stockKey) return;
+    this.stockKey = key;
     if (this.stockObject) {
       this.scene.remove(this.stockObject);
       // a tube is two wireframes, so this walks rather than assuming one mesh
@@ -811,11 +947,20 @@ export class Viewport {
    */
   setToolpathStyle(style) {
     this.toolpathStyle = { ...(this.toolpathStyle ?? {}), ...style };
-    if (this.lastToolpaths) this.setToolpaths(this.lastToolpaths);
+    if (this.lastToolpaths) this.setToolpaths(this.lastToolpaths, { rebuild: true });
   }
 
-  /** clPrograms: array of finished CL programs, or null to hide. */
-  setToolpaths(clPrograms) {
+  /**
+   * clPrograms: array of finished CL programs, or null to hide.
+   *
+   * The same programs as are already drawn are left alone: rebuilding means
+   * walking every move of every path into new buffers and uploading them, and
+   * several callers ask for the same picture in one gesture — a Generate draws
+   * its paths as they arrive and the document change after it asks again.
+   * `rebuild` is for when the programs are the same and the look is not.
+   */
+  setToolpaths(clPrograms, { rebuild = false } = {}) {
+    if (!rebuild && sameList(clPrograms, this.lastToolpaths)) return;
     if (this.toolpathObject) {
       this.scene.remove(this.toolpathObject);
       this.toolpathObject.geometry.dispose();
@@ -827,8 +972,28 @@ export class Viewport {
       this.toolpathObject = buildToolpathObject(clPrograms, this.toolpathStyle);
       this.toolpathObject.visible = this.showToolpaths !== false;
       this.scene.add(this.toolpathObject);
+      this.applyToolpathFocus();
     }
     this.requestRender();
+  }
+
+  /**
+   * Bring one program forward and step the others back — the selected
+   * operation's path, among everything else the setup cuts. null shows them
+   * all alike. Held here and reapplied to every rebuild, because the object is
+   * replaced whenever the program changes and the selection is not.
+   */
+  setToolpathFocus(clProgram) {
+    this.focusedToolpath = clProgram ?? null;
+    if (this.applyToolpathFocus()) this.requestRender();
+  }
+
+  applyToolpathFocus() {
+    // an operation that cut nothing has nothing to bring forward, and stepping
+    // everything else back would leave a screen of dim lines and no bright one
+    const focused = this.focusedToolpath?.count > 0 ? this.focusedToolpath : null;
+    const index = focused ? (this.lastToolpaths ?? []).indexOf(focused) : -1;
+    return focusToolpath(this.toolpathObject, index);
   }
 
   /**
@@ -980,14 +1145,14 @@ export class Viewport {
    * refreshed first because the transform is applied by hand
    * (matrixAutoUpdate is off) and may not have been flushed yet this frame.
    */
-  frameAll() {
+  frameAll({ animate = false } = {}) {
+    this.stopGlide(false);
     this.modelGroup.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(this.modelGroup);
     if (this.stockObject) box.expandByObject(this.stockObject);
     if (box.isEmpty()) return;
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3()).length() || 100;
-    this.controls.target.copy(center);
     for (const camera of [this.camera, this.orthoCamera]) {
       // A near plane scaled to the part is what keeps a 5mm job from z-fighting
       // itself; an orthographic camera also has to see *behind* itself, because
@@ -995,15 +1160,36 @@ export class Viewport {
       camera.near = camera.isOrthographicCamera ? -size * 10 : size / 1000;
       camera.far = size * 100;
     }
-    this.orthoHeight = size * 1.25;
-    this.orthoCamera.zoom = 1;
+    // Exactly far enough that every corner of the job is on screen, from the
+    // direction Fit is about to look from. It used to stand off 1.2 × the box's
+    // diagonal whatever the view and whatever the shape of the viewport — too
+    // close from the isometric, where a corner of the billet landed off the
+    // edge of the screen, and further off still in a viewport taller than it is
+    // wide, where the width is the tight side.
+    const view = defaultViewFor(this.machine);
+    // A viewport that has not been laid out yet — a hidden tab, a restore that
+    // finishes before the page is shown — has no shape to fit to, and a width of
+    // one pixel read as an aspect of 1:600 stood the camera off 2.5 metres from a
+    // 100mm plate. Fit square for now, and again once there is a real size.
+    const w = this.container.clientWidth;
+    const h = this.container.clientHeight;
+    const laidOut = w > MIN_FIT_PX && h > MIN_FIT_PX;
+    this.fitPending = !laidOut;
+    const aspect = laidOut ? w / h : 1;
+    const { distance, halfWidth, halfHeight } = fitToCorners(box, center,
+      VIEW_PRESETS[view] ?? VIEW_PRESETS.iso, aspect);
+    // and the orthographic frame from the same corners: a height that holds
+    // them, or a width that does when the viewport is the narrow way round
+    const orthoHeight = 2 * Math.max(halfHeight, halfWidth / aspect, 1e-3) * FIT_MARGIN;
     // Aiming is setView's job, and only setView's. Repeating the direction, the
     // up vector and the orbit pole here left out the *fourth* thing setView
     // does — switching a square-on view to orthographic — so framing the job
     // landed the lathe on its Plan view in perspective, which is the one
     // projection that makes a ZX profile not worth looking at. The machine
     // still decides which way "a good look at it" is; it says so in one place.
-    this.setView(defaultViewFor(this.machine), { distance: size * 1.2 });
+    this.setView(view, {
+      distance, target: center, orthoHeight, animate: animate && laidOut,
+    });
     this.resize();
     this.scaleEnvironment();
   }
@@ -1011,12 +1197,26 @@ export class Viewport {
   resize() {
     const w = this.container.clientWidth || 1;
     const h = this.container.clientHeight || 1;
+    // the fit that had no size to work with, redone now that it has one
+    if (this.fitPending && w > MIN_FIT_PX && h > MIN_FIT_PX) {
+      this.frameAll();
+      return;
+    }
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
 
-    // The orthographic frustum is a size in world units, not an angle, so it is
-    // the *aspect* that has to be applied to it by hand.
+    this.fitOrthoFrustum();
+    this.requestRender();
+  }
+
+  /**
+   * The orthographic frustum is a size in world units, not an angle, so it is
+   * the *aspect* that has to be applied to it by hand.
+   */
+  fitOrthoFrustum() {
+    const w = this.container.clientWidth || 1;
+    const h = this.container.clientHeight || 1;
     const height = this.orthoHeight ?? this.sceneSize() * 1.25;
     const halfH = Math.max(1e-3, height / 2);
     const halfW = halfH * (w / h);
@@ -1024,7 +1224,6 @@ export class Viewport {
       left: -halfW, right: halfW, top: halfH, bottom: -halfH,
     });
     this.orthoCamera.updateProjectionMatrix();
-    this.requestRender();
   }
 
   requestRender() {
@@ -1032,14 +1231,19 @@ export class Viewport {
     this.renderPending = true;
     requestAnimationFrame(() => {
       this.renderPending = false;
-      const camera = this.activeCamera();
-      this.aimHeadlight?.(camera);
-      this.renderer.clear();
-      this.renderer.render(this.scene, camera);
-      // over the top, in its own corner: the one thing on screen that always
-      // says which way you are looking
-      this.triad.render(camera);
+      this.renderNow();
     });
+  }
+
+  /** Draw a frame now, for a caller that is already inside one (a glide). */
+  renderNow() {
+    const camera = this.activeCamera();
+    this.aimHeadlight?.(camera);
+    this.renderer.clear();
+    this.renderer.render(this.scene, camera);
+    // over the top, in its own corner: the one thing on screen that always
+    // says which way you are looking
+    this.triad.render(camera);
   }
 }
 
@@ -1111,6 +1315,15 @@ function buildChuck(fixture) {
   return group;
 }
 
+/** Two lists of the same objects in the same order; null and empty agree. */
+function sameList(a, b) {
+  const x = a ?? [];
+  const y = b ?? [];
+  if (x.length !== y.length) return false;
+  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+  return true;
+}
+
 /**
  * A grid square in a number a person would choose: 1, 2, 5, 10, 20, 50, …
  *
@@ -1123,4 +1336,48 @@ function niceStep(rough) {
   const scaled = rough / magnitude;
   const step = scaled <= 1.5 ? 1 : scaled <= 3.5 ? 2 : scaled <= 7.5 ? 5 : 10;
   return step * magnitude;
+}
+
+/**
+ * How far back to stand, and how wide an orthographic frame has to be, to see
+ * every corner of `box` from a named view.
+ *
+ * The camera's axes are worked out from the view's direction and up the way
+ * three.js `lookAt` does it, so the numbers are for the camera setView will
+ * actually build. Each corner then asks for its own distance — its offset
+ * across the view over the tangent of the half-angle, plus however far towards
+ * the camera it sits — and the furthest of those is the answer.
+ *
+ * @param preset a VIEW_PRESETS entry ({ dir, up })
+ * @param aspect viewport width / height
+ * @returns { distance, halfWidth, halfHeight } — halfWidth and halfHeight are
+ *   the corners' spread across the view, for the orthographic frame
+ */
+export function fitToCorners(box, center, preset, aspect) {
+  const back = new THREE.Vector3(...preset.dir).normalize();
+  const right = new THREE.Vector3().crossVectors(new THREE.Vector3(...preset.up), back);
+  // a view straight down its own up vector has no sideways; any will do
+  if (right.lengthSq() < 1e-12) right.set(1, 0, 0);
+  right.normalize();
+  const up = new THREE.Vector3().crossVectors(back, right);
+  const tanV = Math.tan((FOV * Math.PI) / 360);
+  const tanH = tanV * aspect;
+  let distance = 0;
+  let halfWidth = 0;
+  let halfHeight = 0;
+  const p = new THREE.Vector3();
+  for (const x of [box.min.x, box.max.x]) {
+    for (const y of [box.min.y, box.max.y]) {
+      for (const z of [box.min.z, box.max.z]) {
+        p.set(x, y, z).sub(center);
+        const across = Math.abs(p.dot(right));
+        const along = Math.abs(p.dot(up));
+        halfWidth = Math.max(halfWidth, across);
+        halfHeight = Math.max(halfHeight, along);
+        distance = Math.max(distance,
+          p.dot(back) + Math.max(across / tanH, along / tanV) * FIT_MARGIN);
+      }
+    }
+  }
+  return { distance: Math.max(distance, 1e-3), halfWidth, halfHeight };
 }

@@ -40,6 +40,8 @@ import './arcs.test.js';
 import './defaults-notes.test.js';
 import './ui.test.js';
 import './workflow.test.js';
+import './consistency.test.js';
+import './speed.test.js';
 import './efficiency.test.js';
 import './sanity.test.js';
 

@@ -52,10 +52,38 @@ export function makeSetupSpace(doc) {
   function ensureSetup() {
     const mine = doc.setups();
     if (mine.length > 0) return mine[0];
-    const setup = createSetup(`Setup ${doc.project.setups.length + 1}`, doc.machine);
-    sizeNewStock(setup);
+    return newSetup();
+  }
+
+  /**
+   * A new setup on the machine in front of you, named, stocked and added.
+   *
+   * Every way a setup gets made comes through here: "+ Setup", and the one made
+   * on the way to a first operation. They used to be two, and only one of them
+   * made sure the name was not already taken — so on a job whose mill had a
+   * "Setup 2", the lathe's first setup could arrive as a second "Setup 2".
+   */
+  function newSetup() {
+    const setup = createSetup(uniqueSetupName(`Setup ${doc.project.setups.length + 1}`),
+      doc.machine);
+    sizeNewStock(setup);   // one rule for every new setup — see below
     doc.addSetup(setup);
     return setup;
+  }
+
+  /**
+   * A setup name nobody has used. Counting the setups gives the wrong name the
+   * moment one has been deleted: two adds, delete the first, add again, and the
+   * count says "Setup 2" alongside the existing "Setup 2".
+   */
+  function uniqueSetupName(base) {
+    const taken = new Set(doc.project.setups.map((s) => s.name));
+    if (!taken.has(base)) return base;
+    // strip any number this name already ends with, so a clash on "Setup 2"
+    // resolves to "Setup 3" rather than to "Setup 2 2" — the same reasoning as
+    // uniqueOpName, which is the other half of this pair
+    const stem = base.replace(/ \d+$/, '');
+    for (let n = 2; ; n++) if (!taken.has(`${stem} ${n}`)) return `${stem} ${n}`;
   }
 
   /**
@@ -166,7 +194,7 @@ export function makeSetupSpace(doc) {
   }
 
   return {
-    setupMeshes, resolveSetupSpace, ensureSetup, setupModelBounds, setupBoreBottom,
-    setupBoreProfile, sizeNewStock,
+    setupMeshes, resolveSetupSpace, ensureSetup, newSetup, uniqueSetupName,
+    setupModelBounds, setupBoreBottom, setupBoreProfile, sizeNewStock,
   };
 }

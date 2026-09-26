@@ -30,6 +30,37 @@ import { openContextMenu } from './context-menu.js';
 import { getSetting } from './settings.js';
 // eslint-disable-next-line import/first
 import { describeMachine } from '../doc/machines.js';
+// eslint-disable-next-line import/first
+import { withKey } from './shortcuts.js';
+// eslint-disable-next-line import/first
+import { icon } from './icons.js';
+
+/**
+ * A toolbar button: an icon and its word. The word goes on narrow windows and
+ * the icon stays, so the name moves to `aria-label` as well as the tooltip —
+ * a button that is only a drawing still has to be called something.
+ *
+ * @param collapse which widths lose the word first: 'late' keeps it longest
+ */
+function toolButton(iconName, label, attrs = {}, collapse = 'late') {
+  const { class: extra = '', ...rest } = attrs;
+  return el('button', {
+    ...rest,
+    class: `tb tb-${collapse} ${extra}`.trim(),
+    'aria-label': label.replace(/…$/, ''),
+  }, [icon(iconName), el('span', { class: 'tb-label' }, [label])]);
+}
+
+/** An icon with no word at all, named for whoever cannot see it. */
+function iconButton(iconName, label, attrs = {}) {
+  const { class: extra = '', ...rest } = attrs;
+  return el('button', { ...rest, class: `tb tb-icon ${extra}`.trim(), 'aria-label': label }, [icon(iconName)]);
+}
+
+/** A hairline between groups of buttons that belong together. */
+function divider() {
+  return el('span', { class: 'tb-sep', 'aria-hidden': 'true' });
+}
 
 /**
  * Panel sizes, remembered between sessions.
@@ -170,8 +201,8 @@ export function buildLayout(root, actions, project) {
   // Undo and redo are the only buttons whose *availability* is information —
   // greyed out is how you know an edit was not recorded. They are updated from
   // refresh() through setHistory below.
-  const undoButton = el('button', { onclick: actions.undo }, ['Undo']);
-  const redoButton = el('button', { onclick: actions.redo }, ['Redo']);
+  const undoButton = iconButton('undo', 'Undo', { onclick: actions.undo });
+  const redoButton = iconButton('redo', 'Redo', { onclick: actions.redo });
 
   // Whether the panel is still allowed to open itself.
   //
@@ -184,14 +215,15 @@ export function buildLayout(root, actions, project) {
   // those are the user asking.
   let dismissed = false;
 
-  const gcodeToggle = el('button', {
+  const gcodeToggle = toolButton('code', 'G-code', {
+    class: 'tb-toggle',
     onclick: () => {
       const open = gcode.classList.contains('collapsed');
       dismissed = !open;
       setGcodeOpen(open);
     },
     title: 'Show or hide the G-code preview',
-  }, ['G-code ▾']);
+  }, 'early');
 
   const toolbar = el('div', { class: 'toolbar' }, [
     el('a', {
@@ -200,18 +232,26 @@ export function buildLayout(root, actions, project) {
       target: '_blank',
       rel: 'noopener noreferrer',
       title: 'CNCAM on GitHub',
-    }, ['CNCAM']),
+    }, [el('span', { class: 'brand-mark', 'aria-hidden': 'true' }), 'CNCAM']),
     machineTabs.bar,
+    divider(),
     // wrapped, not passed straight through: a click handler is called with the
     // event, and openModel's first argument is a file to import
-    el('button', { onclick: () => actions.openModel(), title: 'Import STEP, IGES, STL, OBJ or DXF' }, ['Model…']),
-    el('button', { onclick: actions.addToolsFromLibrary, title: 'Add cutters from the preset library' }, ['Tools…']),
+    toolButton('cube', 'Model…', {
+      onclick: () => actions.openModel(),
+      title: withKey('Import STEP, IGES, STL, OBJ or DXF', 'import'),
+    }),
+    toolButton('cutter', 'Tools…', {
+      onclick: actions.addToolsFromLibrary,
+      title: 'Add cutters from the preset library',
+    }),
+    divider(),
     machineSelect,
-    el('button', {
-      class: 'icon-button',
+    iconButton('machine', 'Machines', {
       onclick: actions.openMachines,
-      title: 'Create and edit machines — travel, rapids, spindle range, dialect',
-    }, ['⚙']),
+      title: withKey('Create and edit machines — travel, rapids, spindle range, dialect', 'machines'),
+    }),
+    divider(),
     // One button that opens a chooser, spelling both choices out in full.
     //
     // This has been all three ways round. "Export" with a caret beside it hid
@@ -225,7 +265,7 @@ export function buildLayout(root, actions, project) {
     // before it acts — Model… and Tools… are two along the same bar — so the
     // choice is where you would look for it, and the menu can afford to say
     // what each one does rather than hinting at it in a label.
-    el('button', {
+    toolButton('download', 'Export…', {
       onclick: (e) => openContextMenu(e, [
         {
           label: 'Export all — one file',
@@ -251,30 +291,45 @@ export function buildLayout(root, actions, project) {
         },
       ]),
       title: 'Write the G-code — or read a program back in and check it',
-    }, ['Export…']),
+    }),
     gcodeToggle,
     el('span', { class: 'spacer' }),
-    el('button', {
-      onclick: actions.openOptions,
-      title: 'Simulation detail, what the viewport draws, and how the editor behaves',
-    }, ['Options']),
-    el('button', {
-      class: 'help-button',
-      title: 'How a job goes together, and every keyboard shortcut (?)',
-      onclick: actions.showShortcuts,
-    }, ['?']),
     undoButton,
     redoButton,
-    el('button', { onclick: actions.saveProject, title: 'Save the project to a file, geometry included' }, ['Save']),
-    el('button', { onclick: actions.openProject, title: 'Open a .cncam project from a file' }, ['Open']),
+    divider(),
+    toolButton('save', 'Save', {
+      onclick: actions.saveProject,
+      title: withKey('Save the project to a file, geometry included', 'save'),
+    }, 'early'),
+    // Options… and Open… carry the ellipsis Model…, Tools… and Projects… do: the
+    // app's convention for a button that asks something before it acts.
+    toolButton('folder', 'Open…', {
+      // wrapped, as Model… is: the click's event is not a file to open
+      onclick: () => actions.openProject(),
+      title: 'Open a .cncam project from a file',
+    }, 'early'),
     // Save and Open write files to disk; this is the drawer of jobs the browser
     // keeps for you, where every save is a version and nothing overwrites
     // anything. See doc/project-store.js.
-    el('button', {
+    toolButton('layers', 'Projects…', {
       onclick: actions.browseProjects,
       title: 'Projects kept in this browser, with their history — save, open, download or upload one',
-    }, ['Projects…']),
-    el('button', { class: 'danger', onclick: actions.clearProject, title: 'Discard everything and start over' }, ['Clear']),
+    }, 'early'),
+    divider(),
+    iconButton('sliders', 'Options', {
+      onclick: actions.openOptions,
+      title: withKey('Options — simulation detail, what the viewport draws, and how the editor behaves', 'options'),
+    }),
+    iconButton('help', 'Help', {
+      class: 'help-button',
+      title: withKey('How a job goes together, and every keyboard shortcut', 'help'),
+      onclick: actions.showShortcuts,
+    }),
+    iconButton('trash', 'Clear', {
+      class: 'danger',
+      onclick: actions.clearProject,
+      title: 'Clear — discard everything and start over',
+    }),
   ]);
 
   // The checklist lives above the tree, not over the part. It used to sit in
@@ -290,11 +345,16 @@ export function buildLayout(root, actions, project) {
   // where the eyes already are, not on a distant toolbar
   const canvas = el('div', { id: 'viewport-canvas' });
   const overlay = el('div', { class: 'viewport-overlay' }, [
-    el('button', { class: 'primary', onclick: actions.generate, title: 'Compute toolpaths (Ctrl+G)' }, ['Generate']),
+    // Shift recomputes everything; a plain click only what has changed
+    el('button', {
+      class: 'primary',
+      onclick: (e) => actions.generate({ force: e.shiftKey }),
+      title: `${withKey('Compute the toolpaths that changed', 'generate')} — Shift+click recomputes all of them`,
+    }, [icon('bolt'), 'Generate']),
     el('button', {
       onclick: actions.simulateOrGenerate,
-      title: 'Watch the stock being cut away; generates first if needed',
-    }, ['Simulate']),
+      title: withKey('Watch the stock being cut away; generates first if needed', 'simulate'),
+    }, [icon('play'), 'Simulate']),
   ]);
 
   // Fit is the way back from any camera you have lost yourself in, so it lives
@@ -313,9 +373,21 @@ export function buildLayout(root, actions, project) {
   const viewMenuButton = el('button', {
     class: 'view-preset view-more',
     title: 'More views, and perspective or orthographic',
+    'aria-label': 'More views',
     onclick: (e) => openContextMenu(e, viewMenuItems()),
-  }, ['▾']);
+  }, [icon('chevron', 14)]);
   let currentMachine = project.machine ?? 'mill';
+  // Which named view the camera is in, or null once it has been orbited away.
+  // Shown on the bar the way the Mill/Lathe tabs show the machine: a row of
+  // views with none of them lit gave no way to tell a square-on Front from a
+  // nearly square one, which is the difference the buttons exist for.
+  let activeView = null;
+  const viewButtonFor = new Map();
+  function syncViewButtons() {
+    for (const [key, button] of viewButtonFor) button.classList.toggle('active', key === activeView);
+    viewMenuButton.classList.toggle('active',
+      activeView != null && !viewButtonFor.has(activeView));
+  }
 
   function viewMenuItems() {
     const projection = getSetting('projection');
@@ -353,7 +425,7 @@ export function buildLayout(root, actions, project) {
     class: 'view-toggle',
     title: 'Show or hide the toolpath backplot (the program is unchanged)',
     onclick: () => { actions.toggleToolpaths(); syncPathsButton(); },
-  }, ['Paths']);
+  }, [icon('paths', 15), 'Paths']);
 
   function syncPathsButton() {
     pathsButton.classList.toggle('off', actions.toolpathsVisible?.() === false);
@@ -362,9 +434,27 @@ export function buildLayout(root, actions, project) {
   const viewTools = el('div', { class: 'viewport-tools' }, [
     viewButtons,
     pathsButton,
-    el('button', { onclick: () => actions.fitView(), title: 'Fit everything in view (F)' }, ['⤢ Fit']),
+    el('button', { onclick: () => actions.fitView(), title: withKey('Fit everything in view', 'fit') },
+      [icon('fit', 15), 'Fit']),
   ]);
-  const viewport = el('div', { id: 'viewport' }, [canvas, viewTools, overlay]);
+  // What an empty viewport says: where a part comes from. The checklist in the
+  // tree says it too, but the viewport is where a newcomer is looking, and a
+  // dark grid on its own reads as something that failed to load.
+  const emptyState = el('div', { class: 'viewport-empty' }, [
+    el('div', { class: 'viewport-empty-card' }, [
+      icon('cube', 28),
+      el('div', { class: 'viewport-empty-title' }, ['Drop a part here']),
+      el('div', { class: 'viewport-empty-detail' }, [
+        'STEP, IGES, STL or OBJ — or a DXF to engrave. ',
+        'Or ', el('button', {
+          class: 'link-button',
+          onclick: () => actions.openModel(),
+          title: withKey('Import STEP, IGES, STL, OBJ or DXF', 'import'),
+        }, ['open one']), '.',
+      ]),
+    ]),
+  ]);
+  const viewport = el('div', { id: 'viewport' }, [canvas, emptyState, viewTools, overlay]);
   const props = el('div', { id: 'props', class: 'panel' });
 
   const statusText = el('span', {}, ['Ready']);
@@ -408,7 +498,8 @@ export function buildLayout(root, actions, project) {
   function setGcodeOpen(open) {
     gcode.classList.toggle('collapsed', !open);
     gcodeSplitter.classList.toggle('collapsed', !open);
-    gcodeToggle.textContent = open ? 'G-code ▴' : 'G-code ▾';
+    gcodeToggle.classList.toggle('on', open);
+    gcodeToggle.setAttribute('aria-pressed', open ? 'true' : 'false');
     actions.viewportResized?.();
   }
 
@@ -450,20 +541,31 @@ export function buildLayout(root, actions, project) {
       document.body.dataset.machine = machine;
       // the views worth having are not the same on the two machines: a lathe
       // wants the ZX plane square on, a mill wants six faces of a box
+      viewButtonFor.clear();
       viewButtons.replaceChildren(
         ...viewsFor(machine).map((key) => {
           const preset = VIEW_PRESETS[key];
-          return el('button', {
+          const button = el('button', {
             class: 'view-preset',
             title: preset.hint,
             onclick: () => actions.setView(key),
           }, [preset.label]);
+          viewButtonFor.set(key, button);
+          return button;
         }),
         viewMenuButton,
       );
+      syncViewButtons();
     },
     setGcodeOpen,
+    /** The named view the camera is in, or null — see syncViewButtons. */
+    setActiveView(name) {
+      activeView = name ?? null;
+      syncViewButtons();
+    },
     showGcodePanel() { if (!dismissed) setGcodeOpen(true); },
+    /** Whether there is nothing in the job to look at yet. */
+    setEmpty(empty) { emptyState.classList.toggle('on', !!empty); },
     setStatus(text, isError = false) {
       statusText.textContent = text;
       statusText.className = isError ? 'error' : '';
@@ -486,8 +588,8 @@ export function buildLayout(root, actions, project) {
     setHistory({ canUndo, canRedo, undoLabel, redoLabel }) {
       undoButton.disabled = !canUndo;
       redoButton.disabled = !canRedo;
-      undoButton.title = canUndo ? `Undo ${undoLabel} (Ctrl+Z)` : 'Nothing to undo';
-      redoButton.title = canRedo ? `Redo ${redoLabel} (Ctrl+Y)` : 'Nothing to redo';
+      undoButton.title = canUndo ? withKey(`Undo ${undoLabel}`, 'undo') : 'Nothing to undo';
+      redoButton.title = canRedo ? withKey(`Redo ${redoLabel}`, 'redo') : 'Nothing to redo';
     },
     /**
      * The checklist at the top of the project tree, until there is a program.

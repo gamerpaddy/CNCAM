@@ -36,7 +36,7 @@ export function makeActions(ctx) {
   /** Put the camera where it can see the job. The way back from a lost view. */
   function fitView() {
     if (doc.project.models.length === 0) return ctx.ui.setStatus('Nothing to fit — import a model', true);
-    ctx.viewport.frameAll();
+    ctx.viewport.frameAll({ animate: true });
     ctx.ui.setStatus('View fitted');
   }
 
@@ -48,7 +48,7 @@ export function makeActions(ctx) {
    * vertical from 3° off is a wall you cannot judge.
    */
   function setView(name) {
-    const preset = ctx.viewport.setView(name);
+    const preset = ctx.viewport.setView(name, { animate: true });
     ctx.ui.setStatus(`${preset.label} view — ${preset.hint}`);
   }
 
@@ -108,7 +108,30 @@ export function makeActions(ctx) {
     liveProjection,
     openOptions,
     viewportResized,
-    undo: () => doc.undo(),
-    redo: () => doc.redo(),
+    undo,
+    redo,
   };
+
+  /**
+   * Undo, saying what was undone.
+   *
+   * Every other edit reports on the status line, and these two did not — so a
+   * Ctrl+Z that reverted a stepover on a panel you were not looking at, or a
+   * clamp in another setup, changed the job without a word. The button's
+   * tooltip knew what it was about to undo; now the status line says what it
+   * did. The key comes here too rather than straight to the document.
+   */
+  function undo() {
+    const label = doc.undoStack.undoLabel;
+    if (!label) return ctx.ui.setStatus('Nothing to undo');
+    doc.undo();
+    return ctx.ui.setStatus(`Undid ${label} — Ctrl+Y to redo`);
+  }
+
+  function redo() {
+    const label = doc.undoStack.redoLabel;
+    if (!label) return ctx.ui.setStatus('Nothing to redo');
+    doc.redo();
+    return ctx.ui.setStatus(`Redid ${label}`);
+  }
 }

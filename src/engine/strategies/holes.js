@@ -17,7 +17,7 @@ import { CLBuilder, FEED } from '../cl.js';
 import { plural, pluralEs, verb, allOf } from '../text.js';
 import { computeBounds } from '../../geom/mesh.js';
 import { applyCutting, effectiveCutting } from '../cutting.js';
-import { holeApproachZ, holeSurfaceZ } from '../heights.js';
+import { holeApproachZ } from '../heights.js';
 import { regionAllowsPoint } from '../regions.js';
 import { tipAngleOf } from '../tool-geometry.js';
 import { findHoles, findBosses } from './drill.js';
@@ -382,8 +382,10 @@ export function generateThreadMill({
     // solid metal, so it is a cutter's width further out than the orbit.
     const entryR = internal ? 0 : orbit + cutter;
     cl.rapid(h.cx + entryR, h.cy, clearance);
-    // clear of the billet as well as the part — see heights.js holeSurfaceZ
-    cl.rapid(h.cx + entryR, h.cy, holeSurfaceZ(topZ, stock) + 0.5);
+    // clear of the billet as well as the part, and at the entry gap the other
+    // three hole cycles stop at — a fixed half millimetre here was the one
+    // approach in the app the Entry gap field did not move
+    cl.rapid(h.cx + entryR, h.cy, holeApproachZ(topZ, stock, params, 0.5));
     cl.cut(h.cx + entryR, h.cy, floor, FEED.PLUNGE);
     // and on to the thread on a quarter-turn arc, so the cutter is never fed
     // straight into the wall

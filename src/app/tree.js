@@ -16,6 +16,8 @@ import { isPhoto } from './tool-photo.js';
 import { opIcon, OP_CATALOG } from './op-catalog.js';
 import { openStrategyPicker } from './strategy-picker.js';
 import { machineCanHold } from '../doc/tool-library.js';
+import { removalOf } from './item-labels.js';
+import { withKey } from './shortcuts.js';
 
 // Which row is being renamed, if any.
 //
@@ -136,7 +138,16 @@ export function renderTree(container, doc, app = {}) {
   const { project, selection } = doc;
   const nodes = [];
 
-  nodes.push(sectionHeader('Models'));
+  // The same shape as the two headers below it: the section, and the way to
+  // put something in it. Once the checklist has folded away the only other way
+  // to a second model was the toolbar.
+  nodes.push(sectionHeader('Models', {
+    action: {
+      label: '+ Import',
+      title: withKey('Import STEP, IGES, STL, OBJ or DXF', 'import'),
+      onclick: () => app.actions?.openModel(),
+    },
+  }));
   if (project.models.length === 0) nodes.push(empty('no models'));
   for (const model of project.models) {
     nodes.push(row(doc, 'model', model, () => doc.select('model', model.id),
@@ -220,14 +231,18 @@ export function renderTree(container, doc, app = {}) {
     // rather than always making a contour and leaving the user to retype it —
     // the strategy is the first thing you know about an operation, and picking
     // it afterwards used to mean re-doing the parameters as well.
-    nodes.push(el('div', {
+    // Buttons, not clickable text: a row you cannot Tab to is an action the
+    // keyboard cannot take, and these two are the commonest in the tree.
+    nodes.push(el('button', {
+      type: 'button',
       class: 'tree-add-op',
-      title: 'Choose a machining strategy',
-      onclick: () => openAddOperation(setup, app),
+      title: withKey('Choose a machining strategy', 'addOperation'),
+      onclick: () => app.actions?.addOperation(setup),
     }, ['+ Add operation…']));
 
     const turning = (setup.mode ?? 'mill') === 'turn';
-    nodes.push(el('div', {
+    nodes.push(el('button', {
+      type: 'button',
       class: 'tree-add-op',
       title: turning
         ? 'How the bar is held, and how far along it the tool can reach'
@@ -432,7 +447,7 @@ function fixtureRow(doc, setup, fixture, app) {
       },
       { separator: true },
       {
-        label: 'Delete clamp', danger: true,
+        label: removalOf('fixture', fixture).label, danger: true,
         onclick: () => app?.actions?.deleteItem('fixture', fixture.id),
       },
     ]);
@@ -556,6 +571,10 @@ function makeReorderable(node, doc, setup, op, app) {
  * a message.
  */
 function statusBadges(doc, op) {
+  // being computed now: whatever it said before is about to be replaced
+  if (doc.pending?.has(op.id)) {
+    return [el('span', { class: 'tree-badge pending', title: 'Generating…' }, [])];
+  }
   const blocked = opBlockedReason(doc, op);
   if (blocked && blocked !== 'disabled') {
     return [el('span', { class: 'tree-badge warn', title: `Cannot generate: ${blocked}` }, ['!'])];
@@ -590,22 +609,6 @@ function statusBadges(doc, op) {
   }, [status.timeText])];
 }
 
-/**
- * The strategy picker behind "+ Add operation".
- *
- * The strategy is the first thing you know about an operation and the thing
- * every parameter depends on, so it is asked up front, on cards that say what
- * each one is for — see strategy-picker.js for why that is not a dropdown.
- */
-function openAddOperation(setup, app) {
-  openStrategyPicker({
-    title: `Add an operation to ${setup.name}`,
-    confirm: 'Add operation',
-    mode: setup.mode ?? 'mill',
-    onPick: (type) => app?.actions?.addOperationTo?.(setup, type),
-  });
-}
-
 // --- context menus per kind ---
 
 /** The menu entry that does what a double-click on the row does. */
@@ -621,7 +624,7 @@ function menuForModel(doc, model, app) {
   return [
     renameItem(doc, model),
     {
-      label: 'Remove from project', danger: true,
+      label: removalOf('model', model).label, danger: true,
       onclick: () => app?.actions?.deleteItem('model', model.id),
     },
   ];
@@ -638,7 +641,7 @@ function menuForDrawing(doc, drawing, app) {
     },
     { separator: true },
     {
-      label: 'Remove drawing',
+      label: removalOf('drawing', drawing).label,
       danger: true,
       hint: operations ? `${plural(operations, 'operation')} ${operations === 1 ? 'follows' : 'follow'} it` : undefined,
       onclick: () => app?.actions?.deleteItem('drawing', drawing.id),
@@ -699,7 +702,7 @@ function menuForTool(doc, tool, app) {
     }] : []),
     { separator: true },
     {
-      label: 'Remove tool', danger: true,
+      label: removalOf('tool', tool).label, danger: true,
       hint: operations ? `${plural(operations, 'operation')} ${operations === 1 ? 'uses' : 'use'} this tool` : undefined,
       onclick: () => actions?.deleteItem('tool', tool.id),
     },
@@ -710,7 +713,7 @@ function menuForSetup(doc, setup, app) {
   const turning = (setup.mode ?? 'mill') === 'turn';
   return [
     renameItem(doc, setup),
-    { label: 'Add operation…', onclick: () => openAddOperation(setup, app) },
+    { label: 'Add operation…', onclick: () => app?.actions?.addOperation(setup) },
     ...holdingMenu(setup, app, turning).map((item) => (item.separator ? item : {
       ...item, label: `Add ${item.label.toLowerCase()}`,
     })),
@@ -722,7 +725,7 @@ function menuForSetup(doc, setup, app) {
     },
     { separator: true },
     {
-      label: 'Delete setup', danger: true,
+      label: removalOf('setup', setup).label, danger: true,
       onclick: () => app?.actions?.deleteItem('setup', setup.id),
     },
   ];
@@ -759,7 +762,13 @@ function menuForOperation(doc, setup, op, app) {
       { label: 'Show only this path', onclick: () => doc.soloPath(op.id) },
       { label: 'Show every path', onclick: () => doc.showAllPaths() },
     ] : []),
-    { label: 'Duplicate', onclick: () => actions?.duplicateOperation(op) },
+    { label: 'Duplicate operation', onclick: () => actions?.duplicateOperation(op) },
+    {
+      label: 'Export this operation…',
+      hint: 'A complete program of this operation alone — to prove it out on '
+        + 'the machine before the rest. Generates it first if it is out of date.',
+      onclick: () => actions?.exportOneOperation(op),
+    },
     { separator: true },
     // machining order is program order, so moving an operation is a real edit
     ...(index > 0
@@ -767,6 +776,6 @@ function menuForOperation(doc, setup, op, app) {
     ...(index < setup.operations.length - 1
       ? [{ label: 'Move down', onclick: () => actions?.moveOperation(op, 1) }] : []),
     { separator: true },
-    { label: 'Delete operation', danger: true, onclick: () => actions?.deleteItem('op', op.id) },
+    { label: removalOf('op', op).label, danger: true, onclick: () => actions?.deleteItem('op', op.id) },
   ];
 }

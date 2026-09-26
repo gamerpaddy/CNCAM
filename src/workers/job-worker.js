@@ -6,6 +6,8 @@
 import { generateToolpath } from '../engine/toolpath.js';
 import { simulateProgram, simulateTurning } from '../engine/simulate.js';
 import { verifyRun } from '../engine/verify.js';
+import { buildGcode, packLineMap } from '../post/index.js';
+import { checkPost } from '../engine/backplot.js';
 
 const jobs = {
   async ping(args, ctx) {
@@ -42,6 +44,34 @@ const jobs = {
     }
     ctx.progress(1);
     return { result: sim, transfer: simTransfer(sim) };
+  },
+
+  /**
+   * Print the program, and read the file back against the paths it came from.
+   *
+   * Here rather than on the page because it is a third of a second of work on
+   * a large program, and on the page it froze the viewport right after the
+   * paths it describes were drawn. See app/actions/program.js.
+   */
+  async post({
+    postId, ops, settings, check,
+  }, ctx) {
+    const { text, lineMap } = buildGcode(postId, ops, settings);
+    let postCheck = null;
+    if (check && text.length <= check.maxLength) {
+      try {
+        postCheck = checkPost({ ops, text, lineMap, fitTolerance: check.fitTolerance });
+      } catch (err) {
+        // a check that cannot run is no verdict, not a failed post
+        console.error(err);
+      }
+    }
+    const packed = packLineMap(lineMap);
+    ctx.progress(1);
+    return {
+      result: { text, lineMap: packed, postCheck },
+      transfer: [packed.op.buffer, packed.move.buffer],
+    };
   },
 
   async simulateTurn(args, ctx) {

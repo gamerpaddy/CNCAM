@@ -6,7 +6,7 @@
 // inherits (see engine/op-defaults.js) and which deletions are big enough to be
 // worth asking about first.
 
-import { createSetup, createOperation, uid } from '../../doc/schema.js';
+import { createOperation, uid } from '../../doc/schema.js';
 import { plural } from '../../engine/text.js';
 import { OP_LABELS } from '../../engine/toolpath.js';
 import {
@@ -17,21 +17,47 @@ import { pickToolFor } from '../../engine/tool-match.js';
 import { drillOversize } from '../../engine/lathe.js';
 import { tipLengthOf } from '../../engine/tool-geometry.js';
 import { getSetting } from '../settings.js';
+import { openStrategyPicker } from '../strategy-picker.js';
+import { removalOf, nounFor } from '../item-labels.js';
 
 export function makeEditActions(ctx, space) {
   const { doc } = ctx;
   const {
     resolveSetupSpace, ensureSetup, setupModelBounds, setupBoreBottom, setupBoreProfile,
-    sizeNewStock,
+    newSetup, uniqueSetupName,
   } = space;
 
-  function addOperation() {
-    // A drawing is enough on its own: engraving a plate does not need a solid,
+  /**
+   * Add an operation to the setup being worked in, asking which strategy.
+   *
+   * One way in for every door: the tree's "+ Add operation…", the A key, the
+   * setup's menu and the checklist all come here. The checklist used to call a
+   * second version that skipped the question and made a Contour, and the key
+   * refused outright when there was no setup while the checklist quietly made
+   * one — the same request, three different answers.
+   *
+   * The strategy is the first thing you know about an operation and the thing
+   * every parameter depends on, so it is asked up front, on cards that say
+   * what each one is for — see strategy-picker.js.
+   *
+   * @param setup where it goes; by default the setup being worked in, made if
+   *   this machine has none yet
+   */
+  function addOperation(setup = null) {
+    const existing = setup ?? doc.activeSetup();
+    // Only a setup that has to be *made* needs something to make it from. A
+    // drawing is enough on its own: engraving a plate does not need a solid,
     // and refusing to start until there is one is refusing the job.
-    if (doc.project.models.length === 0 && (doc.project.drawings ?? []).length === 0) {
+    if (!existing && doc.project.models.length === 0 && (doc.project.drawings ?? []).length === 0) {
       return ctx.ui.setStatus('Import a model or a DXF before adding operations', true);
     }
-    addOperationTo(ensureSetup());
+    const target = existing ?? ensureSetup();
+    return openStrategyPicker({
+      title: `Add an operation to ${target.name}`,
+      confirm: 'Add operation',
+      mode: target.mode ?? 'mill',
+      onPick: (type) => addOperationTo(target, type),
+    });
   }
 
   /**
@@ -48,12 +74,12 @@ export function makeEditActions(ctx, space) {
     // the name it takes from that drawing are four commands and one gesture.
     doc.group('engrave drawing', () => {
       const setup = ensureSetup();
-      addOperationTo(setup, 'engrave');
-      op = setup.operations[setup.operations.length - 1];
+      op = addOperationTo(setup, 'engrave');
       doc.updateItem(op.params, { drawingId: drawing.id }, 'follow drawing');
       doc.updateItem(op, { name: uniqueOpName(setup, `Engrave ${drawing.name}`) }, 'name op');
     });
-    ctx.ui.setStatus(`${op.name} follows ${drawing.name} — set the depth and generate`);
+    if (!op.toolId) ctx.ui.setStatus(noToolYet(op), true);
+    else ctx.ui.setStatus(`${op.name} follows ${drawing.name} — set the depth and generate`);
   }
 
   /**
@@ -90,8 +116,21 @@ export function makeEditActions(ctx, space) {
     doc.addOperation(setup, op);
     doc.select('op', op.id);
     if (type === 'command') ctx.ui.setStatus(`Added ${op.name} — type the lines it writes`);
-    else if (!op.toolId) ctx.ui.setStatus('Operation added — create and assign a tool', true);
+    else if (!op.toolId) ctx.ui.setStatus(noToolYet(op), true);
     else ctx.ui.setStatus(`Added ${op.name} with T${tool.number} ${tool.name}`);
+    return op;
+  }
+
+  /**
+   * What to say about an operation that arrived with no cutter to hold.
+   *
+   * Said by name, and said the same wherever an operation is made: the one-click
+   * engrave used to report "set the depth and generate" over an empty tool
+   * box, and Generate then refused it.
+   */
+  function noToolYet(op) {
+    return `Added ${op.name} with no tool — nothing in the rack can do it. `
+      + 'Add a cutter that can (Tools…), then pick it in the panel';
   }
 
   /**
@@ -254,16 +293,6 @@ export function makeEditActions(ctx, space) {
       + 'set the datum for the second op');
   }
 
-  function uniqueSetupName(base) {
-    const taken = new Set(doc.project.setups.map((s) => s.name));
-    if (!taken.has(base)) return base;
-    // strip any number this name already ends with, so a clash on "Setup 2"
-    // resolves to "Setup 3" rather than to "Setup 2 2" — the same reasoning as
-    // uniqueOpName, which is the other half of this pair
-    const stem = base.replace(/ \d+$/, '');
-    for (let n = 2; ; n++) if (!taken.has(`${stem} ${n}`)) return `${stem} ${n}`;
-  }
-
   /** Copy an operation, with its parameters and picks, right after the original. */
   function duplicateOperation(op) {
     const setup = doc.findSetupOf(op.id);
@@ -278,14 +307,17 @@ export function makeEditActions(ctx, space) {
     ctx.ui.setStatus(`Duplicated ${op.name}`);
   }
 
-  /** Move an operation earlier or later in the program. Order is machining order. */
+  /**
+   * Move an operation earlier or later in the program. Order is machining order.
+   *
+   * Through reorderOperation, so Move up says where the operation landed the
+   * way a drag always has — they are the same edit made two ways.
+   */
   function moveOperation(op, delta) {
     const setup = doc.findSetupOf(op.id);
     if (!setup) return;
     const from = setup.operations.indexOf(op);
-    const to = from + delta;
-    if (to < 0 || to >= setup.operations.length) return;
-    doc.reorderOperation(setup, from, to);
+    reorderOperation(setup, from, from + delta);
   }
 
   /** Drop an operation at an index — what the tree's drag-to-reorder calls. */
@@ -307,14 +339,9 @@ export function makeEditActions(ctx, space) {
    */
   function deleteItem(kind, id) {
     const { operations } = doc.usageOf(kind, id);
-    const name = {
-      model: 'model',
-      drawing: 'drawing',
-      tool: 'tool',
-      setup: 'setup',
-      op: 'operation',
-      fixture: 'clamp',
-    }[kind] ?? 'item';
+    const item = doc.findItem(kind, id);
+    if (!item) return;
+    const removal = removalOf(kind, item);
 
     // Asking is a preference, not a safety net — undo is the safety net. Somebody
     // who has decided they do not want the dialog has decided; the message still
@@ -341,7 +368,9 @@ export function makeEditActions(ctx, space) {
     }[kind];
     remove?.();
     if (doc.selection?.id === id) doc.select(null, null);
-    ctx.ui.setStatus(`Deleted ${name}${operations && kind !== 'op' ? ` (${plural(operations, 'operation')} affected)` : ''} — Ctrl+Z to undo`);
+    ctx.ui.setStatus(`${removal.done} ${item.name || `the ${nounFor(kind, item)}`}`
+      + `${operations && kind !== 'op' ? ` (${plural(operations, 'operation')} affected)` : ''}`
+      + ' — Ctrl+Z to undo');
   }
 
   /** Delete whatever the tree has selected. Bound to the Delete key. */
@@ -376,9 +405,9 @@ export function makeEditActions(ctx, space) {
     doc.addFixture(setup, fixture);
     doc.select('fixture', fixture.id);
     ctx.ui.setStatus(kind === 'chuck'
-      ? `${fixture.name} added, gripping ⌀${fixture.clampDiameter} at Z${fixture.faceZ} — `
+      ? `Added ${fixture.name}, gripping ⌀${fixture.clampDiameter} at Z${fixture.faceZ} — `
         + 'turning passes stop at the jaws'
-      : `${fixture.name} added — every operation in this setup keeps out of it`);
+      : `Added ${fixture.name} — every operation in this setup keeps out of it`);
   }
 
   /**
@@ -421,8 +450,6 @@ export function makeEditActions(ctx, space) {
     for (let n = 2; ; n++) if (!taken.has(`${base} ${n}`)) return `${base} ${n}`;
   }
 
-  /** The key list and the running order of a job. Bound to ? and the toolbar. */
-
   return {
     addOperation,
     addOperationTo,
@@ -441,16 +468,12 @@ export function makeEditActions(ctx, space) {
     // a setup belongs to the machine it was made on, and arrives with the shape
     // of stock that machine is fed — bar for a lathe, a billet for a mill
     addSetup: () => {
-      // Counting the setups gives the wrong name the moment one has been
-      // deleted: two adds, delete the first, add again, and the count is 1 so
-      // the new setup is called "Setup 2" alongside the existing "Setup 2".
-      // A name is wanted for telling two of them apart, which is the same
-      // requirement operations already meet through `uniqueOpName`.
-      const setup = createSetup(uniqueSetupName(`Setup ${doc.project.setups.length + 1}`),
-        doc.machine);
-      sizeNewStock(setup);   // one rule for every new setup — see setup-space.js
-      doc.addSetup(setup);
+      const setup = newSetup();
       doc.select('setup', setup.id);
+      // said, like every other add: a new setup is a billet and a zero the
+      // app chose, and those are the two things to look at before cutting
+      ctx.ui.setStatus(`Added ${setup.name} — check the stock and where zero is`);
+      return setup;
     },
   };
 }

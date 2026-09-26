@@ -211,15 +211,15 @@ export async function attach() {
     return out;
   };
 
-  /** The posted program, refreshed, as lines. */
-  H.gcode = () => {
-    c.actions.refreshGcodePreview(false);
+  /** The posted program, refreshed, as lines. Posted in a worker, so awaited. */
+  H.gcode = async () => {
+    await c.actions.refreshGcodePreview(false);
     return (c.lastProgram?.text ?? '').split('\n');
   };
 
   /** The posted block for one operation, by name. */
-  H.gcodeFor = (name, lines = 20) => {
-    const all = H.gcode();
+  H.gcodeFor = async (name, lines = 20) => {
+    const all = await H.gcode();
     const i = all.findIndex((l) => l.startsWith(`(operation: ${name}`));
     return i < 0 ? null : all.slice(i, i + lines);
   };

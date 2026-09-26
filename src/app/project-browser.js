@@ -116,7 +116,7 @@ export function openProjectBrowser({
           refresh();
         },
       }, [saveAs === meta.id ? 'Saving here' : 'Save into']),
-      el('button', { title: 'Rename it', onclick: () => rename(meta) }, ['Rename']),
+      el('button', { title: 'Give it another name', onclick: () => rename(meta) }, ['Rename…']),
       el('button', {
         class: 'danger',
         title: 'Delete this project and every version of it',

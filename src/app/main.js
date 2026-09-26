@@ -19,9 +19,11 @@ import { renderProps } from './props.js';
 import { makeActions } from './actions.js';
 import { syncRegionOverlays, togglePicked, invalidateFaces } from './regions-ui.js';
 import { machinesFor } from '../doc/machines.js';
+import { machineCanHold } from '../doc/tool-library.js';
 import { placedPaths } from '../engine/drawing.js';
 import { heightLimits, constrainHeights, snapTargets } from '../engine/heights.js';
 import { bindShortcuts } from './shortcuts.js';
+import { installDropImport } from './drop-import.js';
 import { whenSettled, rebuildKeepingFocus } from './keep-focus.js';
 import { getSetting } from './settings.js';
 import { paramApplies, OP_PARAM_GROUPS } from './op-params.js';
@@ -61,6 +63,11 @@ const ctx = {
     renderPropsKeepingFocus();
     syncHeightGizmoVisibility();
   },
+  // The tree on its own, for news that changes nothing but its badges — a
+  // Generate marking which passes are still running, and then each one done.
+  renderTree: () => {
+    whenSettled('tree', [ctx.ui.tree], () => renderTree(ctx.ui.tree, ctx.doc, ctx));
+  },
   // The named Z values a height can be snapped to — the top of the part, the
   // bottom of the billet. See engine/heights.js snapTargets.
   snapTargetsFor: (op) => {
@@ -92,6 +99,8 @@ function refresh(kind) {
   syncStock();
   syncDrawings();
   syncToolpaths();
+  // the selected operation's path stands out from the rest of the setup's
+  viewport.setToolpathFocus(doc.selection?.kind === 'op' ? doc.toolpaths.get(doc.selection.id) : null);
   ctx.actions?.syncGcodePreview?.();
   syncRegionOverlays(doc, viewport);
   syncHeightGizmos(kind);
@@ -137,36 +146,46 @@ function renderPropsKeepingFocus() {
 function syncHint() {
   const { doc, ui, actions } = ctx;
   const setup = doc.setups()[0];
+  // Every count is for the machine in front of you, as the tree's are. Counted
+  // across the project, a job with a mill half switched to the lathe opened on
+  // "✓ Pull a cutter" over a Tools list reading "no tools", and "✓ Generate"
+  // with nothing generated on this machine at all.
+  const operations = [...doc.allOperations()];
   const steps = [
     {
-      label: 'Import a model',
-      done: doc.project.models.length > 0,
+      // a DXF on its own is a job — an engraved plate has no solid in it — and
+      // everything after this step already accepts one, so this step does too
+      label: 'Import a model or a drawing',
+      done: doc.project.models.length > 0 || (doc.project.drawings ?? []).length > 0,
       onclick: () => actions.openModel(),
     },
     {
       label: 'Pull a cutter from the library',
-      done: doc.project.tools.length > 0,
+      done: doc.project.tools.some((t) => machineCanHold(t.type, doc.machine)),
       onclick: () => actions.addToolsFromLibrary(),
     },
     {
       label: 'Check the stock and where zero is',
       // a setup arrives with the first operation, so this is ticked as soon as
-      // there is one to check rather than nagging for a click that does nothing
+      // there is one to check — and when there is not, the step makes one,
+      // rather than being the one button in the list that did nothing
       done: !!setup,
-      onclick: () => setup && doc.select('setup', setup.id),
+      onclick: () => (setup ? doc.select('setup', setup.id) : actions.addSetup()),
     },
     {
       label: 'Add operations, in machining order',
-      done: [...doc.allOperations()].length > 0,
+      done: operations.length > 0,
       onclick: () => actions.addOperation(),
     },
     {
       label: 'Generate the toolpaths',
-      done: doc.toolpaths.size > 0,
+      done: operations.some(({ op }) => doc.toolpaths.has(op.id)),
       onclick: () => actions.generate(),
     },
   ];
 
+  // nothing to look at yet: the viewport says where a part comes from
+  ui.setEmpty?.(!steps[0].done);
   if (steps.every((s) => s.done)) return ui.setHint(null);
   const next = steps.findIndex((s) => !s.done);
   ui.setHint(steps.map((step, i) => ({
@@ -531,6 +550,9 @@ function boot() {
   ctx.actions = actions;  // needs to be visible before renderTree runs
   ctx.ui = buildLayout(document.getElementById('app'), actions, ctx.doc.project);
   ctx.viewport = new Viewport(ctx.ui.viewport);
+  // the viewport has always said when the view changed; now the bar hears it
+  ctx.viewport.onViewChange = (name) => ctx.ui.setActiveView(name);
+  ctx.ui.setActiveView(ctx.viewport.viewName);
   ctx.applySettings = applySettings;
   ctx.hintStyle = getSetting('hintStyle');
   ctx.doc.addEventListener('change', (e) => refresh(e.detail.kind));
@@ -538,6 +560,8 @@ function boot() {
   // Every key lives in shortcuts.js, so the help dialog and the bindings come
   // from one table and cannot drift apart.
   bindShortcuts(window, ctx);
+  // and every file the toolbar can open can also be dropped on the window
+  installDropImport(ctx);
 
   // Only when the session is being kept. With the switch off, the file left
   // behind by the last session that kept one was restored on every reload
@@ -589,7 +613,9 @@ function showBuildBadge() {
   badge.target = '_blank';
   badge.rel = 'noopener';
   badge.title = `CNCAM build ${BUILD.revision} — click for the repository`;
-  document.body.append(badge);
+  // at the end of the status line, which gives way to it, rather than floating
+  // over the line and covering the end of whatever it was saying
+  (document.querySelector('.status') ?? document.body).append(badge);
 }
 
 /**

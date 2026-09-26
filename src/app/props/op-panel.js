@@ -132,7 +132,7 @@ export function opSections(doc, op, app) {
   for (const group of activeGroups) {
     const fields = group.fields.filter((f) => paramApplies(f, op));
     if (fields.length === 0) continue;
-    rows.push(el('h2', {}, [group.title]));
+    rows.push(el('h2', {}, [group.titleFor?.(op) || group.title]));
     for (const f of fields) rows.push(paramRow(doc, op, f, app));
   }
   return rows;

@@ -33,6 +33,7 @@ import { reportRows } from './props/reports.js';
 import { fieldRow } from './props/fields.js';
 import { setupSections } from './props/setup-panel.js';
 import { opSections } from './props/op-panel.js';
+import { removalOf } from './item-labels.js';
 
 const FIELDS = {
   model: [
@@ -118,7 +119,7 @@ const FIELDS = {
       hint: 'How far it can work into a hole or a groove before the overhang is '
         + 'more than it can hold. Boring stops here rather than chattering.',
     },
-    { path: 'cornerRadius', label: 'Corner radius', type: 'number', when: (t) => t.type === 'bull' },
+    { path: 'cornerRadius', label: 'Corner radius (mm)', type: 'number', when: (t) => t.type === 'bull' },
     { path: 'tipAngle', label: 'Tip angle (°)', type: 'number', when: isPointed },
     {
       path: 'pitch', label: 'Pitch (mm)', type: 'number',
@@ -150,7 +151,7 @@ const FIELDS = {
       hint: 'The width of the groove the blade cuts — the material it takes out '
         + 'of the bar with every part.',
     },
-    { path: 'fluteLength', label: 'Flute length', type: 'number', min: 0, when: (t) => !isLatheTool(t.type) },
+    { path: 'fluteLength', label: 'Flute length (mm)', type: 'number', min: 0, when: (t) => !isLatheTool(t.type) },
     {
       path: 'flutes', label: 'Flutes', type: 'number', min: 1, step: 1, integer: true,
       when: (t) => !isLatheTool(t.type),
@@ -159,7 +160,7 @@ const FIELDS = {
     // M3 S0 and feeds a stopped cutter into the work; a 0 feed was quietly
     // replaced by the plunge feed. See op-status.js opPreflight for a tool that
     // arrives with one from an older file.
-    { path: 'spindleRpm', label: 'Spindle (RPM)', type: 'number', min: 1 },
+    { path: 'spindleRpm', label: 'Spindle RPM', type: 'number', min: 1 },
     { path: 'feedCut', label: 'Feed (mm/min)', type: 'number', min: 1 },
     { path: 'feedPlunge', label: 'Plunge (mm/min)', type: 'number', min: 1 },
   ],
@@ -336,30 +337,30 @@ export function renderProps(container, doc, app = {}) {
   if (kind === 'setup') rows.push(...setupSections(doc, item, app));
   if (kind === 'op') rows.push(...opSections(doc, item, app));
   if (kind === 'fixture') {
-    rows.push(el('div', { class: 'prop-note' }, [
-      'Every operation in this setup keeps the cutter out of this area, grown by '
-      + 'the tool radius. Positions are in setup coordinates — the same numbers '
-      + 'the G-code uses, so measure from the part zero.',
+    // A chuck is not an area on the table with a tool radius round it; it is a
+    // pair of jaws on the bar that the turning passes stop short of.
+    rows.push(el('div', { class: 'prop-note' }, [isChuck(item)
+      ? 'Every turning pass in this setup stops short of the jaws and the chuck '
+        + 'body. Z is along the bar in setup coordinates — the same numbers the '
+        + 'G-code uses, so measure from the part zero.'
+      : 'Every operation in this setup keeps the cutter out of this area, grown by '
+        + 'the tool radius. Positions are in setup coordinates — the same numbers '
+        + 'the G-code uses, so measure from the part zero.',
     ]));
   }
 
   if (kind === 'drawing') rows.push(...drawingSummary(doc, item, app));
 
-  const kindLabel = {
-    model: 'Model',
-    drawing: 'Drawing',
-    tool: 'Tool',
-    setup: 'Setup',
-    op: 'Operation',
-    fixture: 'Clamp',
-  }[kind];
+  // Worded by the same table as the tree's menu and the status line after it —
+  // "Remove tool" here and "Delete Tool" there was one action with two names,
+  // and a chuck was offered as "Delete Clamp".
   rows.push(el('div', { class: 'prop-row', style: 'margin-top: 12px' }, [
     el('button', {
       class: 'danger',
       // deleteSelected confirms first where the deletion reaches past this row;
       // never fall through to a second, unconfirmed delete when it returns
       onclick: () => (app.actions ? app.actions.deleteSelected() : doc.removeSelected()),
-    }, [`Delete ${kindLabel}`]),
+    }, [removalOf(kind, item).label]),
   ]));
 
   container.replaceChildren(el('h2', {}, ['Properties']), ...rows);

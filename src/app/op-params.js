@@ -84,16 +84,22 @@ export const ENGRAVE_MODE_LABELS = {
 
 const MILLING = ['face', 'contour2d', 'pocket', 'clear2d', 'adaptive', 'bore',
   'slot', 'parallel3d', 'waterline'];
-// Every milling strategy, including the three MILLING leaves out because they
-// take no stock allowance. Heights and clearances apply to all of them.
-const MILLING_ALL = [...MILLING, 'drill', 'chamfer', 'engrave'];
+// Every milling strategy, including the ones MILLING leaves out because they
+// take no stock allowance. Heights and clearances apply to all of them — the
+// four hole cycles included: spot, tap and thread mill each rapid at Clearance
+// Z, and three of them had no field for it, so the height the program crossed
+// the job at was the default and nothing on screen could move it.
+const HOLE_CYCLES = ['spot', 'drill', 'tap', 'threadMill'];
+const MILLING_ALL = [...MILLING, ...HOLE_CYCLES, 'chamfer', 'engrave'];
 const TURNING = ['turnFace', 'turnRough', 'turnFinish', 'turnGroove', 'turnThread',
   'turnDrill', 'turnBore', 'turnPart'];
 const CLOSED_PASSES = ['contour2d', 'pocket', 'clear2d', 'waterline'];
 // adaptive cuts closed and open passes alike, and picks its own entries, so it
 // takes a cut direction but has no use for leads; a chamfer is a single lap so
-// it wants leads but no ramp
-const DIRECTIONAL = [...CLOSED_PASSES, 'adaptive', 'chamfer', 'engrave', 'bore', 'slot'];
+// it wants leads but no ramp. A thread mill climbs or it does not — which way
+// round the helix goes is the direction and the hand together.
+const DIRECTIONAL = [...CLOSED_PASSES, 'adaptive', 'chamfer', 'engrave', 'bore', 'slot',
+  'threadMill'];
 const LEADABLE = [...CLOSED_PASSES, 'chamfer'];
 
 /**
@@ -183,13 +189,19 @@ export const HEIGHT_LABELS_BY_OP = {
 // Strategy first, and deliberately: it is what the operation *is*, and opening
 // on Heights meant every selected operation threw three translucent planes over
 // the part before you had asked anything about its depths.
+//
+// The hole cycles used to keep what they are — the pitch of a tap, the width of
+// a spot, where a drill finds its holes — on a "Drill" tab of their own, last,
+// after Speeds. Three of the four had nothing else on Strategy, so they opened
+// on Heights, which is the thing the order above exists to prevent, and the
+// fourth opened on a Strategy tab holding a lone Tolerance. Their settings are
+// on Strategy now, the same place every other operation keeps its own.
 export const OP_TABS = [
   { key: 'strategy', label: 'Strategy' },
   { key: 'heights', label: 'Heights' },
   { key: 'entry', label: 'Entry' },
   { key: 'tabs', label: 'Tabs' },
   { key: 'speeds', label: 'Speeds' },
-  { key: 'drill', label: 'Drill' },
 ];
 
 export const OP_PARAM_GROUPS = [
@@ -232,6 +244,82 @@ export const OP_PARAM_GROUPS = [
         ops: [...MILLING_ALL, 'turnDrill'],
         hint: 'How far above the surface the tool stops rapiding and starts feeding. '
           + 'Measured from the level above, so each pass only feeds one stepdown',
+      },
+    ],
+  },
+  {
+    // What a hole cycle is: where the holes come from, which of them, and the
+    // thread or the cone it puts in them. First on the Strategy tab, above the
+    // tolerance, because it is the part of the operation you came to set.
+    tab: 'strategy',
+    title: 'Drilling',
+    titleFor: (op) => ({ spot: 'Spotting', tap: 'Tapping', threadMill: 'Thread milling' })[op.type],
+    fields: [
+      {
+        key: 'drawingId', label: 'Positions from', type: 'drawing', ops: ['drill'],
+        hint: 'A DXF whose circles are the hole positions. With no drawing the '
+          + 'holes are recognised off the solid, which is what a modelled part '
+          + 'gives — but a plate is usually drawn, and a circle is how a hole '
+          + 'position arrives.',
+      },
+      {
+        key: 'depthMode', label: 'Depth', type: 'select', ops: ['drill', 'tap'],
+        options: DRILL_DEPTH_MODES, labels: DRILL_DEPTH_LABELS,
+        hint: 'Blind holes of different depths want their own floors, not one Bottom Z',
+        hintFor: (op) => (op.type === 'tap'
+          ? 'Blind holes of different depths want their own floors, not one Bottom Z. '
+            + 'Either way the tap stops its lead short of the floor.'
+          : null),
+        // a drawn circle has no floor to stop at, so there is nothing to choose
+        when: (op) => !op.params.drawingId,
+      },
+      {
+        key: 'diameterTol', label: 'Diameter match (±mm)', step: 0.1, min: 0, max: 10, ops: ['drill'],
+        hint: 'How far a hole may be from the drill diameter and still be drilled',
+      },
+      {
+        key: 'peck', label: 'Peck depth (mm)', min: 0, ops: ['drill'],
+        hint: '0 drills in one go (G81); above 0 pecks and clears chips (G83)',
+      },
+      {
+        key: 'spotDiameter', label: 'Spot across (mm)', min: 0, step: 0.1, ops: ['spot'],
+        hint: 'How wide the cone is at the surface. 0 takes it out to the hole\'s '
+          + 'own diameter, which breaks the edge as well as guiding the drill. The '
+          + 'depth is worked out from the cutter\'s point angle.',
+      },
+      {
+        key: 'threadPitch', label: 'Pitch (mm)', min: 0, step: 0.05,
+        ops: ['tap', 'threadMill'],
+        hint: 'Millimetres per turn. Left at 0 it is the cutter\'s own pitch — a tap '
+          + 'has one thread and only one, and a thread mill is sold by the pitch it '
+          + 'forms.',
+      },
+      {
+        key: 'threadHand', label: 'Hand', type: 'select', ops: ['tap', 'threadMill'],
+        options: ['right', 'left'],
+        labels: { right: 'Right hand', left: 'Left hand' },
+        hint: 'Which way the thread turns. On a tap it decides which way the spindle '
+          + 'runs; on a thread mill, which way round the helix goes.',
+      },
+      {
+        key: 'threadInternal', label: 'Thread', type: 'select', ops: ['threadMill'],
+        options: [true, false],
+        labels: { true: 'Inside a hole', false: 'Outside a boss' },
+        hint: 'Which side of the cutter forms the thread — and so whether it orbits '
+          + 'inside the diameter or outside it.',
+      },
+      {
+        key: 'diameterTol', label: 'Diameter match (±mm)', step: 0.1, min: 0, max: 10,
+        ops: ['tap'],
+        hint: 'How far a hole may be from the tapping drill and still be tapped — an '
+          + 'M6 goes in a ⌀5 hole, not a ⌀6 one',
+      },
+      {
+        // The spot drill reads it too — a pause at the bottom of the cone is
+        // what gives a clean seat for the drill — and had no field for it.
+        key: 'dwell', label: 'Dwell at depth (s)', min: 0, max: 60, ops: ['drill', 'spot'],
+        hint: 'Pause at depth to clean up the bottom of the hole (G82)',
+        when: (op) => !((op.params.peck ?? 0) > 0),
       },
     ],
   },
@@ -337,12 +425,17 @@ export const OP_PARAM_GROUPS = [
         // Chording tolerance: how far the emitted path may stray from the true
         // shape. Only the strategies that follow a *curve* have one — a groove
         // is a plunge, a thread is a straight pass, and a drill cycle is a
-        // single move, so the field was three numbers that did nothing.
-        ops: [...MILLING, 'chamfer', 'engrave', 'drill', 'turnFinish'],
+        // single move, so the field was three numbers that did nothing. A
+        // thread mill's helix is a curve, chorded to this, and was the one
+        // curve in the app nobody could set it for.
+        ops: [...MILLING, 'chamfer', 'engrave', 'drill', 'threadMill', 'turnFinish'],
         hintFor: (op) => (op.type === 'turnFinish'
           ? 'How finely the finished profile is stepped along. Smaller is a '
             + 'smoother curve and a longer program.'
-          : null),
+          : op.type === 'threadMill'
+            ? 'How closely the helix is chorded. Smaller is a rounder thread and a '
+              + 'longer program.'
+            : null),
       },
     ],
   },
@@ -388,6 +481,13 @@ export const OP_PARAM_GROUPS = [
         key: 'direction', label: 'Direction', type: 'select',
         options: CUT_DIRECTIONS, labels: CUT_DIRECTION_LABELS,
         ops: DIRECTIONAL,
+        // one helix per thread has no "whichever end is nearer" to choose
+        filterOptions: (op) => (op.type === 'threadMill'
+          ? CUT_DIRECTIONS.filter((d) => d !== 'both') : CUT_DIRECTIONS),
+        hintFor: (op) => (op.type === 'threadMill'
+          ? 'Climb is the finish and the usual choice; together with the hand it '
+            + 'decides which way round the helix goes.'
+          : null),
         hint: 'Climb is the finish; conventional is what an old machine with '
           + 'backlash wants. "Either way" lets a roughing pass take each cut '
           + 'from whichever end it is already near, which is shorter. One motion '
@@ -586,7 +686,7 @@ export const OP_PARAM_GROUPS = [
           + 'the part still finishes at Bottom Z.',
       },
       {
-        key: 'peck', label: 'Peck (mm)', min: 0, ops: ['turnPart', 'turnGroove', 'turnDrill'],
+        key: 'peck', label: 'Peck depth (mm)', min: 0, ops: ['turnPart', 'turnGroove', 'turnDrill'],
         hint: 'How far the tool goes in before backing out to clear the chip. '
           + '0 plunges the whole way, which is how blades get broken.',
       },
@@ -786,15 +886,23 @@ export const OP_PARAM_GROUPS = [
         hintFor: (op) => (op.params.spindleMode === 'css'
           ? 'Still needed: it is what the cycle time and the chip load are '
             + 'worked out from, and what a control without G96 falls back to.'
-          : null),
+          : op.type === 'tap'
+            ? 'The feed follows from this: a tap advances one pitch a turn, so it '
+              + 'feeds at this speed times the pitch, and there is no feed to set.'
+            : null),
       },
       {
+        // Not on a tap. It is posted as a spindle-synchronised cycle whose only
+        // words are the depth and the pitch; these two fields sat on its Speeds
+        // tab looking like the feed, and no value in them reached the program.
         key: 'feedCut', label: 'Feed (mm/min)', step: 10, min: 0, nullable: true,
         hint: 'Blank inherits the tool default',
+        when: (op) => op.type !== 'tap',
       },
       {
         key: 'feedPlunge', label: 'Plunge (mm/min)', step: 10, min: 0, nullable: true,
         hint: 'Blank inherits the tool default',
+        when: (op) => op.type !== 'tap',
       },
       {
         key: 'coolant', label: 'Coolant', type: 'select',
@@ -805,72 +913,6 @@ export const OP_PARAM_GROUPS = [
           + 'into the cut. Turned off again at the end of the program.',
       },
       { key: 'cuttingReport', type: 'report' },
-    ],
-  },
-  {
-    tab: 'drill',
-    title: 'Drilling',
-    fields: [
-      {
-        key: 'drawingId', label: 'Positions from', type: 'drawing', ops: ['drill'],
-        hint: 'A DXF whose circles are the hole positions. With no drawing the '
-          + 'holes are recognised off the solid, which is what a modelled part '
-          + 'gives — but a plate is usually drawn, and a circle is how a hole '
-          + 'position arrives.',
-      },
-      {
-        key: 'depthMode', label: 'Depth', type: 'select', ops: ['drill'],
-        options: DRILL_DEPTH_MODES, labels: DRILL_DEPTH_LABELS,
-        hint: 'Blind holes of different depths want their own floors, not one Bottom Z',
-        // a drawn circle has no floor to stop at, so there is nothing to choose
-        when: (op) => !op.params.drawingId,
-      },
-      {
-        key: 'diameterTol', label: 'Diameter match (±mm)', step: 0.1, min: 0, max: 10, ops: ['drill'],
-        hint: 'How far a hole may be from the drill diameter and still be drilled',
-      },
-      {
-        key: 'peck', label: 'Peck depth (mm)', min: 0, ops: ['drill'],
-        hint: '0 drills in one go (G81); above 0 pecks and clears chips (G83)',
-      },
-      {
-        key: 'spotDiameter', label: 'Spot across (mm)', min: 0, step: 0.1, ops: ['spot'],
-        hint: 'How wide the cone is at the surface. 0 takes it out to the hole\'s '
-          + 'own diameter, which breaks the edge as well as guiding the drill. The '
-          + 'depth is worked out from the cutter\'s point angle.',
-      },
-      {
-        key: 'threadPitch', label: 'Pitch (mm)', min: 0, step: 0.05,
-        ops: ['tap', 'threadMill'],
-        hint: 'Millimetres per turn. Left at 0 it is the cutter\'s own pitch — a tap '
-          + 'has one thread and only one, and a thread mill is sold by the pitch it '
-          + 'forms.',
-      },
-      {
-        key: 'threadHand', label: 'Hand', type: 'select', ops: ['tap', 'threadMill'],
-        options: ['right', 'left'],
-        labels: { right: 'Right hand', left: 'Left hand' },
-        hint: 'Which way the thread turns. On a tap it decides which way the spindle '
-          + 'runs; on a thread mill, which way round the helix goes.',
-      },
-      {
-        key: 'threadInternal', label: 'Thread', type: 'select', ops: ['threadMill'],
-        options: [true, false],
-        labels: { true: 'Inside a hole', false: 'Outside a boss' },
-        hint: 'Which side of the cutter forms the thread — and so whether it orbits '
-          + 'inside the diameter or outside it.',
-      },
-      {
-        key: 'diameterTol', label: 'Diameter match (±mm)', step: 0.1, min: 0, max: 10,
-        ops: ['tap'],
-        hint: 'How far a hole may be from the tapping drill and still be tapped — an '
-          + 'M6 goes in a ⌀5 hole, not a ⌀6 one',
-      },
-      {
-        key: 'dwell', label: 'Dwell (s)', min: 0, max: 60, ops: ['drill'],
-        hint: 'Pause at depth to clean up the bottom of the hole (G82)',
-        when: (op) => !((op.params.peck ?? 0) > 0),
-      },
     ],
   },
 ];

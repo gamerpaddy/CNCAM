@@ -461,6 +461,35 @@ array to iterate its sample points. A cursor, an unrolled loop, squared distance
 comparisons, and an early-out for cells already below anything the move can
 reach. Scrubbing 21 full-range seeks over 3.3M events costs 129ms.
 
+The 2026-09 speed round found most of the waiting outside the engine:
+
+* **Loading, 7.1s → 0.4s** on the dev server. `serve.py` listened on 127.0.0.1
+  only and spoke HTTP/1.0, so every one of some 250 requests from `localhost`
+  opened a fresh connection and waited out the browser's attempt at ::1 first.
+  It now listens on both loopbacks, keeps connections open and answers an
+  unchanged file with a 304. `sw.js` asks the network with `no-cache` rather
+  than `no-store`: still never stale, but a reload re-validates instead of
+  downloading the whole engine again for the page and each worker.
+* **Generating again only computes what changed.** The fingerprint the tree's
+  "out of date" badge already trusted decides it, so an unchanged job
+  regenerates in ~25ms instead of ~1.4s and a one-operation change waits for
+  that operation alone. Paths are drawn as each job returns.
+* **Posting the preview happens in a worker.** Printing and reading back a
+  33,000-line program cost ~0.4s of main thread after every Generate; the
+  document's toolpath store counts its own replacements (`epoch`), which is what
+  lets the viewport and the panel tell "the same program" from "a new one".
+* **Playback, 60ms → 0.1ms a frame.** The simulated surface re-uploaded every
+  vertex of its position, colour and normal buffers on every seek — even seeks
+  that moved no metal. Only the changed stretch is sent now (`markVertices` in
+  `view/simulation.js`).
+* Smaller ones: the tree re-counted every toolpath's moves on every redraw
+  (16ms → 1ms; the cache was keyed by a `{xy, z}` object made fresh on each
+  call, so it never hit at first); the backplot is built straight into typed
+  arrays (38ms → 10ms); drop-cutter rows are walked as clipped runs (−20% on
+  parallel finishing); waterline keeps each silhouette's offset (−40% with a
+  flat cutter). All of these give byte-identical output — the tests in
+  `src/test/speed.test.js` hold them to the slow way.
+
 **Output** — generation in Web Workers → viewport backplot + time estimate →
 **LinuxCNC post** (T/M6, G43, G81/G82/G83 canned cycles, G80), GRBL (drills
 expanded long-hand, dwells as G4) or **Lathe** (G18 G7, X in diameter, T0101,

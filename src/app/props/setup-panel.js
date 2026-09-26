@@ -258,8 +258,7 @@ export function setupSections(doc, setup, app) {
   rows.push(...jobSummarySection(doc, setup), el('h2', {}, ['Orientation']));
   rows.push(orientationPresetRow(doc, setup));
   for (const f of ORIENTATION_FIELDS) rows.push(fieldRow(doc, setup, f, null, null, app));
-  if (milling(setup)) rows.push(...indexRows(doc, setup));
-  if (milling(setup)) rows.push(...wrapRows(doc, setup, app));
+  if (milling(setup)) rows.push(...rotaryRows(doc, setup, app));
 
   rows.push(el('h2', {}, ['Raw stock']));
   const seed = () => ensureStockShape(doc, setup);
@@ -456,6 +455,28 @@ function setZeroPoint(app, setup, mode) {
     app.ui?.setStatus?.(`Zero is now ${ORIGIN_LABELS[mode] ?? mode} — `
       + `${plural(fixtures.length, 'clamp')} moved with it, so they still hold the same place`);
   }
+}
+
+/**
+ * Indexing and wrapping, or one line saying neither is on offer.
+ *
+ * On a three-axis machine — the default, and most of them — both used to be a
+ * live checkbox with a paragraph under it explaining that ticking it would stop
+ * the setup posting. Two controls whose only effect is breaking the job, in the
+ * middle of the panel you check the billet and the zero on, is noise with a
+ * trap in it. They come back, with their warnings, the moment either is on —
+ * a project opened on a smaller machine has to be able to turn them off.
+ */
+function rotaryRows(doc, setup, app) {
+  const machine = doc.machineRecord();
+  if (indexKind(machine) === '3-axis' && !setup.index?.enabled && !setup.wrap?.enabled) {
+    return [el('div', { class: 'prop-note' }, [
+      `${machine?.name ?? 'This machine'} has no rotary axes, so this setup is held `
+      + 'as the orientation above says. Add them in Machines → Rotary axes (or pick '
+      + 'the 4-/5-axis preset) to index a tilted face or wrap a program round a bar.',
+    ])];
+  }
+  return [...indexRows(doc, setup), ...wrapRows(doc, setup, app)];
 }
 
 /**

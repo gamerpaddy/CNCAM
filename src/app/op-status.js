@@ -200,12 +200,39 @@ function earlierFingerprints(doc, op, setup) {
  * @returns null when the operation has not been generated, otherwise the stats
  *   from engine/toolpath.js plus the display strings the panels want
  */
+/**
+ * What a toolpath adds up to, worked out once.
+ *
+ * A toolpath is never edited, only replaced, so its move count, its lengths and
+ * its time at a given rapid rate are facts about the object. They were being
+ * re-counted from every move on every redraw of the tree — each operation's
+ * badge on each document change, which on a finishing program is a walk over
+ * several hundred thousand moves to show the same eight numbers again.
+ */
+const statsCache = new WeakMap();   // cl -> Map(rapid rates -> stats)
+function statsOf(cl, rapidFeed) {
+  let byFeed = statsCache.get(cl);
+  if (!byFeed) {
+    byFeed = new Map();
+    statsCache.set(cl, byFeed);
+  }
+  // by value: the machine's rates come back as a new { xy, z } on every ask
+  const key = typeof rapidFeed === 'object' && rapidFeed
+    ? `${rapidFeed.xy}|${rapidFeed.z}` : String(rapidFeed);
+  let stats = byFeed.get(key);
+  if (!stats) {
+    stats = toolpathStats(cl, rapidFeed);
+    byFeed.set(key, stats);
+  }
+  return stats;
+}
+
 export function opStatus(doc, op) {
   const cl = doc.toolpaths.get(op.id);
   if (!cl) return null;
   // the chosen machine's rapid rate — a "10 minute" program becomes 30 if the
   // rapids are assumed five times slower than they are
-  const stats = toolpathStats(cl, doc.rapidFeed());
+  const stats = statsOf(cl, doc.rapidFeed());
   const setup = doc.findSetupOf(op.id);
   const stale = doc.fingerprints.get(op.id) !== opFingerprint(doc, op, setup);
   return {
@@ -528,7 +555,7 @@ function earlierEnabledOp(setup, op) {
 function estimatedPerimeter(doc, op) {
   const cl = doc.toolpaths.get(op.id);
   if (cl) {
-    const stats = toolpathStats(cl);
+    const stats = statsOf(cl, 3000);
     if (stats.cutLength > 0) return stats.cutLength;
   }
   const setup = doc.findSetupOf(op.id);

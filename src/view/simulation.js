@@ -28,6 +28,7 @@ const EXCESS_FAR = new THREE.Color(0x14448c);
 const GOUGE_NEAR = new THREE.Color(0xff9a80);
 const GOUGE_FAR = new THREE.Color(0xa60d00);
 const UNJUDGED = new THREE.Color(0x6c6c6c);   // no part over this cell to judge against
+const SHADE = new THREE.Color();              // scratch for the shades in between — see cellColor
 
 /**
  * How much excess saturates the blue, in millimetres.
@@ -143,6 +144,39 @@ const SURFACE_ROUGHNESS = 0.55;
  * `updateGridNormals` computes the exact height-grid normal, which points *up*,
  * onto a grid that was wound facing down.
  */
+/**
+ * Send only these vertices of an attribute to the GPU on the next frame.
+ *
+ * `needsUpdate` on its own uploads the whole buffer, and the stock surface is
+ * a few hundred thousand vertices with three attributes that move: every frame
+ * of playback re-sent some twenty megabytes to change the few hundred cells the
+ * cutter had just passed over — and re-sent them on frames where nothing had
+ * changed at all. That, not the simulation, was the whole of a playback frame:
+ * sixty milliseconds of upload around a tenth of a millisecond of work.
+ *
+ * Ranges accumulate until the frame is drawn (three merges the ones that
+ * touch), so several writers in one frame each mark what they wrote.
+ *
+ * @param first first vertex written, inclusive
+ * @param last last vertex written, inclusive — nothing when last < first
+ */
+function markVertices(attribute, first, last) {
+  if (!(last >= first)) return;
+  const size = attribute.itemSize;
+  attribute.addUpdateRange(first * size, (last - first + 1) * size);
+  attribute.needsUpdate = true;
+}
+
+/**
+ * The whole attribute, as a range like any other: a bare `needsUpdate` beside
+ * another writer's range would be cut down to that range and upload nothing
+ * else.
+ */
+function markAll(attribute) {
+  attribute.addUpdateRange(0, attribute.array.length);
+  attribute.needsUpdate = true;
+}
+
 function writeQuad(index, q, mask, width, hole, up) {
   const i = q % (width - 1);
   const j = (q - i) / (width - 1);
@@ -406,12 +440,14 @@ export class SimulationView {
     // standing in for a hole.
     if (!judged[cell] || z <= this.sim.stockBottom + 1e-6) return UNJUDGED;
     const over = z - high[cell];
+    // One colour worked in, not a new one per cell: the caller copies it out
+    // at once, and a repaint asks a hundred thousand times.
     if (over > tolerance) {
-      return EXCESS_NEAR.clone().lerp(EXCESS_FAR, Math.min((over - tolerance) / EXCESS_FULL, 1));
+      return SHADE.copy(EXCESS_NEAR).lerp(EXCESS_FAR, Math.min((over - tolerance) / EXCESS_FULL, 1));
     }
     const under = low[cell] - z;
     if (under > tolerance) {
-      return GOUGE_NEAR.clone().lerp(GOUGE_FAR, Math.min((under - tolerance) / GOUGE_FULL, 1));
+      return SHADE.copy(GOUGE_NEAR).lerp(GOUGE_FAR, Math.min((under - tolerance) / GOUGE_FULL, 1));
     }
     return ON_MODEL;
   }
@@ -639,9 +675,11 @@ export class SimulationView {
         color[v + 2] = color[src + 2];
       }
     });
-    attrs.position.needsUpdate = true;
-    attrs.normal.needsUpdate = true;
-    attrs.color.needsUpdate = true;
+    const first = this.capBase * rings;
+    const last = (this.capBase + this.capOf.length) * rings - 1;
+    markVertices(attrs.position, first, last);
+    markVertices(attrs.normal, first, last);
+    markVertices(attrs.color, first, last);
   }
 
   /**
@@ -655,7 +693,28 @@ export class SimulationView {
   updateGridNormals(changed) {
     const { width, height } = this.sim;
     const topCount = width * height;
-    const touched = new Set();
+    // A scrub across most of the program moves most of the grid, and gathering
+    // the neighbourhood of every one of those cells cost more than rewriting
+    // every normal there is — a fifth of a second on a jump end to end.
+    if (changed.size > topCount / 4) {
+      this.writeGridNormals(range(topCount));
+      return;
+    }
+    // Which cells are already listed, by stamping them with this call's number
+    // rather than asking a Set: a scrub of thirty thousand cells asks two
+    // hundred thousand times.
+    if (this.normalStamp?.length !== topCount) {
+      this.normalStamp = new Uint32Array(topCount);
+      this.normalCall = 0;
+    }
+    const stamp = this.normalStamp;
+    const call = ++this.normalCall;
+    const touched = [];
+    const touch = (cell) => {
+      if (stamp[cell] === call) return;
+      stamp[cell] = call;
+      touched.push(cell);
+    };
     for (const cell of changed) {
       if (cell >= topCount) continue;
       const i = cell % width;
@@ -665,8 +724,8 @@ export class SimulationView {
       // of the two. It is a cross rather than a block because the bearing is
       // measured along the two axes separately.
       for (let d = -WALL_REACH; d <= WALL_REACH; d++) {
-        if (i + d >= 0 && i + d < width) touched.add(cell + d);
-        if (j + d >= 0 && j + d < height) touched.add(cell + d * width);
+        if (i + d >= 0 && i + d < width) touch(cell + d);
+        if (j + d >= 0 && j + d < height) touch(cell + d * width);
       }
     }
     this.writeGridNormals(touched);
@@ -722,8 +781,12 @@ export class SimulationView {
       if (b === null) return a;
       return Math.abs(a) <= Math.abs(b) ? a : b;
     };
+    let first = Infinity;
+    let last = -1;
     for (const cell of cells) {
       if (mask[cell] === 0) continue;
+      if (cell < first) first = cell;
+      if (cell > last) last = cell;
       const i = cell % width;
       const j = (cell - i) / width;
       const row = j * width;
@@ -738,8 +801,8 @@ export class SimulationView {
       wall.array[cell * 2] = wx;
       wall.array[cell * 2 + 1] = wy;
     }
-    normal.needsUpdate = true;
-    wall.needsUpdate = true;
+    markVertices(normal, first, last);
+    markVertices(wall, first, last);
   }
 
   /**
@@ -762,7 +825,11 @@ export class SimulationView {
       if (i > 0) touched.add(cell - 1);
       if (i < count - 1) touched.add(cell + 1);
     }
+    let first = Infinity;
+    let last = -1;
     for (const cell of touched) {
+      if (cell < first) first = cell;
+      if (cell > last) last = cell;
       const base = cell < count ? 0 : count;
       const i = cell - base;
       const lo = Math.max(0, i - 1);
@@ -776,7 +843,7 @@ export class SimulationView {
         normal.array[v + 2] = -slope * scale;
       }
     }
-    normal.needsUpdate = true;
+    markVertices(normal, first * rings, last * rings + rings - 1);
   }
 
   /**
@@ -1031,11 +1098,20 @@ export class SimulationView {
    */
   update(playback, changed) {
     if (!this.surface) return;
+    // most frames of a slow playback move no metal at all
+    if (!changed || changed.size === 0) return;
     if (this.sim.kind === 'turn') return this.updateTurned(playback, changed);
     const position = this.surface.geometry.attributes.position;
     const color = this.surface.geometry.attributes.color;
     const { stockBottom } = this.sim;
+    // what was written, as two runs: the cells, and the rim walls hung off them
+    let first = Infinity;
+    let last = -1;
+    let rimFirst = Infinity;
+    let rimLast = -1;
     for (const cell of changed) {
+      if (cell < first) first = cell;
+      if (cell > last) last = cell;
       // Never below the bottom of the billet: there is no stock down there to
       // draw. A cell taken to the bottom is not a very deep floor, it is a hole
       // — see updateHoles, which takes it out of the mesh entirely.
@@ -1048,10 +1124,16 @@ export class SimulationView {
       // stayed at its original height and the cut looked like a lid taken off
       // a box whose sides had not moved.
       const skirt = this.skirtOf?.[cell] ?? -1;
-      if (skirt >= 0) position.array[skirt * 3 + 2] = top;
+      if (skirt >= 0) {
+        position.array[skirt * 3 + 2] = top;
+        if (skirt < rimFirst) rimFirst = skirt;
+        if (skirt + 1 > rimLast) rimLast = skirt + 1;
+      }
     }
-    position.needsUpdate = true;
-    color.needsUpdate = true;
+    markVertices(position, first, last);
+    markVertices(position, rimFirst, rimLast);
+    markVertices(color, first, last);
+    markVertices(color, rimFirst, rimLast);
     this.updateHoles(playback, changed);
     // the normals are derived from the positions that just moved — and only
     // from those, which is what keeps playback interactive
@@ -1097,7 +1179,7 @@ export class SimulationView {
     const color = this.surface.geometry.attributes.color;
     const cells = this.sim.width * this.sim.height;
     for (let cell = 0; cell < cells; cell++) this.paintCell(playback, cell, color.array);
-    color.needsUpdate = true;
+    markAll(color);
   }
 
   /**
@@ -1145,7 +1227,11 @@ export class SimulationView {
 
     const topIndex = this.surface.geometry.index;
     const baseIndex = this.base?.geometry.index;
+    let first = Infinity;
+    let last = -1;
     for (const q of dirty) {
+      if (q < first) first = q;
+      if (q > last) last = q;
       const i = q % quadsWide;
       const j = (q - i) / quadsWide;
       const a = j * width + i;
@@ -1154,8 +1240,13 @@ export class SimulationView {
       writeQuad(topIndex.array, q, mask, width, hole, true);
       if (baseIndex) writeQuad(baseIndex.array, q, mask, width, hole, false);
     }
+    // six indices to a quad
+    topIndex.addUpdateRange(first * 6, (last - first + 1) * 6);
     topIndex.needsUpdate = true;
-    if (baseIndex) baseIndex.needsUpdate = true;
+    if (baseIndex) {
+      baseIndex.addUpdateRange(first * 6, (last - first + 1) * 6);
+      baseIndex.needsUpdate = true;
+    }
   }
 
   /**
@@ -1172,7 +1263,11 @@ export class SimulationView {
     const color = this.surface.geometry.attributes.color;
     const { initial, count } = this.sim;
     const rings = this.rings;
+    let first = Infinity;
+    let last = -1;
     for (const cell of changed) {
+      if (cell < first) first = cell;
+      if (cell > last) last = cell;
       const r = playback.current[cell];
       // the outside is cut when it shrinks; a bore is cut when it grows
       const cut = cell < count
@@ -1185,8 +1280,8 @@ export class SimulationView {
         this.paint(color.array, v, cut ? MACHINED : RAW, a);
       }
     }
-    position.needsUpdate = true;
-    color.needsUpdate = true;
+    markVertices(position, first * rings, last * rings + rings - 1);
+    markVertices(color, first * rings, last * rings + rings - 1);
     this.updateTurnedNormals(changed, playback.current);
     // the ends are copies of four of those rings and have to follow them
     if (this.capOf?.some((cell) => changed.has?.(cell) ?? false)) {

@@ -9,32 +9,43 @@
 import { el } from './layout.js';
 import { shortcutGroups } from './shortcuts.js';
 
-/** The order of a 3-axis job, and why each step is where it is. */
+/**
+ * The order of a 3-axis job, and why each step is where it is.
+ *
+ * Every control named here is named the way it is labelled on screen. This
+ * sent people looking for an "Open Model" button and a "Tool Library" that the
+ * toolbar has never had — it says Model… and Tools… — which is a help page
+ * describing a different program.
+ */
 const WORKFLOW = [
   ['Pick the machine', 'Mill or lathe on the left of the toolbar; the machine '
     + 'itself in the dropdown beside it. Its travel, rapid rate and spindle '
     + 'range are what every estimate and every limit warning are measured '
     + 'against — set them once, in Machines (Ctrl+M).'],
-  ['Import the model', 'STEP, IGES, STL or OBJ. Ctrl+I, or Open Model. A .dxf '
+  ['Import the model', 'STEP, IGES, STL or OBJ: Model… on the toolbar, + Import in '
+    + 'the tree, or Ctrl+I. A .dxf '
     + 'comes in the same way and lands as a *drawing* on the stock — curves to '
     + 'engrave rather than a solid to machine.'],
-  ['Pull the cutters', 'Tool Library. Every cutter is drawn to scale, so a bull '
+  ['Pull the cutters', 'Tools… on the toolbar, or Library beside Tools in the tree; '
+    + '+ New builds one that is not in it. Every cutter is drawn to scale, so a bull '
     + 'nose and a ball are told apart by shape. A lathe shows lathe tooling and '
     + 'a mill shows end mills; drills and centre drills are in both. Cutters sit '
     + 'in catalogues — two built in, plus any of your own, which can be exported '
     + 'to a file and imported anywhere.'],
   ['Describe the setup', 'Raw stock as a size, how the part is fixtured, where the '
     + 'controller\'s zero sits, and any clamps the tool has to keep out of.'],
-  ['Add operations, in machining order', 'Face, rough, profile, holes, chamfer, '
-    + 'finish. Drag rows in the tree to reorder — the order is the program. '
-    + 'Double-click a row to rename it.'],
+  ['Add operations, in machining order', 'A, or + Add operation… under the setup. '
+    + 'Face, rough, profile, holes, chamfer, finish. Drag rows in the tree to '
+    + 'reorder — the order is the program. Double-click a row to rename it.'],
   ['Generate and look at it', 'Ctrl+G. Each operation reports what it cut; an "!" '
     + 'means it has something to say — it cut nothing, or it cut but skipped '
     + 'something — and hovering it says what. The setup panel says whether the '
     + 'whole program fits the machine.'],
   ['Simulate', 'S. Watch the stock come off, scrub back and forth. Detail and '
     + 'what the viewport draws are in Options (Ctrl+,).'],
-  ['Post and export', 'Ctrl+E. The dialect comes from the machine you chose.'],
+  ['Post and export', 'Export… — or Ctrl+E for the whole program in one file. The '
+    + 'same menu writes a file per operation, and an operation\'s own menu in the '
+    + 'tree exports just that one. The dialect comes from the machine you chose.'],
 ];
 
 export function openHelp(ctx) {

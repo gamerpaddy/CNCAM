@@ -16,6 +16,62 @@ const LINE_HEIGHT = 17;
 const OVERSCAN = 8;
 
 /**
+ * The colour each kind of word is shown in: motion and modes, machine
+ * functions, where the tool goes, how fast, which tool — and comments, which
+ * step back. Read the way a program is read, by scanning a column of G words
+ * for the one that changes, so that is the one that is brightest.
+ */
+const WORD_CLASS = {
+  G: 'gc-g', M: 'gc-m',
+  X: 'gc-ax', Y: 'gc-ax', Z: 'gc-ax', A: 'gc-ax', B: 'gc-ax', C: 'gc-ax', U: 'gc-ax', W: 'gc-ax',
+  I: 'gc-arc', J: 'gc-arc', K: 'gc-arc', R: 'gc-arc',
+  F: 'gc-f', S: 'gc-f',
+  T: 'gc-t', H: 'gc-t', D: 'gc-t',
+  N: 'gc-n',
+  P: 'gc-p', Q: 'gc-p', L: 'gc-p', E: 'gc-p',
+};
+const NUMBER_CHAR = /[-+0-9.]/;
+
+/**
+ * One line of G-code as coloured words. Only the rows on screen are ever drawn,
+ * so this runs a few dozen times a scroll, never over the whole program.
+ */
+function highlighted(line) {
+  const out = [];
+  let plain = '';
+  const flush = () => { if (plain) { out.push(plain); plain = ''; } };
+  let i = 0;
+  while (i < line.length) {
+    const ch = line[i];
+    if (ch === '(') {
+      const close = line.indexOf(')', i);
+      const stop = close < 0 ? line.length : close + 1;
+      flush();
+      out.push(el('span', { class: 'gc-c' }, [line.slice(i, stop)]));
+      i = stop;
+    } else if (ch === ';') {
+      flush();
+      out.push(el('span', { class: 'gc-c' }, [line.slice(i)]));
+      break;
+    } else {
+      const kind = WORD_CLASS[ch.toUpperCase()];
+      let j = i + 1;
+      if (kind) while (j < line.length && NUMBER_CHAR.test(line[j])) j++;
+      if (kind && j > i + 1) {
+        flush();
+        out.push(el('span', { class: kind }, [line.slice(i, j)]));
+        i = j;
+      } else {
+        plain += ch;
+        i++;
+      }
+    }
+  }
+  flush();
+  return out;
+}
+
+/**
  * Show the posted program.
  *
  * Only the rows you can see are in the DOM. A program is tens of thousands of
@@ -58,7 +114,7 @@ export function renderGcodePanel(container, program, ctx) {
       rows.push(el('div', {
         class: i === selected ? 'gcode-line selected' : 'gcode-line',
         'data-line': String(i),
-      }, [`${String(i + 1).padStart(5)}  ${lines[i]}`]));
+      }, [el('span', { class: 'gc-ln' }, [String(i + 1).padStart(5)]), '  ', ...highlighted(lines[i])]));
     }
     window_.style.transform = `translateY(${first * LINE_HEIGHT}px)`;
     window_.replaceChildren(...rows);

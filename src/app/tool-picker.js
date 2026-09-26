@@ -415,21 +415,24 @@ export function openToolPicker({
 
     const builtin = BUILTIN_CATALOGS.find((c) => c.id === selected);
     const own = mine.find((c) => c.id === selected);
+    // Named for what they act on. "New…", "Import…" and "Export…" up here sat
+    // over "+ New tool…", "Import to project…" and "Export project tools" down
+    // at the bottom, and nothing said the top three were about catalogues.
     const buttons = [
       el('button', {
         title: 'A new, empty drawer to keep cutters in',
         onclick: newCatalog,
-      }, ['New…']),
+      }, ['New catalogue…']),
       ...(files ? [el('button', {
         title: 'Read a catalogue file into a drawer of your own',
         onclick: importCatalog,
-      }, ['Import…'])] : []),
+      }, ['Import catalogue…'])] : []),
       ...(files ? [el('button', {
         title: selected === ALL
           ? 'Write every cutter you have to one file'
           : `Write ${builtin?.name ?? own?.name} to a file`,
         onclick: exportCatalog,
-      }, ['Export…'])] : []),
+      }, [selected === ALL ? 'Export all…' : 'Export catalogue…'])] : []),
     ];
     if (own) {
       buttons.push(
@@ -576,7 +579,7 @@ export function openToolPicker({
       el('button', {
         title: 'Write this project’s tools to a file',
         onclick: () => { dialog.close(); onExport?.(); },
-      }, ['Export project tools']),
+      }, ['Export project tools…']),
       el('span', { class: 'lib-hint' }, ['double-click a cutter to add just that one']),
       el('span', { class: 'spacer' }),
       el('button', { onclick: () => dialog.close() }, ['Cancel']),

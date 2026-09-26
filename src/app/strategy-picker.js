@@ -78,11 +78,39 @@ export function openStrategyPicker({
 
   accept.addEventListener('click', () => { dialog.close(); onPick?.(chosen); });
 
+  // The keyboard gets the same dialog the mouse does. It opened with focus on
+  // the scrolling list rather than on a card, so Enter — the one key anybody
+  // presses to accept the choice already highlighted — did nothing, and the
+  // cards could be reached only by tabbing through every one of them. Now focus
+  // is the choice: arrows move it through the cards in the order they are laid
+  // out, and Enter on a card takes it, as a double-click does.
+  const order = laidOut.map((c) => c.type).filter((t) => nodes.has(t));
+  for (const [type, node] of nodes) {
+    node.addEventListener('focus', () => select(type));
+  }
+  dialog.addEventListener('keydown', (e) => {
+    const card = e.target.closest?.('.strategy-card');
+    if (!card) return;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      dialog.close();
+      onPick?.(chosen);
+      return;
+    }
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const at = order.indexOf(chosen);
+    const next = order[Math.max(0, Math.min(order.length - 1, at + step))];
+    nodes.get(next)?.focus();
+    nodes.get(next)?.scrollIntoView?.({ block: 'nearest' });
+  });
+
   dialog.append(
     el('h2', {}, [title]),
     el('div', { class: 'lib-body' }, groups),
     el('div', { class: 'lib-actions' }, [
-      el('span', { class: 'lib-hint' }, ['Double-click a card to pick it straight away']),
+      el('span', { class: 'lib-hint' }, ['Double-click a card, or press Enter, to pick it straight away']),
       el('span', { class: 'spacer' }),
       el('button', { type: 'button', onclick: () => dialog.close() }, ['Cancel']),
       accept,
@@ -93,6 +121,7 @@ export function openStrategyPicker({
   document.body.append(dialog);
   dialog.showModal();
   select(chosen);
+  nodes.get(chosen)?.focus({ preventScroll: true });
   // scrolling the current choice into view matters when changing a strategy —
   // otherwise the dialog opens on "Face" whatever the operation actually is
   nodes.get(chosen)?.scrollIntoView?.({ block: 'nearest' });

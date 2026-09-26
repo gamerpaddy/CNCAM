@@ -202,8 +202,13 @@ export function makeFileActions(ctx, program) {
    * there is nothing to lose.
    */
 
-  async function openProject() {
-    const file = await openFile(ACCEPT.project);
+  /**
+   * @param file an already-read { name, buffer } — a file dropped on the
+   *   window. The toolbar passes nothing and gets the dialog.
+   */
+  async function openProject(file = null) {
+    // eslint-disable-next-line no-param-reassign
+    file ??= await openFile(ACCEPT.project);
     if (!file) return;
     try {
       const { models, restored } = doc.loadJSON(new TextDecoder().decode(file.buffer));

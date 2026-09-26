@@ -24,6 +24,7 @@
 // frame would snap it back to the start of that step and it would never leave.
 
 import { el } from './layout.js';
+import { icon } from './icons.js';
 import { PlaybackClock } from '../engine/simulate.js';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4, 10, 50];
@@ -38,7 +39,11 @@ export function buildTimeline(onSeek, onClose) {
   let bands = [];          // { name, from, to, step } per operation, in seconds
 
   const slider = el('input', { type: 'range', min: '0', max: '0', value: '0', step: '1' });
-  const playButton = el('button', { class: 'sim-play', title: 'Play / pause' }, ['▶']);
+  const playButton = el('button', {
+    class: 'sim-btn sim-play', title: 'Play / pause (Space)', 'aria-label': 'Play',
+  }, [icon('play')]);
+  // which drawing the play button has, so it is only redrawn when that changes
+  let showingPause = false;
   const timeLabel = el('span', { class: 'sim-time' }, ['0:00 / 0:00']);
   const speedSelect = el('select', { title: 'Playback speed' },
     SPEEDS.map((s) => el('option', { value: String(s) }, [`${s}×`])));
@@ -72,7 +77,11 @@ export function buildTimeline(onSeek, onClose) {
   const render = () => {
     const at = Math.min(clock_?.seconds ?? 0, totalSeconds);
     timeLabel.textContent = `${formatClock(at)} / ${formatClock(totalSeconds)}`;
-    playButton.textContent = playing ? '❚❚' : '▶';
+    if (showingPause !== playing) {
+      showingPause = playing;
+      playButton.replaceChildren(icon(playing ? 'pause' : 'play'));
+      playButton.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+    }
     playButton.classList.toggle('playing', playing);
     // which band the playhead is in — by time, since that is what it holds
     const inside = bands.findIndex((b) => at >= b.from - 1e-9 && at < b.to);
@@ -295,18 +304,36 @@ export function buildTimeline(onSeek, onClose) {
 
   const root = el('div', { id: 'sim', class: 'collapsed' }, [
     el('span', { class: 'sim-label' }, ['Simulation']),
-    el('button', { title: 'Back to start', onclick: () => jump(-Infinity) }, ['⏮']),
-    el('button', { title: 'Step back', onclick: () => jump(-1) }, ['◀']),
-    playButton,
-    el('button', { title: 'Step forward', onclick: () => jump(1) }, ['▶|']),
-    el('button', { title: 'Jump to end', onclick: () => jump(Infinity) }, ['⏭']),
+    // The two single steps are mirror images of each other. Step back used to
+    // be a bare ◀ — the Play button turned round — beside a ▶| going forward.
+    // The keys are in the shortcut table, which is where these titles read them.
+    // Drawn, not typed: ⏮ and |◀ came from two different fonts at two sizes,
+    // and |◀ broke onto two lines whenever its button was a pixel too narrow.
+    el('div', { class: 'sim-transport' }, [
+      el('button', {
+        class: 'sim-btn', title: 'Back to start (Home)', 'aria-label': 'Back to start', onclick: () => jump(-Infinity),
+      }, [icon('skip-back')]),
+      el('button', {
+        class: 'sim-btn', title: 'Step back one move (←)', 'aria-label': 'Step back', onclick: () => jump(-1),
+      }, [icon('step-back')]),
+      playButton,
+      el('button', {
+        class: 'sim-btn', title: 'Step forward one move (→)', 'aria-label': 'Step forward', onclick: () => jump(1),
+      }, [icon('step-forward')]),
+      el('button', {
+        class: 'sim-btn', title: 'Jump to end (End)', 'aria-label': 'Jump to end', onclick: () => jump(Infinity),
+      }, [icon('skip-forward')]),
+    ]),
     speedSelect,
     el('div', { class: 'sim-track' }, [slider, bandStrip]),
     currentLabel,
     loadLabel,
     verifyLabel,
     timeLabel,
-    el('button', { class: 'sim-close', title: 'Close simulation', onclick: () => { setPlaying(false); onClose(); } }, ['✕']),
+    el('button', {
+      class: 'sim-btn sim-close', title: 'Close simulation', 'aria-label': 'Close simulation',
+      onclick: () => { setPlaying(false); onClose(); },
+    }, [icon('close')]),
   ]);
 
   return {
@@ -327,6 +354,9 @@ export function buildTimeline(onSeek, onClose) {
       root.classList.add('collapsed');
     },
     get visible() { return !root.classList.contains('collapsed'); },
+    /** What the keys do — the same as the buttons, see shortcuts.js. */
+    togglePlay() { setPlaying(!playing); },
+    step(delta) { jump(delta); },
   };
 }
 

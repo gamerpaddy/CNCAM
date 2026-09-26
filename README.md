@@ -80,6 +80,9 @@ circles, arcs, ellipses and B-splines, which you then place on the billet and
 engrave. That is how you cut a logo, a part number or a fold line, none of which
 are features of the part.
 
+Any of these can be dragged onto the window instead of opened from the toolbar —
+and so can a `.cncam` project, or a G-code file to check.
+
 ### Milling operations
 
 | Group | Operations |
@@ -180,6 +183,11 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
   different tools; the picture is what tells them apart. It is kept with the tool,
   so it travels into the catalogue, an exported library and the project.
 * Export the whole program or one operation at a time.
+* **Generate recomputes only what changed.** Every operation remembers what it
+  was generated from, and one whose settings, tool, stock and model are all as
+  they were keeps its toolpath — so changing one stepover in a ten-operation job
+  waits for that one operation, not the whole job. Paths are drawn as each one
+  finishes. Shift+click on Generate recomputes everything.
 * Each machine carries its own **start and end G-code** — the work offset it homes
   into, an air blast, the `G53 G0 Z0` that parks the head where the vice is
   reachable. Written verbatim, after the safety header and before the end of

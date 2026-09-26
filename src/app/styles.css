@@ -1,17 +1,40 @@
 :root {
-  --bg: #1c1e22;
-  --bg-panel: #24262b;
-  --bg-hover: #2e3138;
-  --border: #35383f;
-  --fg: #d6d8dd;
-  --fg-dim: #8a8e98;
-  --accent: #4a9eff;
-  --danger: #ff5c5c;
+  /* Dark native controls: scroll bars, the drop-down list of a <select>, date
+     pickers. Without it every dialog's scroll bar and every open drop-down was
+     a white strip in the middle of a dark window. */
+  color-scheme: dark;
+  accent-color: var(--accent);
+
+  /* Four depths, darkest furthest back: what is recessed into a panel (fields,
+     lists, the G-code), the panels, what stands on them (buttons), and the
+     same raised a little more under the pointer. */
+  --bg: #15171b;
+  --bg-panel: #1e2126;
+  --bg-raised: #272b32;
+  --bg-hover: #30353d;
+  --border: #2d3139;
+  --border-strong: #3a3f49;
+  --fg: #e2e5ea;
+  --fg-dim: #8d94a1;
+  --accent: #4c9dff;
+  --accent-hover: #6aafff;
+  --accent-soft: rgba(76, 157, 255, 0.14);
+  --danger: #ff6464;
   --warn: #f0b429;
-  font-size: 14px;
+  --ok: #5cc486;
+  --radius: 6px;
+  --ring: 0 0 0 2px rgba(76, 157, 255, 0.5);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --mono: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  font-size: 13px;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* Thin, dark, and only as loud as the content under them. */
+* { scrollbar-width: thin; }
+html { scrollbar-color: #3d434d transparent; }
 
 /* The reset above also took the browser's `margin: auto` off a modal dialog,
    which is the whole of what centres one — so every dialog in the app opened
@@ -21,9 +44,10 @@ dialog { margin: auto; }
 html, body, #app { height: 100%; overflow: hidden; }
 
 body {
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
   background: var(--bg);
   color: var(--fg);
+  -webkit-font-smoothing: antialiased;
 }
 
 /* The panels are sized by custom properties so a splitter drag is one style
@@ -48,9 +72,10 @@ body {
 /* --- splitters ---------------------------------------------------------- */
 
 .splitter {
-  background: var(--border);
+  background: #131519;
   position: relative;
   z-index: 3;
+  transition: background-color 0.12s;
 }
 .splitter-x { grid-area: lsplit; cursor: col-resize; }
 .splitter-x ~ .splitter-x { grid-area: rsplit; }
@@ -78,12 +103,41 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   grid-area: sim;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  background: var(--bg-panel);
-  border-top: 1px solid var(--border);
+  gap: 10px;
+  padding: 7px 12px;
+  background: linear-gradient(180deg, #22262c, #1d2025);
+  border-top: 1px solid #121418;
+  box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.03) inset;
 }
 #sim.collapsed { display: none; }
+
+/* The five transport buttons, as one control. */
+.sim-transport {
+  display: flex;
+  gap: 1px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  flex: 0 0 auto;
+}
+#sim .sim-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--fg-dim);
+}
+#sim .sim-btn:hover { background: var(--bg-hover); color: var(--fg); }
+#sim .sim-btn .icon { width: 15px; height: 15px; }
+#sim .sim-play { width: 36px; color: var(--fg); }
+#sim .sim-play.playing { background: var(--accent); color: #fff; border-color: var(--accent); }
+#sim .sim-close { margin-left: 2px; }
 
 .sim-label {
   font-size: 11px;
@@ -92,8 +146,6 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   color: var(--fg-dim);
   margin-right: 4px;
 }
-#sim button { padding: 4px 9px; }
-#sim button.playing { border-color: var(--accent); color: var(--accent); }
 #sim select {
   background: var(--bg-hover);
   color: var(--fg);
@@ -102,7 +154,6 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   padding: 4px 6px;
   font: inherit;
 }
-.sim-close { margin-left: 4px; }
 
 .sim-time {
   font: 12px Consolas, monospace;
@@ -277,9 +328,9 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background: #17181c;
+  background: #131519;
   border-top: 1px solid var(--border);
-  font: 12px/1.45 Consolas, monospace;
+  font: 12px/1.45 var(--mono);
   white-space: pre;
 }
 #gcode.collapsed { display: none; }
@@ -318,33 +369,50 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 }
 .gcode-line:hover { background: var(--bg-hover); color: var(--fg); }
 .gcode-line.selected { background: #1a3a5c; color: #fff; }
+
+/* the words of a line, by kind — see gcode-panel.js WORD_CLASS */
+.gc-ln { color: #545b66; user-select: none; }
+.gc-g { color: #6cb6ff; }
+.gc-m { color: #d2a8ff; }
+.gc-ax { color: #d7dce3; }
+.gc-arc { color: #9ecbff; }
+.gc-f { color: #ffab70; }
+.gc-t { color: #7ee2a0; }
+.gc-n { color: #6e7681; }
+.gc-p { color: #b4c6e0; }
+.gc-c { color: #7d8590; font-style: italic; }
+.gcode-line.selected .gc-ln { color: #9fb6d3; }
 .gcode-empty { padding: 6px 10px; color: var(--fg-dim); font-style: italic; }
 
 .toolbar select {
-  background: var(--bg-hover);
+  height: 30px;
+  background: var(--bg);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 0 8px;
   font: inherit;
 }
 
 .toolbar {
   grid-area: toolbar;
+  position: relative;
+  z-index: 4;
   display: flex;
-  gap: 6px;
+  gap: 2px;
   align-items: center;
-  padding: 6px 8px;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border);
+  padding: 6px 10px;
+  background: linear-gradient(180deg, #22262c, #1d2025);
+  border-bottom: 1px solid #121418;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
   /* The bar wraps onto a second row rather than scrolling. Scrolling was chosen
      to stop buttons being squeezed until their labels ran onto three lines —
      but that is prevented by the two rules below, not by the scrolling, and the
-     scrolling cost more than it saved: the bar needs 1295px and an ordinary
-     1280px laptop screen put Clear, Open and Save past the right-hand edge,
-     behind an overlay scrollbar that shows nothing until you already know to
-     look. A control you cannot see is worse than a bar one row taller.
-     `row-gap` is what keeps the two rows from touching. */
+     scrolling cost more than it saved: an ordinary 1280px laptop screen put
+     Clear, Open and Save past the right-hand edge, behind an overlay scrollbar
+     that shows nothing until you already know to look. A control you cannot see
+     is worse than a bar one row taller. The icons are what keep it to one row:
+     a narrow window drops the words, never the buttons (see .tb-label). */
   flex-wrap: wrap;
   row-gap: 6px;
 }
@@ -353,7 +421,39 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
    why wrapping cannot bring back the three-line labels. */
 .toolbar > * { flex: 0 0 auto; }
 .toolbar button, .toolbar label { white-space: nowrap; }
-.toolbar .machine-select { flex: 0 1 200px; min-width: 96px; max-width: 220px; }
+.toolbar .machine-select { flex: 0 1 200px; min-width: 110px; max-width: 220px; margin-left: 4px; }
+
+/* A toolbar button is quiet until it is pointed at: the words and icons are the
+   bar, and a row of boxed buttons is a row of boxes. */
+.toolbar .tb {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg);
+}
+.toolbar .tb:hover:not(:disabled) { background: var(--bg-hover); border-color: transparent; }
+.toolbar .tb:active:not(:disabled) { background: #282c33; }
+.toolbar .tb .icon { flex: 0 0 auto; color: var(--fg-dim); transition: color 0.12s; }
+.toolbar .tb:hover:not(:disabled) .icon { color: var(--fg); }
+.toolbar .tb-icon { width: 32px; padding: 0; justify-content: center; }
+.toolbar .tb:disabled { opacity: 0.35; }
+.toolbar .tb.danger { color: var(--fg); }
+.toolbar .tb.danger:hover:not(:disabled) { background: rgba(255, 100, 100, 0.12); }
+.toolbar .tb.danger:hover:not(:disabled) .icon { color: var(--danger); }
+/* a panel that is open says so on the button that opens it */
+.toolbar .tb-toggle.on { background: var(--accent-soft); color: var(--accent); }
+.toolbar .tb-toggle.on .icon { color: var(--accent); }
+
+.tb-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 6px;
+  background: var(--border-strong);
+}
 
 .toolbar .toggle {
   display: flex;
@@ -368,47 +468,79 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 /* Pushes everything after it to the right-hand end of its row. */
 .toolbar .spacer { flex: 1 1 auto; min-width: 0; }
 .toolbar .brand {
-  font-weight: 600;
-  letter-spacing: 1px;
-  margin-right: 12px;
-  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  font-size: 12px;
+  margin: 0 10px 0 2px;
+  color: var(--fg);
   text-decoration: none;
 }
-.toolbar .brand:hover { text-decoration: underline; }
+.toolbar .brand:hover { color: #fff; }
+/* the mark: a cutter's end, seen from below — a disc with two flutes */
+.brand-mark {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background:
+    conic-gradient(from 20deg, transparent 0 60deg, rgba(10, 14, 22, 0.55) 60deg 90deg,
+      transparent 90deg 240deg, rgba(10, 14, 22, 0.55) 240deg 270deg, transparent 270deg),
+    linear-gradient(135deg, #7cc0ff, #3b7de8);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12) inset, 0 2px 6px rgba(76, 157, 255, 0.35);
+}
 
-/* The bar needs 1321px to stand in one row, and 67px of that is a wordmark
-   that does nothing. On a 1280px screen keeping it costs a second row — 43px
-   taken off the viewport, permanently, to say the name of the app you are
-   looking at. Below the width where everything fits without it, it goes. */
+/* The bar needs about 1330px to stand in one row with every word on it, and
+   67px of that is a wordmark that does nothing. Below that it goes first; then
+   the words of the buttons that are least often read (the icons stay, and so
+   does the tooltip); then the rest, so a 1000px window still has every button
+   on one row. */
 @media (max-width: 1330px) {
   .toolbar .brand { display: none; }
 }
+@media (max-width: 1280px) {
+  .toolbar .tb-early .tb-label { display: none; }
+  .toolbar .tb-early { width: 32px; padding: 0; justify-content: center; }
+}
+@media (max-width: 1000px) {
+  .toolbar .tb-late .tb-label { display: none; }
+  .toolbar .tb-late { width: 32px; padding: 0; justify-content: center; }
+  .tb-sep { margin: 0 3px; }
+}
 
-button {
-  background: var(--bg-hover);
+/* The base look of every button, at no specificity at all — `:where` — so that
+   any button with a class of its own (a tab, a card, a row that is really a
+   button) is styled by that class and nothing here has to be fought. */
+:where(button) {
+  background: var(--bg-raised);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
   padding: 5px 12px;
   cursor: pointer;
   font: inherit;
+  line-height: 1.25;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s, box-shadow 0.12s;
 }
-button:hover { border-color: var(--accent); }
+:where(button):where(:hover:not(:disabled)) { background: var(--bg-hover); border-color: #4a505b; }
+:where(button):where(:active:not(:disabled)) { background: #22262c; }
 button:disabled { opacity: 0.4; cursor: default; }
 button.danger { color: var(--danger); }
-button.danger:hover { border-color: var(--danger); }
+button.danger:hover:not(:disabled) { border-color: var(--danger); background: rgba(255, 100, 100, 0.1); }
 
 .panel {
   background: var(--bg-panel);
   overflow-y: auto;
-  padding: 8px;
+  padding: 10px;
 }
 .panel h2 {
-  font-size: 11px;
+  font-size: 10.5px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--fg-dim);
-  margin: 10px 0 6px;
+  letter-spacing: 1.1px;
+  color: #7d8491;
+  margin: 14px 0 6px;
 }
 .panel h2:first-child { margin-top: 2px; }
 
@@ -420,8 +552,8 @@ button.danger:hover { border-color: var(--danger); }
 .tree-body { display: block; }
 
 .tree-item {
-  padding: 3px 6px;
-  border-radius: 3px;
+  padding: 4px 7px;
+  border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -429,9 +561,16 @@ button.danger:hover { border-color: var(--danger); }
   display: flex;
   align-items: center;
   gap: 6px;
+  transition: background-color 0.1s;
 }
 .tree-item:hover { background: var(--bg-hover); }
-.tree-item.selected { background: var(--accent); color: #fff; }
+/* Lit, not filled: the row is still a row of the list, with an edge in the
+   accent colour to say which one. */
+.tree-item.selected {
+  background: linear-gradient(90deg, rgba(76, 157, 255, 0.34), rgba(76, 157, 255, 0.2));
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: #fff;
+}
 .tree-item.disabled { color: var(--fg-dim); font-style: italic; }
 .tree-empty { color: var(--fg-dim); font-style: italic; padding: 3px 6px; }
 .tree-toggle { flex: 0 0 auto; width: 13px; height: 13px; accent-color: var(--accent); }
@@ -490,77 +629,138 @@ input.tree-rename:focus { outline: none; }
 }
 .tree-add:hover { color: var(--accent); border-color: var(--accent); border-style: solid; }
 
+/* A button that reads as a row: keyboard-reachable, but not a boxed control in
+   the middle of a list of operations. */
 .tree-add-op {
+  display: block;
+  width: 100%;
+  text-align: left;
   padding: 3px 6px 3px 22px;
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--fg-dim);
   font-style: italic;
   cursor: pointer;
   border-radius: 3px;
 }
-.tree-add-op:hover { background: var(--bg-hover); color: var(--accent); }
+.tree-add-op:hover { background: var(--bg-hover); color: var(--accent); border-color: transparent; }
+.tree-add-op:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; color: var(--accent); }
 
-#viewport { grid-area: viewport; position: relative; min-width: 0; min-height: 0; }
+#viewport {
+  grid-area: viewport;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* The backdrop the part stands in front of: lighter above, where the light
+     comes from, and falling away to the floor. Drawn by the page, not by WebGL,
+     because the browser dithers a gradient and a canvas bands one. */
+  background:
+    radial-gradient(120% 85% at 50% 28%, rgba(96, 128, 176, 0.10), transparent 62%),
+    linear-gradient(180deg, #272c34 0%, #1b1e23 58%, #131518 100%);
+}
 #viewport canvas { display: block; }
 #viewport-canvas { position: absolute; inset: 0; }
 
 /* Buttons floating at the bottom of the viewport — the actions belong where
    the user is already looking, not on a distant toolbar. */
+/* Everything that floats over the part is one kind of thing: a dark glass tile
+   with a soft shadow, so it reads as lying on top of the scene and not as a
+   hole cut in it. */
+.viewport-overlay,
+.view-presets,
+.viewport-tools > button {
+  background: rgba(20, 22, 27, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  backdrop-filter: blur(10px) saturate(1.15);
+}
+
 .viewport-overlay {
   position: absolute;
   left: 50%;
-  bottom: 14px;
+  bottom: 16px;
   transform: translateX(-50%);
   display: flex;
-  gap: 8px;
+  gap: 6px;
   padding: 6px;
-  background: rgba(24, 26, 30, 0.85);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  backdrop-filter: blur(6px);
+  border-radius: 12px;
   z-index: 2;
 }
-.viewport-overlay button { padding: 6px 16px; }
+.viewport-overlay button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 16px 0 13px;
+  border-radius: 8px;
+}
+.viewport-overlay button:not(.primary) { background: rgba(255, 255, 255, 0.06); border-color: transparent; }
+.viewport-overlay button:not(.primary):hover { background: rgba(255, 255, 255, 0.12); }
 /* while a job runs, the buttons that would start another one stand down */
 .viewport-overlay.busy button { opacity: 0.5; pointer-events: none; }
+.viewport-overlay button .icon { transition: transform 0.2s var(--ease); }
+.viewport-overlay button:hover .icon { transform: scale(1.12); }
 
 /* View tools sit top-right, out of the way of the part but always reachable. */
+/* Held inside the viewport: pinned to both edges and wrapping, so a narrow
+   viewport stacks the bar instead of running it out over the tree. The strip
+   itself lets clicks through to the part; only the buttons take them. */
 .viewport-tools {
   position: absolute;
   top: 10px;
   right: 10px;
+  left: 10px;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: flex-start;
   gap: 6px;
   z-index: 2;
+  pointer-events: none;
 }
-.viewport-tools button {
-  padding: 4px 10px;
+.viewport-tools > * { pointer-events: auto; }
+.viewport-tools > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px 0 9px;
   font-size: 12px;
-  background: rgba(24, 26, 30, 0.85);
-  backdrop-filter: blur(6px);
+  border-radius: 9px;
 }
+.viewport-tools > button:hover { background: rgba(40, 44, 52, 0.9); border-color: rgba(255, 255, 255, 0.12); }
+.viewport-tools > button .icon { color: var(--fg-dim); }
+.viewport-tools > button:hover .icon { color: var(--fg); }
 
 /* The named views, as a segmented control: one decision, several answers. */
 .view-presets {
   display: flex;
+  flex-wrap: wrap;
   gap: 1px;
-  padding: 2px;
-  background: rgba(24, 26, 30, 0.85);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  backdrop-filter: blur(6px);
+  padding: 3px;
+  border-radius: 9px;
 }
 .view-presets .view-preset {
-  padding: 2px 9px;
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
   font-size: 12px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: 6px;
   color: var(--fg-dim);
 }
 .view-presets .view-preset:hover {
   color: var(--fg);
   background: var(--bg-hover);
   border-color: transparent;
+}
+/* the view the camera is square-on in, until an orbit leaves it */
+.view-presets .view-preset.active {
+  color: #fff;
+  background: rgba(76, 157, 255, 0.28);
 }
 
 /* A toggle has to look like one: struck through and dimmed when it is off, so
@@ -640,16 +840,28 @@ input.tree-rename:focus { outline: none; }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 10px;
-  background: var(--bg-panel);
-  border-top: 1px solid var(--border);
+  min-height: 26px;
+  padding: 4px 12px;
+  background: #181a1e;
+  border-top: 1px solid #121418;
   color: var(--fg-dim);
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
 }
-.status span:last-child { overflow: hidden; text-overflow: ellipsis; }
-.status .error { color: var(--danger); }
+.status > span:not(.busy) { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.status .error { color: #ff8a80; }
+.status .error::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 6px rgba(255, 100, 100, 0.6);
+  vertical-align: 1px;
+}
 
 /* A job is running. Silence for several seconds reads as a hang, and a hang
    invites a second click that queues a second identical job. */
@@ -671,16 +883,17 @@ input.tree-rename:focus { outline: none; }
   .busy.on { animation: none; border-color: var(--accent); }
 }
 
-.prop-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+.prop-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
 .prop-row label { flex: 0 0 110px; color: var(--fg-dim); }
 .prop-row input, .prop-row select {
   flex: 1;
   min-width: 0;
+  height: 26px;
   background: var(--bg);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 3px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  padding: 0 7px;
   font: inherit;
 }
 .prop-row input[type="checkbox"] { flex: 0 0 auto; width: 15px; height: 15px; accent-color: var(--accent); }
@@ -742,11 +955,24 @@ button.pick-active {
   max-height: 86vh;
   background: var(--bg-panel);
   color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
 }
-.lib-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+.lib-dialog::backdrop { background: rgba(8, 10, 14, 0.58); }
+/* A dialog arrives rather than appears: a short rise and fade, over before the
+   pointer has reached anything in it. */
+.lib-dialog[open] { animation: dialog-in 0.16s var(--ease); }
+.lib-dialog[open]::backdrop { animation: fade-in 0.16s ease-out; }
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .lib-dialog[open], .lib-dialog[open]::backdrop, .context-menu { animation: none; }
+}
 .lib-dialog h2 {
   font-size: 11px;
   text-transform: uppercase;
@@ -882,7 +1108,15 @@ button.pick-active {
 
 .lib-actions { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
 .lib-actions .spacer { flex: 1; }
-button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, 0 2px 8px rgba(76, 157, 255, 0.25);
+}
+button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+button.primary:active:not(:disabled) { background: #3b8cf0; }
 
 /* --- tabs on the operation properties panel --- */
 
@@ -947,26 +1181,28 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .context-menu {
   position: fixed;
   min-width: 180px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 3px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.6);
+  background: rgba(30, 33, 38, 0.97);
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  padding: 4px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(8px);
   z-index: 1000;
+  animation: fade-in 0.1s ease-out;
 }
 .context-item {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 5px 10px;
+  padding: 6px 10px;
   background: transparent;
   border: none;
   color: var(--fg);
-  border-radius: 3px;
+  border-radius: 6px;
   cursor: pointer;
   font: inherit;
 }
-.context-item:hover { background: var(--bg-hover); border-color: transparent; }
+.context-item:hover { background: var(--accent-soft); border-color: transparent; }
 .context-item.danger { color: var(--danger); }
 .context-sep {
   height: 1px;
@@ -1015,6 +1251,23 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
   min-width: 16px;
   text-align: center;
   line-height: 14px;
+}
+
+/* still being generated: a small spinner where the time will go */
+.tree-badge.pending {
+  width: 12px;
+  height: 12px;
+  min-width: 0;
+  padding: 0;
+  margin-right: 3px;
+  border-radius: 50%;
+  background: transparent;
+  border: 2px solid rgba(74, 158, 255, 0.25);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tree-badge.pending { animation: none; border-color: var(--accent); }
 }
 
 /* --- program summary on a setup --- */
@@ -1070,8 +1323,14 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
   gap: 8px;
 }
+/* A column, not a block: a <button> centres its content vertically whatever
+   its display says, so in a row of cards stretched to the tallest one every
+   shorter card floated its icon and name down to the middle. */
 .strategy-card {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: stretch;
   text-align: left;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -1150,11 +1409,7 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 
 /* --- help dialog --- */
 
-.help-button {
-  font-weight: 700;
-  min-width: 26px;
-  padding: 3px 0;
-}
+.help-button { font-weight: 700; }
 .help-dialog { width: min(920px, 95vw); }
 .help-body { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; max-height: 62vh; }
 .help-column { min-width: 0; }
@@ -1263,19 +1518,20 @@ kbd {
   display: flex;
   gap: 2px;
   padding: 2px;
-  margin-right: 10px;
+  margin-right: 4px;
+  height: 30px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .machine-tab {
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
-  padding: 3px 14px;
+  border-radius: 6px;
+  padding: 0 14px;
   color: var(--fg-dim);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .machine-tab:hover { color: var(--fg); background: var(--bg-hover); }
@@ -1283,10 +1539,11 @@ kbd {
 .machine-tab.active {
   background: var(--accent);
   border-color: var(--accent);
-  color: #0b0d10;
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(76, 157, 255, 0.35);
 }
 
-.machine-tab.active:hover { background: var(--accent); color: #0b0d10; }
+.machine-tab.active:hover { background: var(--accent); color: #fff; }
 
 /* --- the tool list ------------------------------------------------------
    Compact rows with the cutter laid on its side. A tool list is read by
@@ -1580,6 +1837,9 @@ kbd {
   line-height: 1;
 }
 
+/* an icon in a button with words beside it sits on the words' centre line */
+button > .icon { flex: 0 0 auto; vertical-align: -3px; }
+
 /* Head, body, action bar — a column, so the bar is the bottom of the dialog and
    not the end of the scroll.
 
@@ -1683,7 +1943,7 @@ kbd {
 .options-row .prop-hint { max-width: 62ch; }
 
 /* the caret that opens the rest of the views */
-.view-presets .view-more { padding: 2px 6px; }
+.view-presets .view-more { padding: 0 4px; }
 
 /* --- hover help ---------------------------------------------------------- */
 
@@ -1766,15 +2026,14 @@ kbd {
 .field-art .art-note { fill: #767b85; font: 7.5px system-ui, sans-serif; }
 .field-art .art-label { fill: #8a8e98; font: 8px system-ui, sans-serif; }
 
-/* Build stamp, bottom-right — which build is deployed, out of the way until you
-   look for it. Sits above the viewport but below dialogs; the pointer passes
-   through the gap around it so it never eats a click on the canvas. */
+/* Build stamp, at the right-hand end of the status line — which build is
+   deployed, out of the way until you look for it. In the line rather than
+   floating over it: fixed to the corner, it covered the end of every long
+   status message, which is usually the part that says what to do. */
 #build-badge {
-  position: fixed;
-  right: 8px;
-  bottom: 6px;
-  z-index: 5;
-  padding: 2px 7px;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 1px 7px;
   font: 11px "Segoe UI", system-ui, sans-serif;
   color: var(--fg-dim);
   background: color-mix(in srgb, var(--bg-panel) 82%, transparent);
@@ -1945,3 +2204,105 @@ kbd {
 .gcode-preset-row > input { flex: 1; min-width: 0; }
 .gcode-preset-row > button { flex: 0 0 auto; white-space: nowrap; }
 .gcode-preset-scope { margin-top: 2px; }
+
+/* --- fields and focus, for everything ------------------------------------
+   At the end of the file on purpose: a field's own rule sets its border, and a
+   focus ring has to win that tie by coming later. */
+
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) {
+  transition: border-color 0.12s, box-shadow 0.12s, background-color 0.12s;
+}
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea):hover {
+  border-color: #464c57;
+}
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+button:focus-visible,
+a:focus-visible,
+input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+::selection { background: rgba(76, 157, 255, 0.35); }
+
+/* --- a file being dragged over the window --------------------------------- */
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(10, 14, 22, 0.55);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s, visibility 0.12s;
+}
+.drop-overlay.on { opacity: 1; visibility: visible; }
+.drop-card {
+  max-width: 460px;
+  padding: 28px 32px;
+  text-align: center;
+  background: rgba(30, 33, 38, 0.92);
+  border: 2px dashed var(--accent);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+.drop-title { font-size: 18px; font-weight: 600; color: #fff; margin-bottom: 6px; }
+.drop-detail { color: var(--fg-dim); line-height: 1.5; }
+
+/* --- an empty job ---------------------------------------------------------- */
+
+.viewport-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s, visibility 0.2s;
+}
+.viewport-empty.on { opacity: 1; visibility: visible; }
+.viewport-empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 340px;
+  padding: 22px 26px;
+  text-align: center;
+  background: rgba(20, 22, 27, 0.72);
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+.viewport-empty-card .icon { color: var(--accent); }
+.viewport-empty-title { font-size: 15px; font-weight: 600; color: var(--fg); }
+.viewport-empty-detail { color: var(--fg-dim); line-height: 1.5; }
+
+/* a button that reads as a link inside a sentence */
+button.link-button {
+  display: inline;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+button.link-button:hover { color: var(--accent-hover); background: none; }
