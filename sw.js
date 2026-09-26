@@ -6,15 +6,28 @@
 // cache expires or you Ctrl-F5. A query string on the entry script cannot fix
 // that: each nested `import` is its own request with its own cache entry.
 //
-// So this sits in front of every same-origin GET and fetches it *fresh from the
-// network* (`cache: 'no-store'` bypasses the HTTP cache), keeping the last good
-// copy only as an offline fallback. Network-first, never stale-first — the one
-// failure mode a service worker must not have is serving old code forever.
+// So this sits in front of every same-origin GET and asks the network about it
+// every time, keeping the last good copy only as an offline fallback.
+// Network-first, never stale-first — the one failure mode a service worker must
+// not have is serving old code forever.
+//
+// *Asks*, not downloads. `no-cache` sends the copy the browser already holds
+// back with its ETag, and an unchanged file comes back as an empty 304 — the
+// same freshness guarantee as `no-store`, which is what this used to use, but
+// `no-store` threw the browser's copy away and fetched every body again: about
+// 3.5MB for the page and the engine once more for each of the six workers, on
+// every load, whether anything had changed or not. It also kept the compiled
+// code cache from ever being used, since that lives beside the HTTP cache.
 //
 // It is registered from src/app/main.js with `updateViaCache: 'none'`, so the
 // worker script itself is never served from cache either.
 
 const CACHE = 'cncam-offline-v1';
+
+// Which version of each file the offline copy already holds, so an unchanged
+// file is not written to it again on every load. Lost when the worker is
+// stopped, which only costs one rewrite per file.
+const kept = new Map();
 
 self.addEventListener('install', () => self.skipWaiting());
 
@@ -33,11 +46,16 @@ self.addEventListener('fetch', (event) => {
   if (new URL(request.url).origin !== self.location.origin) return;
   event.respondWith((async () => {
     try {
-      const fresh = await fetch(request, { cache: 'no-store' });
+      const fresh = await fetch(request, { cache: 'no-cache' });
       // keep a copy for the offline fallback (Cache Storage, not the HTTP cache)
       if (fresh.ok) {
-        const cache = await caches.open(CACHE);
-        cache.put(request, fresh.clone());
+        const version = fresh.headers.get('etag')
+          ?? `${fresh.headers.get('last-modified')}|${fresh.headers.get('content-length')}`;
+        if (kept.get(request.url) !== version) {
+          kept.set(request.url, version);
+          const copy = fresh.clone();
+          event.waitUntil(caches.open(CACHE).then((cache) => cache.put(request, copy)));
+        }
       }
       return fresh;
     } catch (err) {
