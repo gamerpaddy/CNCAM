@@ -369,8 +369,16 @@ export function describeIntent(op, tool) {
   // passes of 2.86 and the sentence used to read "seven passes of 3mm" — the
   // one number in it a machinist would check against the flute length.
   const levels = p.stepdown > 0 ? depthPasses(p.topZ ?? 0, p.bottomZ ?? 0, p.stepdown) : [];
+  // The clearing strategies stop where the part does. They take the even
+  // levels down to Bottom Z only where there is still material to clear there,
+  // so over a part with a floor in it the program holds fewer: measured on a
+  // 12mm pocket in a 20mm block, a pocket, a Z-level rough and an adaptive at a
+  // 3mm stepdown each cut four even levels and the floor, where the sentence
+  // said seven. The count is an upper bound for them, and said as one; a
+  // contour follows its outline all the way down and cuts every one.
+  const bounded = FLAT_LEVELLED.has(op?.type);
   const inPasses = depth > 0 && levels.length > 0
-    ? ` in ${pluralEs(levels.length, 'pass')} of ${mm(depth / levels.length)}`
+    ? ` in ${bounded ? 'up to ' : ''}${pluralEs(levels.length, 'pass')} of ${mm(depth / levels.length)}`
       // …and a clearing strategy adds one wherever the part has a floor, which
       // is a property of the part rather than of these settings. Saying seven
       // where the program has nine is worse than not counting them at all.
@@ -405,8 +413,15 @@ export function describeIntent(op, tool) {
         ? ` Leaves ${p.tabCount} tabs of ${mm(p.tabWidth)} × ${mm(p.tabHeight)} holding it.` : '';
       return `Runs ${cutter} ${side} ${outline}, ${mm(depth)} down${inPasses}.${tabs}`;
     }
-    case 'pocket':
-      return `Clears the enclosed pockets ${mm(depth)} deep with ${cutter}${inPasses}.`;
+    case 'pocket': {
+      // The pockets are the part's, and so is how deep they go: Top Z to Bottom
+      // Z is the most this will cut, not the depth of the pockets. On a plate
+      // with an 8mm pocket the sentence said "23mm deep in 4 passes" — the
+      // heights read back as if they described the part, over a program that
+      // cut two levels.
+      return `Clears the enclosed pockets with ${cutter}, down to Z${Math.round((p.bottomZ ?? 0) * 100) / 100} `
+        + `at the deepest${inPasses ? `,${inPasses}` : ''}.`;
+    }
     case 'slot': {
       const width = (p.slotWidth ?? 0) > 0 ? p.slotWidth : (tool?.diameter ?? 0);
       const lanes = tool && width > tool.diameter
@@ -415,15 +430,15 @@ export function describeIntent(op, tool) {
         + `${(p.rampAngle ?? 0) > 0 ? `ramping in at ${p.rampAngle}°` : 'plunging in — set a ramp angle'}.`;
     }
     case 'clear2d':
-      return `Roughs everything between the stock and the part, ${mm(depth)} deep${inPasses}, `
-        + `leaving ${mm(p.stockToLeave ?? 0)} on for finishing.`;
+      return `Roughs everything between the stock and the part, down as far as `
+        + `${mm(depth)}${inPasses ? `,${inPasses}` : ''}, leaving ${mm(p.stockToLeave ?? 0)} on for finishing.`;
     case 'adaptive':
       // The bite falls back to the strategy's own default rather than to a
       // number of its own, and the depth is the depth taken rather than the
       // stepdown — which on adaptive is two whole tool diameters, so a cut
       // shallower than one pass read as the full limit.
       return `Roughs with ${cutter} at a ${Math.round((p.engagement ?? 0.15) * 100)}% radial bite, `
-        + `${mm(depth)} deep${inPasses}, leaving ${mm(p.stockToLeave ?? 0)} on.`;
+        + `down as far as ${mm(depth)}${inPasses ? `,${inPasses}` : ''}, leaving ${mm(p.stockToLeave ?? 0)} on.`;
     case 'drill':
       return `Drills every hole matching ⌀${tool?.diameter ?? '?'}±${p.diameterTol ?? 0.5}, `
         + ((p.depthMode ?? 'hole') === 'hole' ? 'each to its own floor.' : `all to Z${p.bottomZ}.`)

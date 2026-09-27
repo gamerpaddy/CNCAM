@@ -6,7 +6,7 @@
 // profile that makes the edge, a finish pass before the roughing that feeds it,
 // and the program is wrong in a way nothing in the file complains about.
 
-import { el } from './layout.js';
+import { el, dialogCloseButton } from './layout.js';
 import { shortcutGroups } from './shortcuts.js';
 
 /**
@@ -18,34 +18,38 @@ import { shortcutGroups } from './shortcuts.js';
  * describing a different program.
  */
 const WORKFLOW = [
-  ['Pick the machine', 'Mill or lathe on the left of the toolbar; the machine '
-    + 'itself in the dropdown beside it. Its travel, rapid rate and spindle '
-    + 'range are what every estimate and every limit warning are measured '
-    + 'against — set them once, in Machines (Ctrl+M).'],
-  ['Import the model', 'STEP, IGES, STL or OBJ: Model… on the toolbar, + Import in '
-    + 'the tree, or Ctrl+I. A .dxf '
-    + 'comes in the same way and lands as a *drawing* on the stock — curves to '
-    + 'engrave rather than a solid to machine.'],
+  ['Pick the machine', 'Mill or Lathe on the toolbar, then the machine itself in the '
+    + 'dropdown beside it. Its travel, rapid rate and spindle range are what every '
+    + 'estimate and every limit warning are measured against — set them once, in '
+    + 'Machines (the gear beside the dropdown, or Ctrl+M).'],
+  ['Import the model', 'STEP, IGES, STL or OBJ: Import… on the toolbar, Import beside '
+    + 'Models in the tree, Ctrl+I, or drop the file on the window. A .dxf comes in '
+    + 'the same way and lands as a *drawing* on the stock — curves to engrave rather '
+    + 'than a solid to machine.'],
   ['Pull the cutters', 'Tools… on the toolbar, or Library beside Tools in the tree; '
-    + '+ New builds one that is not in it. Every cutter is drawn to scale, so a bull '
+    + 'New builds one that is not in it. Every cutter is drawn to scale, so a bull '
     + 'nose and a ball are told apart by shape. A lathe shows lathe tooling and '
     + 'a mill shows end mills; drills and centre drills are in both. Cutters sit '
     + 'in catalogues — two built in, plus any of your own, which can be exported '
     + 'to a file and imported anywhere.'],
   ['Describe the setup', 'Raw stock as a size, how the part is fixtured, where the '
-    + 'controller\'s zero sits, and any clamps the tool has to keep out of.'],
-  ['Add operations, in machining order', 'A, or + Add operation… under the setup. '
+    + 'controller\'s zero sits, and any clamps the tool has to keep out of — '
+    + 'Clamp… under the setup in the tree.'],
+  ['Add operations, in machining order', 'A, or Operation… under the setup. '
     + 'Face, rough, profile, holes, chamfer, finish. Drag rows in the tree to '
-    + 'reorder — the order is the program. Double-click a row to rename it.'],
-  ['Generate and look at it', 'Ctrl+G. Each operation reports what it cut; an "!" '
+    + 'reorder — the order is the program. Double-click a row, or type in the name '
+    + 'at the top of the panel, to rename it.'],
+  ['Generate and look at it', 'Generate on the toolbar, or Ctrl+G — the number on it '
+    + 'is how many operations are waiting. Each operation reports what it cut; an "!" '
     + 'means it has something to say — it cut nothing, or it cut but skipped '
     + 'something — and hovering it says what. The setup panel says whether the '
     + 'whole program fits the machine.'],
-  ['Simulate', 'S. Watch the stock come off, scrub back and forth. Detail and '
-    + 'what the viewport draws are in Options (Ctrl+,).'],
-  ['Post and export', 'Export… — or Ctrl+E for the whole program in one file. The '
+  ['Simulate', 'Simulate, or S. Watch the stock come off, scrub back and forth. '
+    + 'Detail and what the viewport draws are in Options (Ctrl+,).'],
+  ['Post and export', 'Export — or Ctrl+E for the whole program in one file. The '
     + 'same menu writes a file per operation, and an operation\'s own menu in the '
-    + 'tree exports just that one. The dialect comes from the machine you chose.'],
+    + 'tree exports just that one. The dialect comes from the machine you chose. '
+    + 'New, Open and Save are under File.'],
 ];
 
 export function openHelp(ctx) {
@@ -68,6 +72,7 @@ export function openHelp(ctx) {
   ]));
 
   dialog.append(
+    dialogCloseButton(dialog),
     el('h2', {}, ['How it goes together, and every key']),
     el('div', { class: 'lib-body help-body' }, [
       el('div', { class: 'help-column' }, [

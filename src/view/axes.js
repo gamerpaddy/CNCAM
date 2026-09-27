@@ -14,10 +14,13 @@
 
 import * as THREE from 'three';
 
+// Red, green and blue for X, Y and Z, as every CAD package has them — a shade
+// off neon, so the arrows name the axes without being the loudest thing on
+// screen.
 export const AXIS_COLORS = {
-  x: 0xff5f6b,
-  y: 0x7ddb63,
-  z: 0x5aa9ff,
+  x: 0xdd6259,
+  y: 0x72b562,
+  z: 0x5b92d8,
 };
 
 /**

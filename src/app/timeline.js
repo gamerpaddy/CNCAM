@@ -127,9 +127,23 @@ export function buildTimeline(onSeek, onClose) {
   // `clock_.cursor` is the move the playhead is on, whether it got there by
   // scrubbing or by playing — which is what makes "one more move" mean the same
   // thing after either.
+  //
+  // A move that takes no time is stepped over. A program opens with several —
+  // the tool change, the spindle, a rapid to where the tool already is — and
+  // each one was a press of ▶| that moved nothing on screen: not the cutter,
+  // not the playhead, not the clock. Two dead presses at the start of every
+  // program read as a step button that does not work.
   const jump = (delta) => {
     if (playing) setPlaying(false);
-    seekStep((clock_?.cursor ?? 0) + delta);
+    if (!clock_) return;
+    let target = clock_.cursor + delta;
+    if (Number.isFinite(delta) && delta !== 0) {
+      const direction = Math.sign(delta);
+      const from = clock_.seconds;
+      const { times, stepCount: last } = clock_;
+      while (target > 0 && target < last && (times[target] ?? 0) === from) target += direction;
+    }
+    seekStep(target);
   };
 
   /**

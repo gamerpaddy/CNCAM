@@ -17,16 +17,22 @@ import { placedPaths, boundsOfPaths } from '../../engine/drawing.js';
  * Which models a setup actually machines.
  *
  * An empty `modelIds` means "everything in the project", which is the normal
- * state — nothing in the UI fills the list in. So the models a setup machines
- * are not a property of the setup at all, and anything that has to notice when
- * they change has to ask *this* question rather than read the field. That is
- * why it is a function on its own: `opFingerprint` was comparing `modelIds`,
- * which stays `[]` however many models are imported, so importing a second part
+ * state; the setup panel's Part list fills it in when a project holds more than
+ * one model and the setup is told to machine only some. Either way the models a
+ * setup machines are not simply the field, and anything that has to notice
+ * when they change has to ask *this* question rather than read it. That is why
+ * it is a function on its own: `opFingerprint` was comparing `modelIds`, which
+ * stays `[]` however many models are imported, so importing a second part
  * silently changed the stock and every toolpath in the project while every
  * operation went on reporting itself up to date.
+ *
+ * A model named in the list and since removed is not machined — and a list
+ * whose every model has gone means the setup is back to machining the part in
+ * front of you, which is what replacing a part with its next revision is.
  */
 export function setupModelIds(setup, project) {
-  return setup.modelIds?.length ? setup.modelIds : project.models.map((m) => m.id);
+  const listed = (setup.modelIds ?? []).filter((id) => project.models.some((m) => m.id === id));
+  return listed.length ? listed : project.models.map((m) => m.id);
 }
 
 export function makeSetupSpace(doc) {

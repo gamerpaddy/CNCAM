@@ -17,7 +17,25 @@ import { opIcon, OP_CATALOG } from './op-catalog.js';
 import { openStrategyPicker } from './strategy-picker.js';
 import { machineCanHold } from '../doc/tool-library.js';
 import { removalOf } from './item-labels.js';
-import { withKey } from './shortcuts.js';
+import { withKey, keyFor } from './shortcuts.js';
+import { icon } from './icons.js';
+
+// Which sections and setups are folded, by key: 'models', 'tools', 'setups',
+// or 'setup:<id>'. Module state for the same reason as the rename below — the
+// tree is rebuilt on every change — and kept in the browser, because how you
+// like your tree laid out is yours and not the job's.
+const FOLD_KEY = 'cncam.treeFolded';
+const folded = (() => {
+  try { return new Set(JSON.parse(localStorage.getItem(FOLD_KEY) ?? '[]')); } catch { return new Set(); }
+})();
+
+function isFolded(key) { return folded.has(key); }
+
+function toggleFold(doc, key) {
+  if (folded.has(key)) folded.delete(key); else folded.add(key);
+  try { localStorage.setItem(FOLD_KEY, JSON.stringify([...folded])); } catch { /* private mode */ }
+  doc.emitChange('fold');
+}
 
 // Which row is being renamed, if any.
 //
@@ -138,48 +156,39 @@ export function renderTree(container, doc, app = {}) {
   const { project, selection } = doc;
   const nodes = [];
 
-  // The same shape as the two headers below it: the section, and the way to
-  // put something in it. Once the checklist has folded away the only other way
-  // to a second model was the toolbar.
-  nodes.push(sectionHeader('Models', {
+  // The same shape as the two headers below it: the section, how many are in
+  // it, and the way to put something in it. Once the checklist has folded away
+  // the only other way to a second model was the toolbar.
+  nodes.push(sectionHeader(doc, 'Models', {
+    key: 'models',
+    count: project.models.length,
     action: {
-      label: '+ Import',
+      label: 'Import', icon: 'import',
       title: withKey('Import STEP, IGES, STL, OBJ or DXF', 'import'),
       onclick: () => app.actions?.openModel(),
     },
   }));
-  if (project.models.length === 0) nodes.push(empty('no models'));
-  for (const model of project.models) {
-    nodes.push(row(doc, 'model', model, () => doc.select('model', model.id),
-      () => menuForModel(doc, model, app)));
+  if (!isFolded('models')) {
+    if (project.models.length === 0) nodes.push(empty('No models yet'));
+    for (const model of project.models) {
+      nodes.push(row(doc, 'model', model, () => doc.select('model', model.id),
+        () => menuForModel(doc, model, app), '', 'cube'));
+    }
   }
 
   // Drawings only appear once there is one. A section reading "no drawings" on
   // every milling job is a permanent answer to a question nobody asked.
   const drawings = project.drawings ?? [];
   if (drawings.length > 0) {
-    nodes.push(sectionHeader('Drawings'));
-    for (const drawing of drawings) {
-      nodes.push(row(doc, 'drawing', drawing, () => doc.select('drawing', drawing.id),
-        () => menuForDrawing(doc, drawing, app), 'tree-drawing'));
+    nodes.push(sectionHeader(doc, 'Drawings', { key: 'drawings', count: drawings.length }));
+    if (!isFolded('drawings')) {
+      for (const drawing of drawings) {
+        nodes.push(row(doc, 'drawing', drawing, () => doc.select('drawing', drawing.id),
+          () => menuForDrawing(doc, drawing, app), 'tree-drawing', 'drawing'));
+      }
     }
   }
 
-  // Two ways in, because they are two different intentions: reach for a cutter
-  // you already have, or make one you do not.
-  nodes.push(sectionHeader('Tools', {
-    actions: [
-      {
-        label: 'Library', title: 'Pick cutters from the library',
-        onclick: () => app.actions?.addToolsFromLibrary(),
-      },
-      {
-        label: '+ New', class: 'tree-add-primary',
-        title: 'Build a cutter: pick the shape, then only the sizes it has',
-        onclick: () => app.actions?.newTool(),
-      },
-    ],
-  }));
   // Only the cutters this machine can hold. A 40mm face mill listed in a lathe
   // turret is a tool you can select, assign to a roughing pass and generate
   // nothing with — the rack is shared between the two machines, but the drawer
@@ -187,13 +196,33 @@ export function renderTree(container, doc, app = {}) {
   // centreline from the tailstock.
   const tools = project.tools.filter((t) => machineCanHold(t.type, doc.machine));
   const otherTools = project.tools.length - tools.length;
-  if (tools.length === 0) nodes.push(empty('no tools'));
-  const widest = Math.max(8, ...tools.map((t) => t.diameter || 0));
-  for (const tool of tools) {
-    nodes.push(toolRow(doc, tool, app, widest));
-  }
-  if (otherTools > 0) {
-    nodes.push(empty(`${otherTools} more for the ${doc.machine === 'turn' ? 'mill' : 'lathe'}`));
+
+  // Two ways in, because they are two different intentions: reach for a cutter
+  // you already have, or make one you do not.
+  nodes.push(sectionHeader(doc, 'Tools', {
+    key: 'tools',
+    count: tools.length,
+    actions: [
+      {
+        label: 'Library', title: 'Pick cutters from the library',
+        onclick: () => app.actions?.addToolsFromLibrary(),
+      },
+      {
+        label: 'New', icon: 'plus', class: 'tree-add-primary',
+        title: 'Build a cutter: pick the shape, then only the sizes it has',
+        onclick: () => app.actions?.newTool(),
+      },
+    ],
+  }));
+  if (!isFolded('tools')) {
+    if (tools.length === 0) nodes.push(empty('No tools yet'));
+    const widest = Math.max(8, ...tools.map((t) => t.diameter || 0));
+    for (const tool of tools) {
+      nodes.push(toolRow(doc, tool, app, widest));
+    }
+    if (otherTools > 0) {
+      nodes.push(empty(`${otherTools} more for the ${doc.machine === 'turn' ? 'mill' : 'lathe'}`));
+    }
   }
 
   // Only this machine's setups. The others are still in the project — a shaft
@@ -201,61 +230,100 @@ export function renderTree(container, doc, app = {}) {
   // but a lathe setup listed under a mill is a program you cannot run.
   const setups = doc.setups();
   const elsewhere = project.setups.length - setups.length;
-  nodes.push(sectionHeader(doc.machine === 'turn' ? 'Lathe setups' : 'Mill setups', {
+  nodes.push(sectionHeader(doc, doc.machine === 'turn' ? 'Lathe setups' : 'Mill setups', {
+    key: 'setups',
+    count: setups.length,
     action: {
-      label: '+ Setup',
+      label: 'Setup', icon: 'plus',
       title: 'Another fixturing of the part — its own stock, clamps and zero',
       onclick: () => app.actions?.addSetup(),
     },
   }));
-  if (setups.length === 0) nodes.push(empty('no setups'));
-  if (elsewhere > 0) {
-    nodes.push(empty(`${plural(elsewhere, 'setup')} on the ${doc.machine === 'turn' ? 'mill' : 'lathe'}`));
+  if (!isFolded('setups')) {
+    if (setups.length === 0) nodes.push(empty('No setups yet'));
+    if (elsewhere > 0) {
+      nodes.push(empty(`${plural(elsewhere, 'setup')} on the ${doc.machine === 'turn' ? 'mill' : 'lathe'}`));
+    }
+
+    for (const setup of setups) {
+      nodes.push(setupRow(doc, setup, app));
+      if (isFolded(`setup:${setup.id}`)) continue;
+
+      // clamps first: they constrain everything below them, and reading the
+      // setup top to bottom should say "held like this, then cut like this"
+      for (const fixture of setup.fixtures ?? []) {
+        nodes.push(fixtureRow(doc, setup, fixture, app));
+      }
+
+      for (const op of setup.operations) {
+        nodes.push(operationRow(doc, setup, op, app));
+      }
+
+      nodes.push(addRow(setup, app));
+    }
   }
 
-  for (const setup of setups) {
-    nodes.push(row(doc, 'setup', setup, () => doc.select('setup', setup.id),
-      () => menuForSetup(doc, setup, app)));
+  container.replaceChildren(...nodes);
+}
 
-    // clamps first: they constrain everything below them, and reading the
-    // setup top to bottom should say "held like this, then cut like this"
-    for (const fixture of setup.fixtures ?? []) {
-      nodes.push(fixtureRow(doc, setup, fixture, app));
-    }
-
-    for (const op of setup.operations) {
-      nodes.push(operationRow(doc, setup, op, app));
-    }
-
-    // + Add operation, right where operations live. It asks which strategy
-    // rather than always making a contour and leaving the user to retype it —
-    // the strategy is the first thing you know about an operation, and picking
-    // it afterwards used to mean re-doing the parameters as well.
-    // Buttons, not clickable text: a row you cannot Tab to is an action the
-    // keyboard cannot take, and these two are the commonest in the tree.
-    nodes.push(el('button', {
+/**
+ * What can be added to a setup, right where it goes.
+ *
+ * + Operation asks which strategy rather than always making a contour and
+ * leaving the user to retype it — the strategy is the first thing you know
+ * about an operation, and picking it afterwards used to mean re-doing the
+ * parameters as well. Buttons, not clickable text: a row you cannot Tab to is
+ * an action the keyboard cannot take, and these two are the commonest in the
+ * tree. Side by side, so a setup ends in one line of affordances rather than
+ * two more rows that look like items in it.
+ */
+function addRow(setup, app) {
+  const turning = (setup.mode ?? 'mill') === 'turn';
+  return el('div', { class: 'tree-add-row' }, [
+    el('button', {
       type: 'button',
       class: 'tree-add-op',
-      title: withKey('Choose a machining strategy', 'addOperation'),
+      title: withKey('Add an operation to this setup — choose a machining strategy', 'addOperation'),
       onclick: () => app.actions?.addOperation(setup),
-    }, ['+ Add operation…']));
-
-    const turning = (setup.mode ?? 'mill') === 'turn';
-    nodes.push(el('button', {
+    }, [icon('plus', 13), 'Operation…']),
+    el('button', {
       type: 'button',
       class: 'tree-add-op',
       title: turning
         ? 'How the bar is held, and how far along it the tool can reach'
         : 'Clamps and jaws the tool must keep out of',
-      // On a lathe there is exactly one thing to add, so the caret is a lie and
-      // the menu is a click in the way of the only answer.
+      // On a lathe there is exactly one thing to add, so a menu is a click in
+      // the way of the only answer.
       onclick: (e) => (turning
         ? app.actions?.addFixture(setup, 'chuck')
         : openContextMenu(e, holdingMenu(setup, app, turning))),
-    }, [turning ? '+ Add chuck' : '+ Add clamp ▾']));
-  }
+    }, [icon('plus', 13), turning ? 'Chuck' : 'Clamp…']),
+  ]);
+}
 
-  container.replaceChildren(...nodes);
+/**
+ * A setup's own row: the fold for what is under it, its name, and the work
+ * offset it posts in — the one thing about a setup the machine is told.
+ */
+function setupRow(doc, setup, app) {
+  const key = `setup:${setup.id}`;
+  const node = row(doc, 'setup', setup, () => doc.select('setup', setup.id),
+    () => menuForSetup(doc, setup, app), 'tree-setup', 'setup');
+  const hidden = isFolded(key);
+  const caret = el('button', {
+    type: 'button',
+    class: `tree-caret${hidden ? ' folded' : ''}`,
+    title: hidden ? 'Show what is in this setup' : 'Fold this setup away',
+    'aria-expanded': hidden ? 'false' : 'true',
+    onclick: (e) => { e.stopPropagation(); toggleFold(doc, key); },
+  }, [icon('chevron', 14)]);
+  node.prepend(caret);
+  const count = setup.operations.length;
+  node.append(el('span', {
+    class: 'tree-pill',
+    title: `Posts in ${setup.wcs ?? 'G54'}${hidden ? ` — ${plural(count, 'operation')} folded away` : ''}`,
+  }, [hidden && count ? `${count} · ${setup.wcs ?? 'G54'}` : (setup.wcs ?? 'G54')]));
+  return node;
 }
 
 /**
@@ -288,14 +356,27 @@ function holdingMenu(setup, app, turning) {
   return turning ? [chuck] : [jaw, clamp, chuck];
 }
 
-function sectionHeader(title, options = {}) {
-  const parts = [el('span', {}, [title])];
+function sectionHeader(doc, title, options = {}) {
+  const key = options.key;
+  const hidden = key ? isFolded(key) : false;
+  const parts = [el('button', {
+    type: 'button',
+    class: `tree-fold${hidden ? ' folded' : ''}`,
+    title: hidden ? `Show the ${title.toLowerCase()}` : `Fold the ${title.toLowerCase()} away`,
+    'aria-expanded': hidden ? 'false' : 'true',
+    onclick: () => key && toggleFold(doc, key),
+  }, [
+    icon('chevron', 13),
+    el('span', {}, [title]),
+    ...(options.count != null ? [el('span', { class: 'tree-count' }, [String(options.count)])] : []),
+  ])];
   for (const action of options.actions ?? (options.action ? [options.action] : [])) {
     parts.push(el('button', {
+      type: 'button',
       class: `tree-add${action.class ? ` ${action.class}` : ''}`,
       title: action.title ?? action.label,
       onclick: (e) => { e.stopPropagation(); action.onclick(); },
-    }, [action.label]));
+    }, [...(action.icon ? [icon(action.icon, 12)] : []), action.label]));
   }
   return el('h2', { class: 'tree-h2' }, parts);
 }
@@ -388,20 +469,30 @@ function renameOnDoubleClick(node, doc, item) {
   return node;
 }
 
-function row(doc, kind, item, onSelect, menuBuilder, extraClass = '') {
+function row(doc, kind, item, onSelect, menuBuilder, extraClass = '', iconName = null) {
   const selected = doc.selection?.kind === kind && doc.selection.id === item.id;
   const node = el('div', {
     class: `tree-item${selected ? ' selected' : ''}${extraClass ? ` ${extraClass}` : ''}`,
     title: `${kind === 'tool' ? `T${item.number} ` : ''}${item.name}
 Double-click to rename`,
     onclick: onSelect,
-  }, [nameCell(doc, item, { prefix: kind === 'tool' ? `T${item.number} ` : '' })]);
+  }, [
+    ...(iconName ? [kindIcon(iconName)] : []),
+    nameCell(doc, item, { prefix: kind === 'tool' ? `T${item.number} ` : '' }),
+  ]);
   node.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     onSelect();
     openContextMenu(e, menuBuilder());
   });
   return renameOnDoubleClick(node, doc, item);
+}
+
+/** The drawing at the front of a row that says what kind of thing it is. */
+function kindIcon(name) {
+  const svg = icon(name, 15);
+  svg.classList.add('tree-kind-icon');
+  return svg;
 }
 
 /**
@@ -434,25 +525,33 @@ function fixtureRow(doc, setup, fixture, app) {
     onclick: () => doc.select('fixture', fixture.id),
   }, [
     toggle,
-    el('span', { class: 'tree-op-name' }, [`${chuck ? '⊙' : '⛒'} ${fixture.name}`]),
+    kindIcon(chuck ? 'chuck' : 'clamp'),
+    nameCell(doc, fixture),
     ...(chuck ? [el('span', { class: 'tree-tool-size' }, [`⌀${fixture.clampDiameter}`])] : []),
   ]);
   node.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     doc.select('fixture', fixture.id);
-    openContextMenu(e, [
-      {
-        label: fixture.enabled === false ? 'Enable' : 'Disable',
-        onclick: () => doc.updateItem(fixture, { enabled: fixture.enabled === false }, 'toggle clamp'),
-      },
-      { separator: true },
-      {
-        label: removalOf('fixture', fixture).label, danger: true,
-        onclick: () => app?.actions?.deleteItem('fixture', fixture.id),
-      },
-    ]);
+    openContextMenu(e, menuForFixture(doc, fixture, app));
   });
-  return node;
+  // a clamp is renamed the way everything else in the tree is
+  return renameOnDoubleClick(node, doc, fixture);
+}
+
+function menuForFixture(doc, fixture, app) {
+  return [
+    renameItem(doc, fixture),
+    {
+      label: fixture.enabled === false ? 'Enable' : 'Disable',
+      hint: 'A disabled clamp is not kept out of — for working out where one can go',
+      onclick: () => doc.updateItem(fixture, { enabled: fixture.enabled === false }, 'toggle clamp'),
+    },
+    { separator: true },
+    {
+      label: removalOf('fixture', fixture).label, danger: true, keys: keyFor('delete'),
+      onclick: () => app?.actions?.deleteItem('fixture', fixture.id),
+    },
+  ];
 }
 
 function operationRow(doc, setup, op, app) {
@@ -472,20 +571,23 @@ function operationRow(doc, setup, op, app) {
   // The strategy is what the operation *is*, and until now it appeared nowhere
   // in the tree — an operation called "Finish 2" told you its author's mood and
   // nothing else. The icon puts it back without spending a line on it.
-  const icon = opIcon(op.type, 18);
-  icon.setAttribute('class', `${icon.getAttribute('class')} tree-op-icon`);
+  const strategyIcon = opIcon(op.type, 18);
+  strategyIcon.setAttribute('class', `${strategyIcon.getAttribute('class')} tree-op-icon`);
 
   const visible = doc.isPathVisible(op.id);
   const eye = el('button', {
+    type: 'button',
     class: `tree-eye${visible ? '' : ' off'}`,
     title: visible
       ? 'Hide this path in the viewport (it is still machined) — Alt-click to show only this one'
       : 'Show this path again',
+    'aria-label': visible ? 'Hide path' : 'Show path',
+    'aria-pressed': visible ? 'true' : 'false',
     onclick: (e) => {
       e.stopPropagation();
       if (e.altKey) doc.soloPath(op.id); else doc.setPathVisible(op.id, !visible);
     },
-  }, [visible ? '◉' : '○']);
+  }, [icon(visible ? 'eye' : 'eye-off', 14)]);
 
   const node = el('div', {
     class: `tree-item tree-op${selected ? ' selected' : ''}${op.enabled ? '' : ' disabled'}`
@@ -494,7 +596,7 @@ function operationRow(doc, setup, op, app) {
     onclick: () => doc.select('op', op.id),
   }, [
     toggle,
-    icon,
+    strategyIcon,
     nameCell(doc, op),
     ...statusBadges(doc, op),
     ...(doc.toolpaths.has(op.id) ? [eye] : []),
@@ -611,10 +713,30 @@ function statusBadges(doc, op) {
 
 // --- context menus per kind ---
 
+/**
+ * Everything that can be done to one item, as the menu its row opens — for the
+ * properties panel, which offers the same menu from its header. One list, so
+ * the two cannot offer different things under the same name.
+ */
+export function menuForItem(doc, kind, item, app) {
+  if (!item) return [];
+  if (kind === 'model') return menuForModel(doc, item, app);
+  if (kind === 'drawing') return menuForDrawing(doc, item, app);
+  if (kind === 'tool') return menuForTool(doc, item, app);
+  if (kind === 'setup') return menuForSetup(doc, item, app);
+  if (kind === 'fixture') return menuForFixture(doc, item, app);
+  if (kind === 'op') {
+    const setup = doc.findSetupOf(item.id);
+    return setup ? menuForOperation(doc, setup, item, app) : [];
+  }
+  return [];
+}
+
 /** The menu entry that does what a double-click on the row does. */
 function renameItem(doc, item) {
   return {
     label: 'Rename',
+    keys: keyFor('rename'),
     hint: 'Or double-click the row',
     onclick: () => beginRename(doc, item.id),
   };
@@ -624,7 +746,7 @@ function menuForModel(doc, model, app) {
   return [
     renameItem(doc, model),
     {
-      label: removalOf('model', model).label, danger: true,
+      label: removalOf('model', model).label, danger: true, keys: keyFor('delete'),
       onclick: () => app?.actions?.deleteItem('model', model.id),
     },
   ];
@@ -643,6 +765,7 @@ function menuForDrawing(doc, drawing, app) {
     {
       label: removalOf('drawing', drawing).label,
       danger: true,
+      keys: keyFor('delete'),
       hint: operations ? `${plural(operations, 'operation')} ${operations === 1 ? 'follows' : 'follow'} it` : undefined,
       onclick: () => app?.actions?.deleteItem('drawing', drawing.id),
     },
@@ -702,7 +825,7 @@ function menuForTool(doc, tool, app) {
     }] : []),
     { separator: true },
     {
-      label: removalOf('tool', tool).label, danger: true,
+      label: removalOf('tool', tool).label, danger: true, keys: keyFor('delete'),
       hint: operations ? `${plural(operations, 'operation')} ${operations === 1 ? 'uses' : 'use'} this tool` : undefined,
       onclick: () => actions?.deleteItem('tool', tool.id),
     },
@@ -713,7 +836,7 @@ function menuForSetup(doc, setup, app) {
   const turning = (setup.mode ?? 'mill') === 'turn';
   return [
     renameItem(doc, setup),
-    { label: 'Add operation…', onclick: () => app?.actions?.addOperation(setup) },
+    { label: 'Add operation…', keys: keyFor('addOperation'), onclick: () => app?.actions?.addOperation(setup) },
     ...holdingMenu(setup, app, turning).map((item) => (item.separator ? item : {
       ...item, label: `Add ${item.label.toLowerCase()}`,
     })),
@@ -725,7 +848,7 @@ function menuForSetup(doc, setup, app) {
     },
     { separator: true },
     {
-      label: removalOf('setup', setup).label, danger: true,
+      label: removalOf('setup', setup).label, danger: true, keys: keyFor('delete'),
       onclick: () => app?.actions?.deleteItem('setup', setup.id),
     },
   ];
@@ -756,13 +879,14 @@ function menuForOperation(doc, setup, op, app) {
     ...(doc.toolpaths.has(op.id) ? [
       {
         label: visible ? 'Hide this path' : 'Show this path',
+        keys: keyFor('hidePath'),
         hint: 'Only changes what is drawn — the operation is still machined',
         onclick: () => doc.setPathVisible(op.id, !visible),
       },
       { label: 'Show only this path', onclick: () => doc.soloPath(op.id) },
-      { label: 'Show every path', onclick: () => doc.showAllPaths() },
+      { label: 'Show every path', keys: keyFor('showAllPaths'), onclick: () => doc.showAllPaths() },
     ] : []),
-    { label: 'Duplicate operation', onclick: () => actions?.duplicateOperation(op) },
+    { label: 'Duplicate operation', keys: keyFor('duplicate'), onclick: () => actions?.duplicateOperation(op) },
     {
       label: 'Export this operation…',
       hint: 'A complete program of this operation alone — to prove it out on '
@@ -776,6 +900,9 @@ function menuForOperation(doc, setup, op, app) {
     ...(index < setup.operations.length - 1
       ? [{ label: 'Move down', onclick: () => actions?.moveOperation(op, 1) }] : []),
     { separator: true },
-    { label: removalOf('op', op).label, danger: true, onclick: () => actions?.deleteItem('op', op.id) },
+    {
+      label: removalOf('op', op).label, danger: true, keys: keyFor('delete'),
+      onclick: () => actions?.deleteItem('op', op.id),
+    },
   ];
 }

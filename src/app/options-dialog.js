@@ -5,7 +5,7 @@
 // you cannot see the effect of is a preference you have to guess at, and the
 // viewport is right there behind the modal.
 
-import { el } from './layout.js';
+import { el, dialogCloseButton } from './layout.js';
 import {
   SETTINGS, SETTING_GROUPS, getSetting, setSetting, resetSettings,
 } from './settings.js';
@@ -61,6 +61,7 @@ export function openOptions({ onChange, onStatus } = {}) {
 
   build();
   dialog.append(
+    dialogCloseButton(dialog),
     el('div', { class: 'lib-head' }, [
       el('h2', {}, ['Options']),
       el('span', { class: 'spacer' }),

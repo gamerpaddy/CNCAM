@@ -14,7 +14,7 @@
 
 import * as THREE from 'three';
 
-const AXIS_COLORS = { x: 0xff6b6b, y: 0x7fe08a, xy: 0xffd166 };
+const AXIS_COLORS = { x: 0xdd6259, y: 0x72b562, xy: 0xd2b35e };
 
 export class MoveGizmo {
   constructor(scene, camera, renderer, controls, requestRender = () => {}) {

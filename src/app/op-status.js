@@ -579,6 +579,16 @@ export function opBlockedReason(doc, op) {
   // a DXF is imported for — and the badge said "cannot generate: no model
   // imported" over an operation that generated perfectly well.
   if (doc.project.models.length === 0 && !op.params?.drawingId) return 'no model imported';
+  // …and one whose drawing has been removed is refused by Generate rather than
+  // quietly re-aimed at the part (see actions/program.js). It has to say so
+  // here too: its row went on showing the old path as merely out of date, the
+  // Generate button counted it as waiting, and pressing Generate then dropped
+  // it with a sentence on the status line nobody was reading.
+  if (op.params?.drawingId
+    && !(doc.project.drawings ?? []).some((d) => d.id === op.params.drawingId)) {
+    return 'the drawing it follows is no longer in the project — choose another, '
+      + 'or the part\'s own outline';
+  }
   const stale = stalePicks(doc, op);
   if (stale) {
     return `${stale === 1 ? 'a face or edge it was picked on is' : `${stale} faces or edges it was picked on are`} `

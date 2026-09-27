@@ -43,7 +43,7 @@ function strategyRow(doc, op, app) {
       el('div', { class: 'strategy-name' }, [card.label]),
       el('div', { class: 'strategy-summary' }, [card.summary]),
     ]),
-    el('span', { class: 'strategy-change' }, ['change…']),
+    el('span', { class: 'strategy-change' }, ['Change…']),
   ]);
 }
 
@@ -106,13 +106,19 @@ export function opSections(doc, op, app) {
   app.opTabs.set(op.id, tabs.some((t) => t.key === active) ? active : tabs[0].key);
   const current = app.opTabs.get(op.id);
 
+  // how many faces are picked, on the tab they are picked on — a count in a
+  // small pill rather than "(2)" in the label, which widened the one tab that
+  // pushed the row onto two lines
   const badge = (key) => {
-    if (key !== 'regions') return '';
+    if (key !== 'regions') return [];
     const picked = regionCount(op, 'include') + regionCount(op, 'avoid');
-    return picked > 0 ? ` (${picked})` : '';
+    return picked > 0 ? [el('span', { class: 'op-tab-count' }, [String(picked)])] : [];
   };
-  rows.push(el('div', { class: 'op-tabs' },
+  rows.push(el('div', { class: 'op-tabs', role: 'tablist' },
     tabs.map((t) => el('button', {
+      type: 'button',
+      role: 'tab',
+      'aria-selected': current === t.key ? 'true' : 'false',
       class: `op-tab${current === t.key ? ' active' : ''}`,
       onclick: () => {
         app.opTabs.set(op.id, t.key);
@@ -123,7 +129,7 @@ export function opSections(doc, op, app) {
         if (t.key !== 'regions' && app.pickMode) app.setPickMode?.(null);
         else app.rerenderProps?.();
       },
-    }, [`${t.label}${badge(t.key)}`]))));
+    }, [t.label, ...badge(t.key)]))));
 
   if (current === 'result') { rows.push(...resultSection(doc, op)); return rows; }
   if (current === 'regions') { rows.push(...regionSection(doc, op, app)); return rows; }

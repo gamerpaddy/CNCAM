@@ -35,9 +35,12 @@ export function makeActions(ctx) {
 
   /** Put the camera where it can see the job. The way back from a lost view. */
   function fitView() {
-    if (doc.project.models.length === 0) return ctx.ui.setStatus('Nothing to fit — import a model', true);
-    ctx.viewport.frameAll({ animate: true });
-    ctx.ui.setStatus('View fitted');
+    // asked of the viewport, which knows what is on screen: a drawing-only job
+    // has no model and a great deal to look at
+    if (!ctx.viewport.frameAll({ animate: true })) {
+      return ctx.ui.setStatus('Nothing to fit — import a model', true);
+    }
+    return ctx.ui.setStatus('View fitted');
   }
 
   /**

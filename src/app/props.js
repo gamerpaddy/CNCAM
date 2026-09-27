@@ -25,8 +25,9 @@ import {
   placedPaths, boundsOfPaths, overhangOf,
 } from '../engine/drawing.js';
 import { totalLength } from '../io/dxf.js';
+import { computeBounds } from '../geom/mesh.js';
 import {
-  toolWarnings, cuttingReadout, defaultsForType, suggestCutting,
+  toolWarnings, cuttingReadout, defaultsForType, suggestCutting, machineCanHold,
 } from '../doc/tool-library.js';
 import { toolNumberClashes } from './op-status.js';
 import { reportRows } from './props/reports.js';
@@ -34,16 +35,21 @@ import { fieldRow } from './props/fields.js';
 import { setupSections } from './props/setup-panel.js';
 import { opSections } from './props/op-panel.js';
 import { removalOf } from './item-labels.js';
+import { icon } from './icons.js';
+import { opIcon } from './op-catalog.js';
+import { openContextMenu, anchorBelow } from './context-menu.js';
+import { menuForItem } from './tree.js';
+import { withKey } from './shortcuts.js';
+import { opStatus, opBlockedReason, formatTime } from './op-status.js';
 
+// The name of whatever is selected is not a row in these lists: it is the
+// title of the panel, typed into where it is shown — see inspectorHead.
 const FIELDS = {
-  model: [
-    { path: 'name', label: 'Name', type: 'text' },
-  ],
+  model: [],
   // An imported DXF: where it lands on the billet, how big, and which way up.
   // The file's own coordinates are almost never the part's, so this is the
   // whole of what has to be said about a drawing. See engine/drawing.js.
   drawing: [
-    { path: 'name', label: 'Name', type: 'text' },
     {
       path: 'placement.origin', label: 'Placed', type: 'select',
       options: DRAWING_ORIGINS, labels: DRAWING_ORIGIN_LABELS,
@@ -63,7 +69,6 @@ const FIELDS = {
     },
   ],
   tool: [
-    { path: 'name', label: 'Name', type: 'text' },
     // A whole number from 1: T0 is "no tool" on most controls, and the post
     // writes the number into the length offset too — T0 M6 / G43 H0 is an
     // empty spindle with its length comp cancelled, and every Z after it off by
@@ -80,10 +85,12 @@ const FIELDS = {
     },
     {
       path: 'diameter', label: 'Diameter (mm)', type: 'number', min: 0.01, when: (t) => !isInsertTool(t),
+      heading: 'Geometry',
     },
     // --- lathe inserts ---
     {
       path: 'insertCode', label: 'ISO code', type: 'text', when: isInsertTool,
+      heading: 'Geometry',
       hint: 'Type the designation off the box — TNMG160408, WNMG080408 — and the '
         + 'shape, size and nose radius below fill themselves in.',
       onChange: applyInsertCode,
@@ -160,17 +167,16 @@ const FIELDS = {
     // M3 S0 and feeds a stopped cutter into the work; a 0 feed was quietly
     // replaced by the plunge feed. See op-status.js opPreflight for a tool that
     // arrives with one from an older file.
-    { path: 'spindleRpm', label: 'Spindle RPM', type: 'number', min: 1 },
+    { path: 'spindleRpm', label: 'Spindle RPM', type: 'number', min: 1, heading: 'Speeds and feeds' },
     { path: 'feedCut', label: 'Feed (mm/min)', type: 'number', min: 1 },
     { path: 'feedPlunge', label: 'Plunge (mm/min)', type: 'number', min: 1 },
   ],
-  setup: [
-    { path: 'name', label: 'Name', type: 'text' },
-    { path: 'wcs', label: 'WCS', type: 'select', options: ['G54', 'G55', 'G56', 'G57', 'G58', 'G59'] },
-  ],
+  // The work offset is with the zero point, in the setup panel's Orientation —
+  // see props/setup-panel.js.
+  setup: [],
+  // Whether the tool is kept out of it is a switch in the panel's header, as
+  // an operation's "in the program" is — see inspectorHead.
   fixture: [
-    { path: 'name', label: 'Name', type: 'text' },
-    { path: 'enabled', label: 'Keep out', type: 'checkbox' },
     {
       path: 'kind', label: 'Holding', type: 'select',
       options: FIXTURE_KINDS, labels: FIXTURE_KIND_LABELS,
@@ -225,10 +231,7 @@ const FIELDS = {
     { path: 'baseZ', label: 'Sits at Z (mm)', type: 'number', when: (f) => !isChuck(f) },
     { path: 'height', label: 'Height (mm)', type: 'number', min: 0.1, when: (f) => !isChuck(f) },
   ],
-  op: [
-    { path: 'name', label: 'Name', type: 'text' },
-    { path: 'enabled', label: 'In the program', type: 'checkbox' },
-  ],
+  op: [],
 };
 
 function isPointed(tool) {
@@ -283,18 +286,22 @@ function applyToolType(app, tool, value) {
 export function renderProps(container, doc, app = {}) {
   const item = doc.findSelected();
   if (!item) {
-    container.replaceChildren(
-      el('h2', {}, ['Properties']),
-      el('div', { class: 'tree-empty' }, ['nothing selected']),
-      ...machineSection(doc, app),
-    );
+    const head = jobHead(doc, app);
+    container.replaceChildren(head, ...jobSummary(doc, app), ...machineSection(doc, app));
+    settleHead(container, head);
     return;
   }
 
   const kind = doc.selection.kind;
+  // A field may open a section of its own. The tool's list was one run of
+  // eighteen rows — its number, its shape, its sizes and its speeds — with
+  // nothing between them to find your place by.
   const rows = (FIELDS[kind] ?? [])
     .filter((f) => !f.when || f.when(item))
-    .map((f) => fieldRow(doc, item, f, null, null, app));
+    .flatMap((f) => [
+      ...(f.heading ? [el('h2', {}, [f.heading])] : []),
+      fieldRow(doc, item, f, null, null, app),
+    ]);
 
   if (kind === 'tool') {
     rows.unshift(toolPreviewRow(item));
@@ -320,7 +327,7 @@ export function renderProps(container, doc, app = {}) {
     }
     // A cutter you have measured and tuned is worth more than the preset it
     // started as; without this it lived and died with the project file.
-    rows.push(el('div', { class: 'prop-row', style: 'margin-top: 12px' }, [
+    rows.push(el('div', { class: 'prop-actions' }, [
       // The same dialog the tool was made in. The fields above can change every
       // one of these numbers, but only the dialog draws the result, checks it,
       // and hides the fields this family does not have.
@@ -350,20 +357,202 @@ export function renderProps(container, doc, app = {}) {
   }
 
   if (kind === 'drawing') rows.push(...drawingSummary(doc, item, app));
+  if (kind === 'model') rows.push(...modelSummary(doc, item));
 
-  // Worded by the same table as the tree's menu and the status line after it —
-  // "Remove tool" here and "Delete Tool" there was one action with two names,
-  // and a chuck was offered as "Delete Clamp".
-  rows.push(el('div', { class: 'prop-row', style: 'margin-top: 12px' }, [
+  const head = inspectorHead(doc, kind, item, app);
+  container.replaceChildren(head, ...rows);
+  settleHead(container, head);
+}
+
+/**
+ * How tall the sticky header came out, for whatever sticks under it — the
+ * operation panel's tabs stand just below it as the fields scroll.
+ */
+function settleHead(container, head) {
+  container.style.setProperty('--inspector-height', `${head.offsetHeight}px`);
+}
+
+/** What each kind of thing is called at the top of the panel, and its drawing. */
+const KINDS = {
+  model: { label: 'Model', icon: 'cube' },
+  drawing: { label: 'Drawing', icon: 'drawing' },
+  tool: { label: 'Tool', icon: 'cutter' },
+  setup: { label: 'Setup', icon: 'setup' },
+  fixture: { label: 'Clamp', icon: 'clamp' },
+  op: { label: 'Operation', icon: null },
+};
+
+/**
+ * The top of the panel: what is selected, by kind and by name, and what can be
+ * done to it.
+ *
+ * The name is a text box that looks like a title — the field that used to be
+ * the first row of every list, moved to where the eye lands first. The menu
+ * beside it is the one the item's row opens in the tree, from the same table
+ * (tree.js menuForItem), so the two cannot offer different things; the bin is
+ * the delete that was a button at the bottom of a panel that scrolls, worded by
+ * the same table as the tree's menu and the status line after it.
+ */
+function inspectorHead(doc, kind, item, app) {
+  const info = KINDS[kind] ?? { label: kind, icon: null };
+  const chuck = kind === 'fixture' && item.kind === 'chuck';
+  // an operation is called an operation here: its strategy is the card just
+  // below, and its name is usually the strategy's until somebody renames it
+  const label = chuck ? 'Chuck' : info.label;
+  const glyph = kind === 'op' ? opIcon(item.type, 16) : icon(chuck ? 'chuck' : info.icon, 14);
+  const where = whereIs(doc, kind, item);
+
+  const nameBox = el('input', {
+    type: 'text', class: 'inspector-name', 'aria-label': `${info.label} name`,
+    title: 'The name — type to rename it',
+    spellcheck: 'false',
+  });
+  nameBox.value = item.name ?? '';
+  nameBox.addEventListener('change', () => {
+    const next = nameBox.value.trim();
+    if (!next) { nameBox.value = item.name ?? ''; return; }
+    if (next !== item.name) doc.updateItem(item, { name: next }, 'rename');
+  });
+  nameBox.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); nameBox.blur(); }
+    if (e.key === 'Escape') { nameBox.value = item.name ?? ''; nameBox.blur(); }
+  });
+
+  const removal = removalOf(kind, item).label;
+  const title = el('div', { class: 'inspector-title' }, [
+    nameBox,
     el('button', {
-      class: 'danger',
+      type: 'button',
+      class: 'ghost-icon',
+      title: 'Everything you can do to it — the same menu as a right-click on its row',
+      'aria-label': 'More actions',
+      'aria-haspopup': 'menu',
+      onclick: (e) => openContextMenu(anchorBelow(e, 'right'), menuForItem(doc, kind, item, app)),
+    }, [icon('more', 16)]),
+    el('button', {
+      type: 'button',
+      class: 'ghost-icon danger',
+      title: `${removal} (Delete)`,
+      'aria-label': removal,
       // deleteSelected confirms first where the deletion reaches past this row;
       // never fall through to a second, unconfirmed delete when it returns
       onclick: () => (app.actions ? app.actions.deleteSelected() : doc.removeSelected()),
-    }, [removalOf(kind, item).label]),
-  ]));
+    }, [icon('trash', 15)]),
+  ]);
 
-  container.replaceChildren(el('h2', {}, ['Properties']), ...rows);
+  const parts = [
+    el('div', { class: 'inspector-kind' }, [
+      glyph,
+      el('span', {}, [label]),
+      ...(where ? [el('span', { class: 'inspector-where' }, [`· ${where}`])] : []),
+    ]),
+    title,
+  ];
+
+  // The one switch each of these has, where the name is: whether the operation
+  // is in the program, and whether the clamp is kept out of.
+  if (kind === 'op' || kind === 'fixture') {
+    const box = el('input', { type: 'checkbox' });
+    box.checked = kind === 'op' ? !!item.enabled : item.enabled !== false;
+    box.addEventListener('change', () => {
+      doc.updateItem(item, { enabled: box.checked }, kind === 'op'
+        ? (box.checked ? 'enable op' : 'disable op') : 'toggle clamp');
+    });
+    parts.push(el('label', {
+      class: 'inspector-toggle',
+      title: kind === 'op'
+        ? 'A disabled operation is skipped when generating, posting and simulating'
+        : 'Every operation in the setup keeps the cutter out of it — untick to see the program as if it were not there',
+    }, [box, kind === 'op' ? 'In the program' : 'Keep the tool out of it']));
+  }
+  return el('div', { class: 'inspector-head' }, parts);
+}
+
+/** Where in the job an item sits, said after its kind. */
+function whereIs(doc, kind, item) {
+  if (kind === 'op') return doc.findSetupOf(item.id)?.name ?? '';
+  if (kind === 'fixture') {
+    return doc.project.setups.find((s) => (s.fixtures ?? []).includes(item))?.name ?? '';
+  }
+  if (kind === 'tool') return `T${item.number}`;
+  if (kind === 'setup') return (item.mode ?? 'mill') === 'turn' ? 'Lathe' : 'Mill';
+  return '';
+}
+
+/**
+ * The panel with nothing selected: the job itself.
+ *
+ * It used to say "nothing selected" over the machine's numbers — true, and no
+ * help. With nothing selected the thing in front of you is the project, so the
+ * panel is about the project: its name, what is in it, and how far it is from
+ * being a program.
+ */
+function jobHead(doc, app) {
+  const nameBox = el('input', {
+    type: 'text', class: 'inspector-name', 'aria-label': 'Project name',
+    title: 'The project\'s name — what a save or an export is called',
+    spellcheck: 'false',
+  });
+  nameBox.value = doc.project.name ?? '';
+  nameBox.addEventListener('change', () => {
+    const next = nameBox.value.trim();
+    if (!next) { nameBox.value = doc.project.name ?? ''; return; }
+    if (app.actions?.renameProject) app.actions.renameProject(next);
+    else doc.updateItem(doc.project, { name: next }, 'rename project');
+  });
+  nameBox.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); nameBox.blur(); }
+    if (e.key === 'Escape') { nameBox.value = doc.project.name ?? ''; nameBox.blur(); }
+  });
+  return el('div', { class: 'inspector-head' }, [
+    el('div', { class: 'inspector-kind' }, [
+      icon('layers', 14),
+      el('span', {}, ['Project']),
+      el('span', { class: 'inspector-where' }, [`· ${doc.machine === 'turn' ? 'Lathe' : 'Mill'}`]),
+    ]),
+    el('div', { class: 'inspector-title' }, [nameBox]),
+  ]);
+}
+
+/** What is in the job, for the machine in front of you, and what is next. */
+function jobSummary(doc, app) {
+  const tools = doc.project.tools.filter((t) => machineCanHold(t.type, doc.machine));
+  const setups = doc.setups();
+  let ops = 0;
+  let enabled = 0;
+  let generated = 0;
+  let seconds = 0;
+  let blocked = 0;
+  for (const { op } of doc.allOperations()) {
+    ops++;
+    if (!op.enabled) continue;
+    enabled++;
+    // blocked first, as the Generate button counts them: a path left over from
+    // before its tool was deleted is not a generated operation
+    if (opBlockedReason(doc, op)) { blocked++; continue; }
+    const status = opStatus(doc, op);
+    if (status) { generated++; seconds += status.seconds; }
+  }
+  const rows = [el('h2', {}, ['In this job'])];
+  rows.push(reportRows([
+    ['Models', `${doc.project.models.length}${(doc.project.drawings ?? []).length
+      ? ` + ${plural(doc.project.drawings.length, 'drawing')}` : ''}`],
+    ['Tools', String(tools.length)],
+    ['Setups', String(setups.length)],
+    ['Operations', ops === enabled ? String(ops) : `${ops} (${enabled} in the program)`],
+    ['Generated', enabled ? `${generated} of ${enabled}` : '—'],
+    ...(generated && generated === enabled ? [['Cutting time', `≈ ${formatTime(seconds)}`]] : []),
+  ]));
+  if (blocked) {
+    rows.push(el('div', { class: 'prop-note warn' }, [
+      `${plural(blocked, 'operation')} cannot be generated yet — the "!" on its row says why.`,
+    ]));
+  }
+  rows.push(el('div', { class: 'prop-note' }, [
+    'Select anything in the tree to edit it here. Right-click a row for everything '
+    + 'that can be done to it.',
+  ]));
+  return rows;
 }
 
 /**
@@ -560,12 +749,45 @@ function drawingSummary(doc, drawing, app) {
     ]));
   }
 
-  rows.push(el('div', { class: 'prop-row', style: 'margin-top: 8px' }, [
+  rows.push(el('div', { class: 'prop-actions' }, [
     el('button', {
       class: 'primary-outline',
       title: 'Add an engraving pass already pointed at this drawing',
       onclick: () => app.actions?.engraveDrawing?.(drawing),
     }, ['Engrave this drawing']),
+  ]));
+  return rows;
+}
+
+/**
+ * What a model is, in the numbers that decide whether it imported right.
+ *
+ * Its panel used to be a Name field and a delete button, which is nothing about
+ * the part. The size says whether a file came in in inches (25 times too small)
+ * or in metres; the faces say whether it came from a CAD kernel — a STEP keeps
+ * its B-rep faces, so a click picks a whole face — or from a mesh, where every
+ * triangle is its own; and the setups say what it is used for.
+ */
+function modelSummary(doc, model) {
+  const mesh = doc.meshes.get(model.id);
+  const rows = [el('h2', {}, ['Model'])];
+  if (!mesh) {
+    rows.push(el('div', { class: 'prop-note warn' }, [
+      'Saved without its geometry — import the file again to machine it.',
+    ]));
+    return rows;
+  }
+  const { min, max } = computeBounds(mesh.positions);
+  const size = [0, 1, 2].map((k) => (max[k] - min[k]).toFixed(2)).join(' × ');
+  const triangles = (mesh.indices?.length ?? mesh.positions.length / 3) / 3;
+  const faces = mesh.faceRanges?.length ?? 0;
+  const setups = doc.project.setups.filter((s) => !s.modelIds?.length || s.modelIds.includes(model.id));
+  rows.push(reportRows([
+    ['File', model.sourceName ?? '—'],
+    ['Size', `${size} mm`],
+    ['Triangles', triangles.toLocaleString()],
+    ['Faces', faces ? `${faces} (from the CAD file)` : 'none — each triangle picks alone'],
+    ['Machined in', setups.length ? setups.map((s) => s.name).join(', ') : 'no setup yet'],
   ]));
   return rows;
 }
@@ -583,7 +805,7 @@ function machineSection(doc, app) {
   const machine = doc.machineRecord();
   const rows = [el('h2', {}, ['Machine'])];
   if (!machine) {
-    rows.push(el('div', { class: 'tree-empty' }, ['no machine — add one']));
+    rows.push(el('div', { class: 'prop-note' }, ['No machine of this kind — add one in Machines.']));
   } else {
     const axes = doc.machine === 'turn'
       ? [['Swing over bed', `⌀${(machine.travel[0] * 2).toFixed(0)} mm`],
@@ -600,9 +822,15 @@ function machineSection(doc, app) {
       ['Dialect', machine.post],
     ]));
   }
-  rows.push(el('div', { class: 'prop-row', style: 'margin-top: 8px' }, [
-    el('button', { onclick: () => app.actions?.openMachines?.() }, ['Machines…']),
-    el('button', { onclick: () => app.actions?.openOptions?.() }, ['Options…']),
+  rows.push(el('div', { class: 'prop-actions' }, [
+    el('button', {
+      title: withKey('Create and edit machines — travel, rapids, spindle range, dialect', 'machines'),
+      onclick: () => app.actions?.openMachines?.(),
+    }, ['Machines…']),
+    el('button', {
+      title: withKey('How the viewport draws and how the editor behaves', 'options'),
+      onclick: () => app.actions?.openOptions?.(),
+    }, ['Options…']),
   ]));
   return rows;
 }

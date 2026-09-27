@@ -25,7 +25,7 @@
 // platform rather than being reimplemented. Multiple tools can be ticked and
 // added in one go, since setting up a job usually means pulling several.
 
-import { el } from './layout.js';
+import { el, dialogCloseButton } from './layout.js';
 import { toolIcon, describeTool } from './tool-shape.js';
 import {
   presetsFor, userCatalogsFor, removeUserTool, machineCanHold, BUILTIN_CATALOGS,
@@ -559,6 +559,7 @@ export function openToolPicker({
   buildCatalogBar();
   build();
   dialog.append(
+    dialogCloseButton(dialog),
     el('div', { class: 'lib-head' }, [
       el('h2', {}, [machine === 'turn' ? 'Lathe tooling' : 'Tool library']),
       count,

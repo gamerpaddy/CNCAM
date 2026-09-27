@@ -12,7 +12,7 @@
 // is scaled to the inscribed circle downstream, so only its *shape* matters
 // here, not its size.
 
-import { el } from './layout.js';
+import { el, dialogCloseButton } from './layout.js';
 import { toolAssembly } from './tool-shape.js';
 import { polygonCornerAngle, isPolygon } from '../engine/insert.js';
 
@@ -194,6 +194,7 @@ export function openShapeEditor({ points, angle = 80, noseRadius = 0.4, onApply 
   });
 
   dialog.append(
+    dialogCloseButton(dialog),
     el('h2', {}, ['Custom insert shape']),
     el('div', { class: 'shape-body' }, [
       el('div', { class: 'shape-canvas-wrap' }, [canvas]),

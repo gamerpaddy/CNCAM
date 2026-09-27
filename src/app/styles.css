@@ -1,3 +1,12 @@
+/* CNCAM — one stylesheet.
+
+   The look is an instrument's, not an app's: neutral graphite, one muted
+   steel-blue accent for "this is selected / this is the action", and the three
+   status colours kept for what they mean — amber is something to read, red is
+   something wrong, green is a check that passed. Nothing is coloured for
+   decoration, because on a screen whose job is to show a part and a toolpath
+   every coloured control is competing with the thing you are checking. */
+
 :root {
   /* Dark native controls: scroll bars, the drop-down list of a <select>, date
      pickers. Without it every dialog's scroll bar and every open drop-down was
@@ -5,28 +14,43 @@
   color-scheme: dark;
   accent-color: var(--accent);
 
-  /* Four depths, darkest furthest back: what is recessed into a panel (fields,
-     lists, the G-code), the panels, what stands on them (buttons), and the
-     same raised a little more under the pointer. */
-  --bg: #15171b;
-  --bg-panel: #1e2126;
-  --bg-raised: #272b32;
-  --bg-hover: #30353d;
-  --border: #2d3139;
-  --border-strong: #3a3f49;
-  --fg: #e2e5ea;
-  --fg-dim: #8d94a1;
-  --accent: #4c9dff;
-  --accent-hover: #6aafff;
-  --accent-soft: rgba(76, 157, 255, 0.14);
-  --danger: #ff6464;
-  --warn: #f0b429;
-  --ok: #5cc486;
-  --radius: 6px;
-  --ring: 0 0 0 2px rgba(76, 157, 255, 0.5);
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.35);
+  /* Depths, darkest furthest back: what is recessed into a panel (fields,
+     lists, the G-code), the panels, the bar across the top, what stands on
+     them (buttons), and the same raised a little more under the pointer. */
+  --bg-inset: #101113;
+  --bg: #131416;
+  --bg-panel: #1a1b1e;
+  --bg-header: #1d1f22;
+  --bg-raised: #25272b;
+  --bg-hover: #2d3034;
+  --bg-active: #34373c;
+  --border: #2a2c30;
+  --border-strong: #393c42;
+  --fg: #d6d8db;
+  --fg-dim: #8b9098;
+  --fg-faint: #62666d;
+
+  --accent: #4a81bb;
+  --accent-hover: #5a8fc8;
+  --accent-text: #8db3dd;
+  --accent-soft: rgba(74, 129, 187, 0.14);
+  --accent-mid: rgba(74, 129, 187, 0.26);
+
+  --danger: #cc5c55;
+  --danger-text: #e0857f;
+  --danger-soft: rgba(204, 92, 85, 0.12);
+  --warn: #c7993b;
+  --warn-soft: rgba(199, 153, 59, 0.1);
+  --ok: #5d9b70;
+  --info: #6d98c4;
+
+  --radius: 4px;
+  --radius-lg: 6px;
+  --ring: 0 0 0 2px rgba(74, 129, 187, 0.55);
+  --shadow: 0 10px 28px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.3);
   --ease: cubic-bezier(0.2, 0, 0, 1);
   --mono: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
   font-size: 13px;
 }
 
@@ -34,7 +58,7 @@
 
 /* Thin, dark, and only as loud as the content under them. */
 * { scrollbar-width: thin; }
-html { scrollbar-color: #3d434d transparent; }
+html { scrollbar-color: #3a3d42 transparent; }
 
 /* The reset above also took the browser's `margin: auto` off a modal dialog,
    which is the whole of what centres one — so every dialog in the app opened
@@ -44,19 +68,27 @@ dialog { margin: auto; }
 html, body, #app { height: 100%; overflow: hidden; }
 
 body {
-  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  font-family: var(--sans);
   background: var(--bg);
   color: var(--fg);
   -webkit-font-smoothing: antialiased;
 }
 
-/* The panels are sized by custom properties so a splitter drag is one style
+/* Numbers that sit in columns are read down the column. */
+.tree-badge, .job-time, .sim-time, .status-summary, .cutting-row span:last-child,
+.proj-meta, .machine-row-meta, .lib-speeds, .hint-count, .tb-count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- the shell ------------------------------------------------------------
+
+   The panels are sized by custom properties so a splitter drag is one style
    write; the splitters are grid cells of their own, because a panel that
    scrolls cannot host a full-height handle without the handle scrolling too. */
 #app {
   --tree-size: 260px;
-  --props-size: 300px;
-  --gcode-size: 160px;
+  --props-size: 340px;
+  --gcode-size: 180px;
   display: grid;
   grid-template-rows: auto 1fr auto auto auto auto;
   grid-template-columns: var(--tree-size) 5px 1fr 5px var(--props-size);
@@ -69,10 +101,10 @@ body {
     "status  status  status   status  status";
 }
 
-/* --- splitters ---------------------------------------------------------- */
+/* --- splitters --- */
 
 .splitter {
-  background: #131519;
+  background: var(--bg);
   position: relative;
   z-index: 3;
   transition: background-color 0.12s;
@@ -97,302 +129,7 @@ body {
 body.resizing-x, body.resizing-x * { cursor: col-resize !important; user-select: none; }
 body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select: none; }
 
-/* --- simulation transport --- */
-
-#sim {
-  grid-area: sim;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 12px;
-  background: linear-gradient(180deg, #22262c, #1d2025);
-  border-top: 1px solid #121418;
-  box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.03) inset;
-}
-#sim.collapsed { display: none; }
-
-/* The five transport buttons, as one control. */
-.sim-transport {
-  display: flex;
-  gap: 1px;
-  padding: 2px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  flex: 0 0 auto;
-}
-#sim .sim-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 26px;
-  padding: 0;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: var(--fg-dim);
-}
-#sim .sim-btn:hover { background: var(--bg-hover); color: var(--fg); }
-#sim .sim-btn .icon { width: 15px; height: 15px; }
-#sim .sim-play { width: 36px; color: var(--fg); }
-#sim .sim-play.playing { background: var(--accent); color: #fff; border-color: var(--accent); }
-#sim .sim-close { margin-left: 2px; }
-
-.sim-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--fg-dim);
-  margin-right: 4px;
-}
-#sim select {
-  background: var(--bg-hover);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 6px;
-  font: inherit;
-}
-
-.sim-time {
-  font: 12px Consolas, monospace;
-  color: var(--fg-dim);
-  /* also fixed, and for the same reason: the elapsed clock ticks past 10:00 and
-     grows a digit, which would otherwise nudge the bar sideways mid-playback */
-  flex: 0 0 auto;
-  min-width: 106px;
-  text-align: right;
-}
-
-/* The scrub bar and the operation bands under it are one control: the bands say
-   *what* is being cut where the slider says how far through. Stacked rather
-   than side by side so a position on one is the same position on the other. */
-.sim-track {
-  flex: 1;
-  /* Never let the transport squeeze the thing it is a transport for. With
-     `min-width: 0` the track gave up width to whatever grew beside it — and the
-     label beside it is the *current operation name*, which changes on every
-     scrub. So the bar jumped narrower the moment the playhead crossed into an
-     operation with a longer name, and on a narrow window it collapsed to
-     nothing: "the whole bar just disappears". The label is a fixed column now
-     (see .sim-op) and this is the floor under the rest. */
-  min-width: 160px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-/* The thumb is drawn by us so that its width is a number this file knows.
-   A native range thumb travels from half its own width in to half its own width
-   from the end, and the bands under it spanned the whole track — so even with
-   both measured in the same units the two were out by half a thumb at each end,
-   which is the last few percent of a program never lining up with the strip that
-   labels it. Fixing the size lets the strip be inset by exactly as much. */
-#sim {
-  --sim-thumb: 12px;
-}
-
-#sim input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  min-width: 0;
-  height: 18px;
-  margin: 0;
-  background: transparent;
-  cursor: pointer;
-}
-#sim input[type="range"]::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 2px;
-  background: var(--border);
-}
-#sim input[type="range"]::-moz-range-track {
-  height: 4px;
-  border-radius: 2px;
-  background: var(--border);
-}
-#sim input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: var(--sim-thumb);
-  height: var(--sim-thumb);
-  margin-top: calc((4px - var(--sim-thumb)) / 2);
-  border: none;
-  border-radius: 50%;
-  background: var(--accent);
-}
-#sim input[type="range"]::-moz-range-thumb {
-  width: var(--sim-thumb);
-  height: var(--sim-thumb);
-  border: none;
-  border-radius: 50%;
-  background: var(--accent);
-}
-
-.sim-bands {
-  display: flex;
-  height: 12px;
-  /* exactly the span the thumb's centre travels — see above */
-  margin: 0 calc(var(--sim-thumb) / 2);
-  border-radius: 3px;
-  overflow: hidden;
-  background: var(--bg);
-}
-
-/* Four tones rather than a colour per operation: the bands are there to show
-   where one ends and the next begins, and a palette that has to stretch to
-   thirty operations stops distinguishing anything. Adjacent bands always
-   differ, which is the only property that matters. */
-.sim-band {
-  min-width: 2px;
-  overflow: hidden;
-  white-space: nowrap;
-  font: 9px/12px system-ui, sans-serif;
-  color: transparent;
-  text-align: center;
-  cursor: pointer;
-  transition: color 0.1s;
-}
-.sim-band-0 { background: #3a4a5e; }
-.sim-band-1 { background: #4a5a3e; }
-.sim-band-2 { background: #5a3e4e; }
-.sim-band-3 { background: #45455e; }
-.sim-band:hover { filter: brightness(1.4); }
-.sim-band.active { background: var(--accent); color: #fff; }
-
-/* A fixed column, not a label that sizes to its text: it says which operation
-   the playhead is in, so its text changes as you scrub, and anything that
-   reflows on a scrub reflows the scrub bar under your cursor. */
-.sim-op {
-  font: 11px system-ui, sans-serif;
-  color: var(--fg-dim);
-  flex: 0 0 150px;
-  width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The widest bite in the program, and a way to go and look at it.
-   Reserved width for the same reason as .sim-op — nothing beside the scrub bar
-   may change width while the scrub bar is being dragged — but a *floor* rather
-   than a fixed size, the way .sim-time does it. 118px was set when the label
-   read "1.00×D" and nothing else; it has said "1.00×D at 3.0mm deep" for a
-   while now, which is 21 characters and needs about 150. The overflow was
-   hidden, so the depth clause was simply cut off mid-word and the reading
-   looked like it stopped at the diameter. The text is bounded (one number, a
-   unit, one more number) so letting it size to its content cannot run away. */
-.sim-load {
-  font: 11px/1 Consolas, monospace;
-  color: var(--fg-dim);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  padding: 3px 5px;
-  flex: 0 0 auto;
-  min-width: 118px;
-  white-space: nowrap;
-  text-align: right;
-  cursor: pointer;
-}
-.sim-load:empty { visibility: hidden; }
-.sim-load:hover { border-color: var(--border); color: var(--fg); }
-.sim-load.warn { color: var(--warn); }
-
-/* The verification verdict, beside the load. Same shape, its own colours: a
-   gouge is not a heavy cut, it is a scrapped part. */
-.sim-verify {
-  font: 11px/1 Consolas, monospace;
-  color: var(--fg-dim);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  padding: 3px 5px;
-  flex: 0 0 auto;
-  min-width: 104px;
-  white-space: nowrap;
-  text-align: right;
-  cursor: pointer;
-}
-.sim-verify:empty { visibility: hidden; }
-.sim-verify:hover { border-color: var(--border); color: var(--fg); }
-.sim-verify.ok { color: #4fb96a; }
-.sim-verify.left { color: #6fa8dc; }
-.sim-verify.bad { color: #ff6a55; }
-
-#gcode {
-  grid-area: gcode;
-  height: var(--gcode-size);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  background: #131519;
-  border-top: 1px solid var(--border);
-  font: 12px/1.45 var(--mono);
-  white-space: pre;
-}
-#gcode.collapsed { display: none; }
-
-/* The listing scrolls; the bar over it does not, so Copy is always reachable
-   without scrolling twenty thousand lines back to the top. */
-.gcode-lines { flex: 1; min-height: 0; overflow-y: auto; }
-.gcode-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 8px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-hover);
-  font: 11px/1.4 system-ui, sans-serif;
-  color: var(--fg-dim);
-  white-space: nowrap;
-}
-.gcode-bar .spacer { flex: 1; }
-.gcode-copy {
-  font: 11px/1 system-ui, sans-serif;
-  padding: 3px 10px;
-}
-.gcode-copy.done { color: var(--ok, #7fe08a); border-color: var(--ok, #7fe08a); }
-
-/* The listing is virtualised: only the rows in view exist, positioned from the
-   scroll offset by arithmetic. LINE_HEIGHT in gcode-panel.js is this number. */
-.gcode-scroll { position: relative; }
-.gcode-window { position: absolute; top: 0; left: 0; right: 0; }
-.gcode-line {
-  padding: 0 8px;
-  cursor: pointer;
-  color: var(--fg-dim);
-  height: 17px;
-  line-height: 17px;
-}
-.gcode-line:hover { background: var(--bg-hover); color: var(--fg); }
-.gcode-line.selected { background: #1a3a5c; color: #fff; }
-
-/* the words of a line, by kind — see gcode-panel.js WORD_CLASS */
-.gc-ln { color: #545b66; user-select: none; }
-.gc-g { color: #6cb6ff; }
-.gc-m { color: #d2a8ff; }
-.gc-ax { color: #d7dce3; }
-.gc-arc { color: #9ecbff; }
-.gc-f { color: #ffab70; }
-.gc-t { color: #7ee2a0; }
-.gc-n { color: #6e7681; }
-.gc-p { color: #b4c6e0; }
-.gc-c { color: #7d8590; font-style: italic; }
-.gcode-line.selected .gc-ln { color: #9fb6d3; }
-.gcode-empty { padding: 6px 10px; color: var(--fg-dim); font-style: italic; }
-
-.toolbar select {
-  height: 30px;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  padding: 0 8px;
-  font: inherit;
-}
+/* --- the bar across the top --------------------------------------------- */
 
 .toolbar {
   grid-area: toolbar;
@@ -401,27 +138,36 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   display: flex;
   gap: 2px;
   align-items: center;
-  padding: 6px 10px;
-  background: linear-gradient(180deg, #22262c, #1d2025);
-  border-bottom: 1px solid #121418;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
-  /* The bar wraps onto a second row rather than scrolling. Scrolling was chosen
-     to stop buttons being squeezed until their labels ran onto three lines —
-     but that is prevented by the two rules below, not by the scrolling, and the
-     scrolling cost more than it saved: an ordinary 1280px laptop screen put
-     Clear, Open and Save past the right-hand edge, behind an overlay scrollbar
-     that shows nothing until you already know to look. A control you cannot see
-     is worse than a bar one row taller. The icons are what keep it to one row:
-     a narrow window drops the words, never the buttons (see .tb-label). */
+  min-height: 44px;
+  padding: 7px 10px;
+  background: var(--bg-header);
+  border-bottom: 1px solid #0d0e10;
+  /* The bar wraps onto a second row rather than scrolling. Scrolling put Save
+     and its neighbours past the right-hand edge of an ordinary 1280px screen,
+     behind an overlay scrollbar that shows nothing until you already know to
+     look. A control you cannot see is worse than a bar one row taller. The
+     icons are what keep it to one row: a narrow window drops the words, never
+     the buttons (see .tb-label). */
   flex-wrap: wrap;
   row-gap: 6px;
 }
 
-/* Buttons keep their natural width; only the spacer gives. Together these are
-   why wrapping cannot bring back the three-line labels. */
+/* Buttons keep their natural width; only the spacer and the project name
+   give. Together these are why wrapping cannot bring back three-line labels. */
 .toolbar > * { flex: 0 0 auto; }
 .toolbar button, .toolbar label { white-space: nowrap; }
-.toolbar .machine-select { flex: 0 1 200px; min-width: 110px; max-width: 220px; margin-left: 4px; }
+.toolbar .spacer { flex: 1 1 auto; min-width: 0; }
+
+.toolbar select {
+  height: 28px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 0 8px;
+  font: inherit;
+}
+.toolbar .machine-select { flex: 0 1 190px; min-width: 110px; max-width: 220px; margin-left: 4px; }
 
 /* A toolbar button is quiet until it is pointed at: the words and icons are the
    bar, and a row of boxed buttons is a row of boxes. */
@@ -429,29 +175,89 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  height: 30px;
-  padding: 0 10px;
+  height: 28px;
+  padding: 0 9px;
   background: transparent;
   border: 1px solid transparent;
+  border-radius: var(--radius);
   color: var(--fg);
 }
 .toolbar .tb:hover:not(:disabled) { background: var(--bg-hover); border-color: transparent; }
-.toolbar .tb:active:not(:disabled) { background: #282c33; }
+.toolbar .tb:active:not(:disabled) { background: var(--bg-active); }
 .toolbar .tb .icon { flex: 0 0 auto; color: var(--fg-dim); transition: color 0.12s; }
 .toolbar .tb:hover:not(:disabled) .icon { color: var(--fg); }
-.toolbar .tb-icon { width: 32px; padding: 0; justify-content: center; }
+.toolbar .tb-icon { width: 30px; padding: 0; justify-content: center; }
 .toolbar .tb:disabled { opacity: 0.35; }
-.toolbar .tb.danger { color: var(--fg); }
-.toolbar .tb.danger:hover:not(:disabled) { background: rgba(255, 100, 100, 0.12); }
-.toolbar .tb.danger:hover:not(:disabled) .icon { color: var(--danger); }
 /* a panel that is open says so on the button that opens it */
-.toolbar .tb-toggle.on { background: var(--accent-soft); color: var(--accent); }
-.toolbar .tb-toggle.on .icon { color: var(--accent); }
+.toolbar .tb-toggle.on { background: var(--accent-soft); color: var(--accent-text); }
+.toolbar .tb-toggle.on .icon { color: var(--accent-text); }
+/* a button that opens a menu says so with a caret after its word */
+.toolbar .tb-menu .tb-label::after {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin: 0 1px 2px 7px;
+  border-right: 1.5px solid var(--fg-dim);
+  border-bottom: 1.5px solid var(--fg-dim);
+  transform: rotate(45deg);
+}
+
+/* The one action on the bar that is the next step more often than not. Filled,
+   but flat: a lit button, not a glowing one. */
+.toolbar .tb-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  padding: 0 12px 0 10px;
+}
+.toolbar .tb-primary .icon { color: rgba(255, 255, 255, 0.9); }
+.toolbar .tb-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.toolbar .tb-primary:hover:not(:disabled) .icon { color: #fff; }
+.toolbar .tb-primary:active:not(:disabled) { background: #4176ad; }
+.toolbar .tb-primary:disabled { opacity: 0.6; }
+/* nothing to generate yet: an ordinary button until there is a program */
+.toolbar .tb-primary.idle {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg);
+  font-weight: 500;
+}
+.toolbar .tb-primary.idle .icon { color: var(--fg-dim); }
+.toolbar .tb-primary.idle:hover:not(:disabled) { background: var(--bg-hover); border-color: transparent; }
+/* how many operations are waiting on it */
+.tb-count {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 17px;
+  text-align: center;
+}
+.tb-count[hidden] { display: none; }
+/* running: the bolt gives way to a turning ring, so the button that started
+   the job is the thing that says it is still going */
+.toolbar .tb-primary.running .icon { display: none; }
+.toolbar .tb-primary.running::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  margin: 0 1px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: spin 0.7s linear infinite;
+}
 
 .tb-sep {
   width: 1px;
   height: 18px;
-  margin: 0 6px;
+  margin: 0 7px;
   background: var(--border-strong);
 }
 
@@ -465,51 +271,113 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 }
 .toolbar .toggle:hover { color: var(--fg); }
 
-/* Pushes everything after it to the right-hand end of its row. */
-.toolbar .spacer { flex: 1 1 auto; min-width: 0; }
 .toolbar .brand {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   font-weight: 700;
-  letter-spacing: 1.5px;
-  font-size: 12px;
-  margin: 0 10px 0 2px;
-  color: var(--fg);
+  letter-spacing: 0.12em;
+  font-size: 11.5px;
+  margin: 0 8px 0 2px;
+  color: var(--fg-dim);
   text-decoration: none;
 }
-.toolbar .brand:hover { color: #fff; }
-/* the mark: a cutter's end, seen from below — a disc with two flutes */
+.toolbar .brand:hover { color: var(--fg); }
+/* the mark: a cutter's end, seen from below — a ring with two flutes, drawn in
+   the text colour like every other icon on the bar */
 .brand-mark {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
+  border: 2px solid currentColor;
   background:
-    conic-gradient(from 20deg, transparent 0 60deg, rgba(10, 14, 22, 0.55) 60deg 90deg,
-      transparent 90deg 240deg, rgba(10, 14, 22, 0.55) 240deg 270deg, transparent 270deg),
-    linear-gradient(135deg, #7cc0ff, #3b7de8);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12) inset, 0 2px 6px rgba(76, 157, 255, 0.35);
+    conic-gradient(from 20deg, transparent 0 60deg, currentColor 60deg 90deg,
+      transparent 90deg 240deg, currentColor 240deg 270deg, transparent 270deg);
+  opacity: 0.85;
 }
 
-/* The bar needs about 1330px to stand in one row with every word on it, and
-   67px of that is a wordmark that does nothing. Below that it goes first; then
-   the words of the buttons that are least often read (the icons stay, and so
-   does the tooltip); then the rest, so a 1000px window still has every button
-   on one row. */
-@media (max-width: 1330px) {
-  .toolbar .brand { display: none; }
+/* The project's name: a button that reads as a title, and turns into a text
+   box when clicked. It gives way before any control does. */
+.toolbar .project-name {
+  flex: 0 1 auto;
+  min-width: 40px;
+  max-width: 260px;
+  height: 28px;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg);
+  font-weight: 600;
+}
+.toolbar .project-name:hover { border-color: var(--border-strong); background: transparent; }
+.toolbar .project-name-input {
+  flex: 0 1 220px;
+  min-width: 80px;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  font: inherit;
+  font-weight: 600;
+}
+
+/* The bar needs about 1300px to stand in one row with every word on it. Below
+   that the words go, least read first — the icons stay, and so does the
+   tooltip — so a 1000px window still has every button on one row. */
+@media (max-width: 1360px) {
+  .toolbar .brand-word { display: none; }
 }
 @media (max-width: 1280px) {
   .toolbar .tb-early .tb-label { display: none; }
-  .toolbar .tb-early { width: 32px; padding: 0; justify-content: center; }
+  .toolbar .tb-early { width: 30px; padding: 0; justify-content: center; }
+  .toolbar .project-name { max-width: 180px; }
 }
-@media (max-width: 1000px) {
+@media (max-width: 1100px) {
   .toolbar .tb-late .tb-label { display: none; }
-  .toolbar .tb-late { width: 32px; padding: 0; justify-content: center; }
+  .toolbar .tb-late { width: 30px; padding: 0; justify-content: center; }
   .tb-sep { margin: 0 3px; }
+  .toolbar .project-name { max-width: 130px; }
 }
 
-/* The base look of every button, at no specificity at all — `:where` — so that
+/* --- Mill / Lathe ---------------------------------------------------------
+   The only control that changes what the rest of the app is about. Drawn as a
+   segmented control rather than as two more buttons, so it reads as "which of
+   these am I on" and not "what do I want to do". */
+
+.machine-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  height: 28px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+.machine-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 0 12px;
+  color: var(--fg-dim);
+  font-weight: 600;
+  font-size: 12px;
+}
+.machine-tab:hover { color: var(--fg); background: var(--bg-hover); }
+.machine-tab.active {
+  background: var(--accent-mid);
+  border-color: rgba(74, 129, 187, 0.55);
+  color: #fff;
+}
+.machine-tab.active:hover { background: var(--accent-mid); color: #fff; }
+
+/* --- buttons and fields, everywhere ---------------------------------------
+
+   The base look of every button, at no specificity at all — `:where` — so that
    any button with a class of its own (a tab, a card, a row that is really a
    button) is styled by that class and nothing here has to be fought. */
 :where(button) {
@@ -523,11 +391,62 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   line-height: 1.25;
   transition: background-color 0.12s, border-color 0.12s, color 0.12s, box-shadow 0.12s;
 }
-:where(button):where(:hover:not(:disabled)) { background: var(--bg-hover); border-color: #4a505b; }
-:where(button):where(:active:not(:disabled)) { background: #22262c; }
+:where(button):where(:hover:not(:disabled)) { background: var(--bg-hover); border-color: #484c53; }
+:where(button):where(:active:not(:disabled)) { background: var(--bg-active); }
 button:disabled { opacity: 0.4; cursor: default; }
-button.danger { color: var(--danger); }
-button.danger:hover:not(:disabled) { border-color: var(--danger); background: rgba(255, 100, 100, 0.1); }
+button.danger { color: var(--danger-text); }
+button.danger:hover:not(:disabled) { border-color: var(--danger); background: var(--danger-soft); }
+
+button.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+button.primary:active:not(:disabled) { background: #4176ad; }
+.primary-outline { border-color: var(--accent); color: var(--accent-text); }
+
+/* an icon in a button with words beside it sits on the words' centre line */
+button > .icon { flex: 0 0 auto; vertical-align: -3px; }
+
+.icon-button {
+  padding: 4px 8px;
+  line-height: 1;
+}
+
+/* A small square button with only a drawing on it, for the corners of panels. */
+.ghost-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+}
+.ghost-icon:hover:not(:disabled) { background: var(--bg-hover); border-color: transparent; color: var(--fg); }
+.ghost-icon.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger-text); }
+
+/* a button that reads as a link inside a sentence */
+button.link-button {
+  display: inline;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent-text);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+button.link-button:hover { color: #a9c7e8; background: none; }
+
+/* --- panels --------------------------------------------------------------- */
 
 .panel {
   background: var(--bg-panel);
@@ -536,46 +455,147 @@ button.danger:hover:not(:disabled) { border-color: var(--danger); background: rg
 }
 .panel h2 {
   font-size: 10.5px;
-  font-weight: 700;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 1.1px;
-  color: #7d8491;
-  margin: 14px 0 6px;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+  margin: 16px 0 6px;
 }
 .panel h2:first-child { margin-top: 2px; }
 
-#tree { grid-area: tree; border-right: 1px solid var(--border); }
-#props { grid-area: props; border-left: 1px solid var(--border); }
+#tree { grid-area: tree; border-right: 1px solid var(--border); padding: 8px 8px 16px; }
+#props { grid-area: props; border-left: 1px solid var(--border); padding: 0 12px 16px; }
 
-/* The tree redraws itself wholesale on every document change, so the checklist
+/* --- the project tree -----------------------------------------------------
+
+   The tree redraws itself wholesale on every document change, so the checklist
    above it lives outside the part that gets replaced. */
 .tree-body { display: block; }
 
+/* A section: its name, how many are in it, and the way to add one. The name
+   folds it away, which a job with forty operations in two setups needs. */
+.panel .tree-h2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  margin: 14px 0 3px;
+  padding: 0 2px 0 0;
+}
+.panel .tree-body > .tree-h2:first-child { margin-top: 2px; }
+.tree-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 2px 2px 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+}
+.tree-fold:hover { color: var(--fg); background: none; }
+.tree-fold .icon { flex: 0 0 auto; transition: transform 0.12s var(--ease); }
+.tree-fold.folded .icon { transform: rotate(-90deg); }
+.tree-count {
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--fg-faint);
+}
+.tree-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 7px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-dim);
+  border-radius: var(--radius);
+}
+.tree-add .icon { color: var(--fg-dim); }
+.tree-add:hover { color: var(--fg); background: var(--bg-hover); border-color: transparent; }
+.tree-add:hover .icon { color: var(--fg); }
+.tree-add-primary { color: var(--accent-text); }
+.tree-add-primary .icon { color: var(--accent-text); }
+
 .tree-item {
-  padding: 4px 7px;
-  border-radius: 6px;
+  position: relative;
+  min-height: 26px;
+  padding: 3px 6px;
+  border-radius: var(--radius);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   transition: background-color 0.1s;
 }
 .tree-item:hover { background: var(--bg-hover); }
 /* Lit, not filled: the row is still a row of the list, with an edge in the
    accent colour to say which one. */
 .tree-item.selected {
-  background: linear-gradient(90deg, rgba(76, 157, 255, 0.34), rgba(76, 157, 255, 0.2));
+  background: var(--accent-mid);
   box-shadow: inset 2px 0 0 var(--accent);
   color: #fff;
 }
-.tree-item.disabled { color: var(--fg-dim); font-style: italic; }
-.tree-empty { color: var(--fg-dim); font-style: italic; padding: 3px 6px; }
+.tree-item.disabled { color: var(--fg-dim); }
+.tree-item.disabled .tree-op-name { text-decoration: line-through; text-decoration-color: var(--fg-faint); }
+.tree-empty { color: var(--fg-faint); padding: 3px 6px; font-size: 12px; }
+/* under a section of the tree, level with the names in its rows */
+#tree .tree-empty { padding-left: 28px; }
 .tree-toggle { flex: 0 0 auto; width: 13px; height: 13px; accent-color: var(--accent); }
-.tree-op { padding-left: 22px; }
-.tree-op-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-op-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-kind-icon { flex: 0 0 auto; color: var(--fg-dim); }
+.tree-item.selected .tree-kind-icon { color: #fff; }
+
+/* A setup and what is in it. The setup row carries a caret that folds its
+   operations away; what is under it hangs off a guide line, so a long program
+   still reads as belonging to the setup above it. */
+.tree-setup { font-weight: 600; }
+.tree-setup .tree-caret {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 18px;
+  margin-right: -3px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+}
+.tree-setup .tree-caret .icon { transition: transform 0.12s var(--ease); }
+.tree-setup .tree-caret.folded .icon { transform: rotate(-90deg); }
+.tree-setup .tree-caret:hover { color: var(--fg); background: none; }
+.tree-pill {
+  flex: 0 0 auto;
+  font: 500 10.5px/16px var(--mono);
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--fg-dim);
+}
+.tree-item.selected .tree-pill { background: rgba(0, 0, 0, 0.25); color: rgba(255, 255, 255, 0.85); }
+.tree-op {
+  margin-left: 13px;
+  padding-left: 9px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  box-shadow: inset 1px 0 0 var(--border-strong);
+}
+.tree-op.selected { box-shadow: inset 2px 0 0 var(--accent); }
 
 /* Renaming in place. Sized and coloured to sit exactly where the label was, so
    a double-click turns the row into an editable row rather than into a dialog. */
@@ -595,56 +615,623 @@ input.tree-rename:focus { outline: none; }
    when it did not. An operation that produced nothing used to be invisible. */
 .tree-badge {
   flex: 0 0 auto;
-  font-size: 11px;
-  font-family: Consolas, monospace;
+  font: 11px/16px var(--mono);
   color: var(--fg-dim);
   background: var(--bg);
   border-radius: 3px;
   padding: 0 5px;
-  line-height: 16px;
 }
 .tree-item.selected .tree-badge { color: #fff; background: rgba(0, 0, 0, 0.25); }
 .tree-badge.warn {
-  color: #1c1e22;
+  color: #1a1b1e;
   background: var(--warn);
   font-weight: 700;
   min-width: 16px;
   text-align: center;
 }
+/* Generated, but not from these settings. Distinct from a warning: nothing is
+   wrong, the picture is just older than the numbers beside it. */
+.tree-badge.stale {
+  color: var(--accent-text);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: transparent;
+  font-weight: 700;
+  min-width: 16px;
+  text-align: center;
+}
+/* still being generated: a small spinner where the time will go */
+.tree-badge.pending {
+  width: 12px;
+  height: 12px;
+  min-width: 0;
+  padding: 0;
+  margin-right: 3px;
+  border-radius: 50%;
+  background: transparent;
+  border: 2px solid rgba(74, 129, 187, 0.25);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
 
-.tree-h2 {
+/* The row that adds to a setup: an operation, and what holds the work. Two
+   small buttons side by side rather than two more rows in the list. */
+.tree-add-row {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
+  gap: 4px;
+  margin: 2px 0 6px 13px;
+  padding-left: 9px;
+  box-shadow: inset 1px 0 0 var(--border-strong);
 }
-.tree-h2 > span:first-child { flex: 1; }
-.tree-add {
-  padding: 1px 8px;
-  font-size: 11px;
-  background: transparent;
-  border: 1px dashed var(--border);
-  color: var(--fg-dim);
-  border-radius: 3px;
-}
-.tree-add:hover { color: var(--accent); border-color: var(--accent); border-style: solid; }
-
-/* A button that reads as a row: keyboard-reachable, but not a boxed control in
-   the middle of a list of operations. */
 .tree-add-op {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 3px 6px 3px 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
   background: transparent;
-  border: 1px solid transparent;
+  border: 1px dashed var(--border-strong);
   color: var(--fg-dim);
-  font-style: italic;
+  border-radius: var(--radius);
+  font-size: 12px;
+  cursor: pointer;
+}
+.tree-add-op .icon { color: var(--fg-dim); }
+.tree-add-op:hover { background: var(--bg-hover); color: var(--fg); border-color: #4a4e55; border-style: solid; }
+.tree-add-op:hover .icon { color: var(--fg); }
+.tree-add-op:focus-visible { outline: none; box-shadow: var(--ring); color: var(--fg); }
+
+/* --- per-operation path visibility and drag reorder --- */
+
+.tree-eye {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--fg-dim);
   cursor: pointer;
   border-radius: 3px;
 }
-.tree-add-op:hover { background: var(--bg-hover); color: var(--accent); border-color: transparent; }
-.tree-add-op:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; color: var(--accent); }
+.tree-eye:hover { color: var(--fg); background: rgba(255, 255, 255, 0.07); }
+.tree-eye.off { color: var(--fg-faint); }
+.tree-item.selected .tree-eye { color: rgba(255, 255, 255, 0.85); }
+/* Hidden means "not drawn", which must not read the same as disabled — the
+   operation is still in the program. */
+.tree-op.path-hidden .tree-op-name { opacity: 0.62; font-style: italic; }
+
+.tree-op.dragging { opacity: 0.4; }
+.tree-op.drop-above { box-shadow: inset 0 2px 0 var(--accent), inset 1px 0 0 var(--border-strong); }
+.tree-op.drop-below { box-shadow: inset 0 -2px 0 var(--accent), inset 1px 0 0 var(--border-strong); }
+
+/* A clamp in the tree: its icon in the colour the viewport draws it in, so the
+   row and the box on screen read as the same object. */
+.tree-fixture .tree-kind-icon { color: #c77a78; }
+.tree-item.selected.tree-fixture .tree-kind-icon { color: #fff; }
+
+/* --- the tool list ------------------------------------------------------
+   Compact rows with the cutter laid on its side. A tool list is read by
+   scanning down it for a shape, so the shape gets the room and the text gets
+   what is left. */
+
+.tree-tool {
+  padding: 0 6px;
+  gap: 6px;
+  min-height: 32px;
+}
+.tree-tool-number {
+  flex: 0 0 auto;
+  font: 11px var(--mono);
+  color: var(--fg-dim);
+  min-width: 22px;
+}
+/* The name is what varies; everything else on the row is a fixed width, so the
+   name is what gets the leftover space and the only thing that ever truncates. */
+.tree-tool .tree-op-name { font-size: 12px; }
+.tree-tool-size {
+  flex: 0 0 auto;
+  font: 11px var(--mono);
+  color: var(--fg-dim);
+}
+.tree-item.selected .tree-tool-number,
+.tree-item.selected .tree-tool-size { color: rgba(255, 255, 255, 0.8); }
+.tool-icon-horizontal { flex: 0 0 auto; opacity: 0.95; }
+.tree-tool:hover .tool-icon-horizontal { opacity: 1; }
+
+/* A delete affordance on the row itself. The glyph is small because a row of
+   tools should not look like a row of delete buttons; the *target* is the
+   row's full height and at least 24px wide, because it sits a few pixels from
+   the name you were trying to click. */
+.tree-row-remove {
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 11px;
+  line-height: 1;
+  visibility: hidden;
+}
+.tree-item:hover .tree-row-remove { visibility: visible; }
+.tree-row-remove:hover { color: var(--danger-text); background: transparent; }
+.tree-item.selected .tree-row-remove { visibility: visible; color: rgba(255, 255, 255, 0.75); }
+
+/* --- the checklist, above the tree ----------------------------------------
+   What to do next. It lives at the top of the project tree, not over the part:
+   a panel that explains the app by covering the thing you are working on is a
+   bad trade after the first thirty seconds. */
+.tree-hint {
+  display: none;
+  margin: 0 0 10px;
+  padding: 6px 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  font-size: 12px;
+}
+.tree-hint.on { display: block; }
+
+.hint-fold {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 2px;
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  text-align: left;
+}
+.hint-fold:hover { color: var(--fg); background: none; }
+.hint-fold .icon { transition: transform 0.12s var(--ease); }
+.hint-fold.folded .icon { transform: rotate(-90deg); }
+.hint-fold > span:first-of-type { flex: 1; }
+.hint-count { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--fg-faint); }
+
+.hint-progress {
+  height: 2px;
+  margin: 5px 2px 6px;
+  background: var(--border);
+  border-radius: 1px;
+  overflow: hidden;
+}
+.hint-progress > span { display: block; height: 100%; background: var(--accent); }
+
+.hint-steps { list-style: none; display: flex; flex-direction: column; gap: 1px; }
+.hint-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 4px;
+  border-radius: var(--radius);
+}
+.hint-mark {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-faint);
+}
+.hint-step.done { color: var(--fg-faint); }
+.hint-step.done .hint-mark { border-color: transparent; background: rgba(93, 155, 112, 0.2); color: #8cc39c; }
+/* the step you are on is the button that does it */
+.hint-step.next {
+  color: var(--fg);
+  cursor: pointer;
+  background: var(--accent-soft);
+  border-color: rgba(74, 129, 187, 0.35);
+}
+.hint-step.next .hint-mark { border-color: var(--accent); background: var(--accent); color: #fff; }
+.hint-step.next:hover { background: var(--accent-mid); }
+.hint-step.todo { opacity: 0.75; }
+
+/* --- the properties panel -------------------------------------------------
+
+   What is selected, said at the top in so many words — its kind, its name as a
+   box you can type into, and what you can do to it — and then its settings.
+   It used to open on the word "Properties" over a Name field, which told you
+   nothing about which of the six kinds of thing the fields below were for, and
+   the way to delete it was a button at the bottom of a panel that scrolls. */
+.inspector-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0 -12px 8px;
+  padding: 10px 12px 9px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+.inspector-kind {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 16px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+}
+.inspector-kind .icon { color: var(--fg-dim); }
+.inspector-kind .inspector-where {
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inspector-title { display: flex; align-items: center; gap: 4px; margin-top: 6px; }
+.inspector-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+}
+.inspector-name:hover { border-color: var(--border-strong); }
+.inspector-name:focus { background: var(--bg); }
+.inspector-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 6px 0 0 8px;
+  color: var(--fg-dim);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.inspector-toggle input { width: 14px; height: 14px; accent-color: var(--accent); }
+.inspector-toggle:hover { color: var(--fg); }
+
+.prop-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; min-height: 28px; }
+.prop-row label { flex: 0 0 118px; color: var(--fg-dim); font-size: 12.5px; line-height: 1.3; }
+.prop-row input, .prop-row select {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 0 8px;
+  font: inherit;
+}
+.prop-row input[type="checkbox"] { flex: 0 0 auto; width: 15px; height: 15px; accent-color: var(--accent); }
+.prop-row button { flex: 1; }
+
+.prop-note {
+  color: var(--fg-dim);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 4px 0 2px;
+  padding-left: 2px;
+}
+
+/* A note the user needs to act on — "this operation cut nothing, and here is
+   why". Dim grey is right for an aside and wrong for a diagnosis. */
+.prop-note.warn {
+  color: #d9b56a;
+  background: var(--warn-soft);
+  border-left: 2px solid var(--warn);
+  padding: 6px 8px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.prop-field { margin-bottom: 6px; }
+.prop-hint {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--fg-dim);
+  padding: 1px 2px 0;
+}
+
+/* The buttons that act on the selection, in a row at the end of its fields. */
+.prop-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.prop-actions > button { flex: 1 1 auto; }
+
+/* armed face-picking button — the viewport is waiting for a click */
+button.pick-active {
+  border-color: var(--accent);
+  background: var(--accent-mid);
+  color: #fff;
+}
+
+/* A two-or-three-way choice where the options are short and exclusive. Reads as
+   one control with a part of it lit, which is what "which of these" looks like;
+   a dropdown for two words hides one of them behind a click. */
+.seg-control {
+  display: flex;
+  flex: 1;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+.seg-control button {
+  flex: 1;
+  height: 24px;
+  padding: 0 8px;
+  margin: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+}
+.seg-control button:hover { color: var(--fg); background: var(--bg-hover); }
+.seg-control button.seg-on {
+  background: var(--accent-mid);
+  border-color: rgba(74, 129, 187, 0.55);
+  color: #fff;
+}
+
+/* --- the operation panel ---------------------------------------------------- */
+
+/* The strategy, at the top of the operation panel, as a thing rather than as a
+   dropdown entry. */
+.strategy-current-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 9px 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  color: var(--fg);
+  font: inherit;
+}
+.strategy-current-card:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.strategy-current-text { flex: 1; min-width: 0; }
+.strategy-current-card .strategy-summary { color: var(--fg-dim); }
+.strategy-change {
+  flex: 0 0 auto;
+  align-self: center;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+  padding: 3px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+.strategy-current-card:hover .strategy-change { color: var(--fg); border-color: #4a4e55; }
+
+/* --- saying what an operation does, in words --- */
+
+.op-intent {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: 7px 9px;
+  margin: 0 0 8px;
+}
+
+/* The operation panel's primary control: which part of the operation you are
+   editing, so it sits directly under what the operation *is* and sticks under
+   the panel's header as the rest scrolls beneath it. One row: the tabs share
+   the width, and only a panel dragged narrower than the words wraps them. */
+.op-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 10px 0 6px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  position: sticky;
+  top: var(--inspector-height, 0px);
+  z-index: 2;
+}
+.op-tab {
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 3px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.op-tab:hover { color: var(--fg); background: var(--bg-hover); }
+.op-tab.active {
+  color: var(--fg);
+  background: var(--bg-active);
+  border-color: var(--border-strong);
+}
+.op-tab-count {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent-mid);
+  color: var(--accent-text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+}
+
+/* --- derived cutting numbers readout --- */
+
+.cutting-report {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.cutting-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 1px 0;
+}
+.cutting-row span:first-child { color: var(--fg-dim); }
+.cutting-row span:last-child { font-family: var(--mono); font-size: 11.5px; text-align: right; }
+
+/* --- program summary on a setup --- */
+
+.job-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin: 2px 0 4px;
+}
+.job-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+.job-row:nth-child(odd) { background: rgba(255, 255, 255, 0.022); }
+.job-tool {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--fg-dim);
+  min-width: 24px;
+}
+.job-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-time { flex: 0 0 auto; color: var(--fg-dim); font-family: var(--mono); font-size: 11.5px; }
+
+/* --- snap-to buttons under a height field ---------------------------------
+   The Z values the app already knows: the top of the part, the bottom of the
+   billet. Small and quiet, because they sit under every height field. */
+
+.prop-snaps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0 4px 126px;
+}
+.prop-snaps-label {
+  font-size: 10.5px;
+  color: var(--fg-faint);
+  margin-right: 2px;
+}
+.prop-snap {
+  padding: 1px 7px;
+  font-size: 11px;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+  background: transparent;
+}
+.prop-snap:hover { color: var(--fg); background: var(--bg-hover); }
+/* the height is already there: say so rather than offering it again */
+.prop-snap.at { color: var(--accent-text); border-color: var(--accent); }
+
+/* --- tool shapes --- */
+
+.tool-icon { display: block; flex: 0 0 auto; }
+
+/* The cutter drawn large at the top of the tool panel, redrawn on every edit. */
+.tool-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 6px 10px;
+  margin-bottom: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.tool-preview-name { font-weight: 600; }
+.tool-preview-meta { color: var(--fg-dim); font-size: 12px; margin-top: 2px; }
+
+.tool-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-dim);
+  font-size: 12px;
+  padding: 2px 0 6px 126px;
+}
+
+/* --- the whole tool, to scale, beside the business end --- */
+
+.tool-assembly {
+  flex: 0 0 auto;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2px;
+}
+
+/* A lathe tool is wide and short — it lies in the ZX plane with its shank
+   running back along Z — so it gets the width of the panel and its own row.
+   Scoped to the properties panel, and it has to be: an SVG with a viewBox
+   answers `width: 100%` with a proportionally taller *height*, so the same rule
+   in the wizard's wider column turned a 108px drawing into 359px and pushed the
+   Create button off the bottom of the dialog. */
+.tool-preview-lathe { flex-direction: column; align-items: stretch; gap: 8px; }
+.tool-preview-lathe .tool-assembly-lathe { width: 100%; height: auto; }
+.tool-legend {
+  display: flex;
+  gap: 9px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.tool-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.tool-legend-item i {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+.tool-legend-cutting i { background: #b9c1ca; }
+.tool-legend-shank i { background: #7f8691; }
+.tool-legend-holder i { background: #4c525c; }
+
+/* --- the viewport ----------------------------------------------------------- */
 
 #viewport {
   grid-area: viewport;
@@ -652,58 +1239,30 @@ input.tree-rename:focus { outline: none; }
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  /* The backdrop the part stands in front of: lighter above, where the light
-     comes from, and falling away to the floor. Drawn by the page, not by WebGL,
-     because the browser dithers a gradient and a canvas bands one. */
-  background:
-    radial-gradient(120% 85% at 50% 28%, rgba(96, 128, 176, 0.10), transparent 62%),
-    linear-gradient(180deg, #272c34 0%, #1b1e23 58%, #131518 100%);
+  /* The backdrop the part stands in front of: a little lighter above, where the
+     light comes from, falling away to the floor. Neutral, so the part's own
+     colour and the toolpath's are the only colour in the frame. Drawn by the
+     page, not by WebGL, because the browser dithers a gradient and a canvas
+     bands one. */
+  background: linear-gradient(180deg, #2a2c30 0%, #1c1d20 60%, #141517 100%);
 }
 #viewport canvas { display: block; }
 #viewport-canvas { position: absolute; inset: 0; }
 
-/* Buttons floating at the bottom of the viewport — the actions belong where
-   the user is already looking, not on a distant toolbar. */
-/* Everything that floats over the part is one kind of thing: a dark glass tile
-   with a soft shadow, so it reads as lying on top of the scene and not as a
-   hole cut in it. */
-.viewport-overlay,
+/* Everything that floats over the part is one kind of thing: a dark tile with
+   a hairline edge, so it reads as lying on top of the scene and not as a hole
+   cut in it. */
 .view-presets,
-.viewport-tools > button {
-  background: rgba(20, 22, 27, 0.78);
+.viewport-tools > button,
+.viewport-label {
+  background: rgba(22, 23, 26, 0.88);
   border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
-  backdrop-filter: blur(10px) saturate(1.15);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(6px);
 }
 
-.viewport-overlay {
-  position: absolute;
-  left: 50%;
-  bottom: 16px;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 6px;
-  padding: 6px;
-  border-radius: 12px;
-  z-index: 2;
-}
-.viewport-overlay button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 34px;
-  padding: 0 16px 0 13px;
-  border-radius: 8px;
-}
-.viewport-overlay button:not(.primary) { background: rgba(255, 255, 255, 0.06); border-color: transparent; }
-.viewport-overlay button:not(.primary):hover { background: rgba(255, 255, 255, 0.12); }
-/* while a job runs, the buttons that would start another one stand down */
-.viewport-overlay.busy button { opacity: 0.5; pointer-events: none; }
-.viewport-overlay button .icon { transition: transform 0.2s var(--ease); }
-.viewport-overlay button:hover .icon { transform: scale(1.12); }
-
-/* View tools sit top-right, out of the way of the part but always reachable. */
-/* Held inside the viewport: pinned to both edges and wrapping, so a narrow
+/* View tools sit top-right, out of the way of the part but always reachable.
+   Held inside the viewport: pinned to both edges and wrapping, so a narrow
    viewport stacks the bar instead of running it out over the tree. The strip
    itself lets clicks through to the part; only the buttons take them. */
 .viewport-tools {
@@ -725,11 +1284,12 @@ input.tree-rename:focus { outline: none; }
   align-items: center;
   gap: 6px;
   height: 30px;
-  padding: 0 11px 0 9px;
+  padding: 0 10px 0 8px;
   font-size: 12px;
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
+  color: var(--fg);
 }
-.viewport-tools > button:hover { background: rgba(40, 44, 52, 0.9); border-color: rgba(255, 255, 255, 0.12); }
+.viewport-tools > button:hover { background: rgba(40, 42, 47, 0.95); border-color: rgba(255, 255, 255, 0.12); }
 .viewport-tools > button .icon { color: var(--fg-dim); }
 .viewport-tools > button:hover .icon { color: var(--fg); }
 
@@ -739,17 +1299,17 @@ input.tree-rename:focus { outline: none; }
   flex-wrap: wrap;
   gap: 1px;
   padding: 3px;
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
 }
 .view-presets .view-preset {
   display: inline-flex;
   align-items: center;
   height: 22px;
-  padding: 0 9px;
+  padding: 0 8px;
   font-size: 12px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   color: var(--fg-dim);
 }
 .view-presets .view-preset:hover {
@@ -760,8 +1320,10 @@ input.tree-rename:focus { outline: none; }
 /* the view the camera is square-on in, until an orbit leaves it */
 .view-presets .view-preset.active {
   color: #fff;
-  background: rgba(76, 157, 255, 0.28);
+  background: var(--accent-mid);
 }
+/* the caret that opens the rest of the views */
+.view-presets .view-more { padding: 0 4px; }
 
 /* A toggle has to look like one: struck through and dimmed when it is off, so
    "no paths on screen" reads as a choice rather than as a failed generate. */
@@ -771,1493 +1333,23 @@ input.tree-rename:focus { outline: none; }
   opacity: 0.75;
 }
 
-/* What to do next. It lives at the top of the project tree, not over the part:
-   a panel that explains the app by covering the thing you are working on is a
-   bad trade after the first thirty seconds. */
-.tree-hint {
-  display: none;
-  margin: 0 0 8px;
-  padding: 7px 8px 6px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  font-size: 12px;
-}
-.tree-hint.on { display: block; }
-
-.hint-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--fg-dim);
-}
-.hint-title > span:first-of-type { flex: 1; }
-.hint-count { font-family: Consolas, monospace; letter-spacing: 0; }
-
-.hint-fold {
-  flex: 0 0 auto;
-  width: 16px;
-  padding: 0;
-  background: none;
-  border: none;
-  color: var(--fg-dim);
-  font-size: 10px;
-  line-height: 1;
-}
-.hint-fold:hover { color: var(--accent); }
-
-.hint-steps { margin-top: 5px; }
-.hint-step {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  color: var(--fg-dim);
-  font: inherit;
-  font-size: 12px;
-  padding: 2px 3px;
-  border-radius: 3px;
-}
-.hint-mark { display: inline-block; width: 15px; }
-.hint-step.done { color: var(--fg-dim); opacity: 0.65; }
-.hint-step.done .hint-mark { color: #7bc47f; opacity: 1; }
-/* the step you are on is the button that does it */
-.hint-step.next {
-  color: var(--fg);
-  cursor: pointer;
-  background: rgba(74, 158, 255, 0.12);
-}
-.hint-step.next .hint-mark { color: var(--accent); }
-.hint-step.next:hover { background: rgba(74, 158, 255, 0.24); }
-.hint-step.todo { opacity: 0.5; }
-
-.status {
-  grid-area: status;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 26px;
-  padding: 4px 12px;
-  background: #181a1e;
-  border-top: 1px solid #121418;
-  color: var(--fg-dim);
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-}
-.status > span:not(.busy) { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.status .error { color: #ff8a80; }
-.status .error::before {
-  content: "";
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-right: 7px;
-  border-radius: 50%;
-  background: var(--danger);
-  box-shadow: 0 0 6px rgba(255, 100, 100, 0.6);
-  vertical-align: 1px;
-}
-
-/* A job is running. Silence for several seconds reads as a hang, and a hang
-   invites a second click that queues a second identical job. */
-.busy {
-  flex: 0 0 auto;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  display: none;
-}
-.busy.on {
-  display: block;
-  border-color: var(--accent) var(--accent) transparent transparent;
-  animation: spin 0.7s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) {
-  .busy.on { animation: none; border-color: var(--accent); }
-}
-
-.prop-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
-.prop-row label { flex: 0 0 110px; color: var(--fg-dim); }
-.prop-row input, .prop-row select {
-  flex: 1;
-  min-width: 0;
-  height: 26px;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  padding: 0 7px;
-  font: inherit;
-}
-.prop-row input[type="checkbox"] { flex: 0 0 auto; width: 15px; height: 15px; accent-color: var(--accent); }
-.prop-row button { flex: 1; }
-
-.prop-note {
-  color: var(--fg-dim);
-  font-size: 12px;
-  line-height: 1.4;
-  margin: 4px 0 2px;
-  padding-left: 2px;
-}
-
-/* A note the user needs to act on — "this operation cut nothing, and here is
-   why". Dim grey is right for an aside and wrong for a diagnosis. */
-.prop-note.warn {
-  color: var(--warn);
-  background: rgba(240, 180, 41, 0.08);
-  border-left: 2px solid var(--warn);
-  padding: 5px 7px;
-  border-radius: 0 3px 3px 0;
-}
-
-/* armed face-picking button — the viewport is waiting for a click */
-button.pick-active {
-  border-color: var(--accent);
-  background: #1a3a5c;
-  color: #fff;
-}
-
-/* A two-or-three-way choice where the options are short and exclusive. Reads as
-   one control with a part of it lit, which is what "which of these" looks like;
-   a dropdown for two words hides one of them behind a click. */
-.seg-control {
-  display: flex;
-  gap: 0;
-}
-
-.seg-control button {
-  flex: 1;
-  border-radius: 0;
-  margin: 0;
-}
-
-.seg-control button:first-child { border-radius: 4px 0 0 4px; }
-.seg-control button:last-child { border-radius: 0 4px 4px 0; }
-.seg-control button + button { border-left: none; }
-
-.seg-control button.seg-on {
-  border-color: var(--accent);
-  background: #1a3a5c;
-  color: #fff;
-}
-
-/* --- tool library dialog --- */
-
-.lib-dialog {
-  width: min(880px, 94vw);
-  max-height: 86vh;
-  background: var(--bg-panel);
-  color: var(--fg);
-  border: 1px solid var(--border-strong);
-  border-radius: 12px;
-  padding: 18px;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
-}
-.lib-dialog::backdrop { background: rgba(8, 10, 14, 0.58); }
-/* A dialog arrives rather than appears: a short rise and fade, over before the
-   pointer has reached anything in it. */
-.lib-dialog[open] { animation: dialog-in 0.16s var(--ease); }
-.lib-dialog[open]::backdrop { animation: fade-in 0.16s ease-out; }
-@keyframes dialog-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.985); }
-  to { opacity: 1; transform: none; }
-}
-@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) {
-  .lib-dialog[open], .lib-dialog[open]::backdrop, .context-menu { animation: none; }
-}
-.lib-dialog h2 {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  color: var(--fg-dim);
-  margin-bottom: 10px;
-}
-.lib-dialog h3 {
-  font-size: 12px;
-  color: var(--accent);
-  margin: 14px 0 6px;
-  font-weight: 600;
-}
-.lib-group:first-child h3 { margin-top: 0; }
-.lib-group-count { color: var(--fg-dim); font-weight: 400; }
-
-.lib-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.lib-head h2 { margin: 0; }
-.lib-count {
-  flex: 1;
-  font-size: 11px;
-  color: var(--fg-dim);
-  font-family: Consolas, monospace;
-}
-.lib-search {
-  flex: 0 0 260px;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 8px;
-  font: inherit;
-  font-size: 12px;
-}
-.lib-search:focus { outline: none; border-color: var(--accent); }
-
-/* Which drawer is open, and what can be done to it. Its own row rather than
-   more buttons in the footer: the footer is about the *project* — add these
-   cutters, import into it, export it — and this row is about the library
-   itself, which is a different question that happens to be asked in the same
-   dialog. */
-.lib-catalogs {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
-}
-.lib-catalogs .spacer { flex: 1; }
-.lib-catalog-label { font-size: 11px; color: var(--fg-dim); }
-.lib-catalog-select { max-width: 220px; }
-/* the note about the open catalogue: it wraps rather than pushing the buttons
-   off the row, and never grows the dialog */
-.lib-catalogs .lib-hint {
-  flex: 1 1 200px;
-  min-width: 0;
-  text-align: right;
-}
-.wiz-catalog { max-width: 180px; }
-
-.lib-body { max-height: 60vh; overflow-y: auto; padding-right: 4px; }
-
-/* A grid of cards, not a list of rows. A tool is found by its shape, so the
-   shape gets the room and the numbers go underneath it. */
-.lib-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(216px, 1fr));
-  gap: 8px;
-}
-
-.lib-item {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 2px;
-  padding: 7px 8px 8px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  cursor: pointer;
-  min-width: 0;
-}
-.lib-item:hover { background: var(--bg-hover); border-color: var(--fg-dim); }
-.lib-item.checked { border-color: var(--accent); background: rgba(74, 158, 255, 0.12); }
-
-/* The tick sits in the corner of the card; the whole card is the label, so it
-   is a state to read rather than a target to hit. */
-.lib-check {
+/* Which setup the scene is drawn in, top left, when there is more than one. */
+.viewport-label {
   position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 14px;
-  height: 14px;
-  accent-color: var(--accent);
-  margin: 0;
-}
-
-.lib-preview {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 80px;
-  margin-bottom: 3px;
-  background: rgba(0, 0, 0, 0.22);
-  border-radius: 4px;
-  overflow: hidden;
-}
-/* the drawing is the thing being scanned for, so it gets the card's width */
-.lib-preview .tool-icon { width: 100%; height: 100%; }
-.lib-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-.lib-name {
-  font-size: 12px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.lib-meta {
-  color: var(--fg-dim);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.lib-speeds {
-  color: var(--fg-dim);
-  font-size: 11px;
-  font-family: Consolas, monospace;
-  opacity: 0.8;
-}
-
-.lib-actions { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
-.lib-actions .spacer { flex: 1; }
-button.primary {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-  font-weight: 600;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, 0 2px 8px rgba(76, 157, 255, 0.25);
-}
-button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
-button.primary:active:not(:disabled) { background: #3b8cf0; }
-
-/* --- tabs on the operation properties panel --- */
-
-/* The operation panel's primary control: which part of the operation you are
-   editing, so it sits directly under what the operation *is* and sticks to the
-   top of the panel as the rest scrolls under it.
-   It wraps rather than scrolling sideways. Six tabs overflow a 300px panel by
-   about 165 pixels, and a sideways-scrolling bar with the scrollbar hidden —
-   which is what it takes for it to not look broken — means two of the six are
-   invisible and unreachable by anyone who does not think to drag it. A second
-   row is 31 pixels; an undiscoverable tab is the whole feature. */
-.op-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  margin: 10px 0 4px;
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
+  top: 10px;
+  left: 10px;
   z-index: 2;
-  background: var(--bg-panel);
-}
-.op-tab {
-  padding: 6px 10px;
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  color: var(--fg-dim);
+  max-width: 40%;
+  padding: 5px 9px;
+  border-radius: var(--radius-lg);
   font-size: 12px;
-  white-space: nowrap;
-  flex: 0 0 auto;
-  cursor: pointer;
-}
-.op-tab:hover { color: var(--fg); }
-.op-tab.active {
-  color: var(--fg);
-  border-bottom-color: var(--accent);
-}
-
-/* --- derived cutting numbers readout --- */
-
-.cutting-report {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 6px 8px;
-  margin-top: 6px;
-  font-size: 12px;
-}
-.cutting-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 1px 0;
-}
-.cutting-row span:first-child { color: var(--fg-dim); }
-.cutting-row span:last-child { font-family: Consolas, monospace; }
-
-/* --- right-click context menu --- */
-
-.context-menu {
-  position: fixed;
-  min-width: 180px;
-  background: rgba(30, 33, 38, 0.97);
-  border: 1px solid var(--border-strong);
-  border-radius: 9px;
-  padding: 4px;
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(8px);
-  z-index: 1000;
-  animation: fade-in 0.1s ease-out;
-}
-.context-item {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 6px 10px;
-  background: transparent;
-  border: none;
-  color: var(--fg);
-  border-radius: 6px;
-  cursor: pointer;
-  font: inherit;
-}
-.context-item:hover { background: var(--accent-soft); border-color: transparent; }
-.context-item.danger { color: var(--danger); }
-.context-sep {
-  height: 1px;
-  background: var(--border);
-  margin: 3px 6px;
-}
-
-/* A clamp in the tree. Coloured like the overlay that draws it in the
-   viewport, so the row and the red box on screen read as the same object. */
-.tree-fixture .tree-op-name { color: #ff8fa0; }
-.tree-item.selected.tree-fixture .tree-op-name { color: #fff; }
-
-/* --- tool shapes --- */
-
-.tool-icon { display: block; flex: 0 0 auto; }
-
-/* The cutter drawn large at the top of the tool panel, redrawn on every edit. */
-.tool-preview {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 6px 10px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 6px;
-}
-.tool-preview-name { font-weight: 600; }
-.tool-preview-meta { color: var(--fg-dim); font-size: 12px; margin-top: 2px; }
-
-.tool-inline {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   color: var(--fg-dim);
-  font-size: 12px;
-  padding: 2px 0 6px 2px;
-}
-
-.tree-tool .tool-icon { margin-right: 2px; }
-
-/* Generated, but not from these settings. Distinct from a warning: nothing is
-   wrong, the picture is just older than the numbers beside it. */
-.tree-badge.stale {
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  font-weight: 700;
-  min-width: 16px;
-  text-align: center;
-  line-height: 14px;
-}
-
-/* still being generated: a small spinner where the time will go */
-.tree-badge.pending {
-  width: 12px;
-  height: 12px;
-  min-width: 0;
-  padding: 0;
-  margin-right: 3px;
-  border-radius: 50%;
-  background: transparent;
-  border: 2px solid rgba(74, 158, 255, 0.25);
-  border-top-color: var(--accent);
-  animation: spin 0.7s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .tree-badge.pending { animation: none; border-color: var(--accent); }
-}
-
-/* --- program summary on a setup --- */
-
-.job-list {
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  overflow: hidden;
-  margin: 2px 0 4px;
-}
-.job-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 7px;
-  font-size: 12px;
-}
-.job-row:nth-child(odd) { background: rgba(255, 255, 255, 0.025); }
-.job-tool {
-  flex: 0 0 auto;
-  font-family: Consolas, monospace;
-  color: var(--accent);
-  min-width: 22px;
-}
-.job-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.job-time { flex: 0 0 auto; color: var(--fg-dim); font-family: Consolas, monospace; }
-
-/* --- strategy icons and the strategy picker --- */
-
-/* Filled shapes are material, stroked ones are the tool's motion, and `accent`
-   marks the feature the strategy exists to make. Read at 18–30px, so the only
-   thing that has to survive is the shape of the cut. */
-.op-icon { flex: 0 0 auto; }
-.op-icon > * { fill: rgba(255, 255, 255, 0.22); stroke: none; }
-.op-icon .stroke {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.4;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.op-icon .stroke.wide { stroke-width: 2; }
-.op-icon .stroke.dashed { stroke-dasharray: 2.5 2; opacity: 0.75; }
-.op-icon .stroke.accent { stroke: var(--warn); stroke-width: 2.2; }
-.tree-item.selected .op-icon > * { fill: rgba(255, 255, 255, 0.4); }
-.tree-item.selected .op-icon .stroke { stroke: #fff; fill: none; }
-
-.tree-op-icon { margin-right: 1px; }
-
-.strategy-dialog { width: min(880px, 94vw); }
-.strategy-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 8px;
-}
-/* A column, not a block: a <button> centres its content vertically whatever
-   its display says, so in a row of cards stretched to the tallest one every
-   shorter card floated its icon and name down to the middle. */
-.strategy-card {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  align-items: stretch;
-  text-align: left;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 9px 10px;
-  cursor: pointer;
-  color: var(--fg);
-  font: inherit;
-}
-.strategy-card:hover { background: var(--bg-hover); border-color: var(--fg-dim); }
-.strategy-card.checked {
-  border-color: var(--accent);
-  background: rgba(74, 158, 255, 0.12);
-}
-.strategy-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
-.strategy-name { font-weight: 600; }
-.strategy-current {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: 3px;
-  padding: 0 4px;
-}
-.strategy-summary { font-size: 12px; line-height: 1.45; }
-.strategy-when { font-size: 12px; line-height: 1.45; color: var(--fg-dim); margin-top: 4px; }
-.strategy-cutter { font-size: 11px; color: var(--fg-dim); margin-top: 5px; font-style: italic; }
-.lib-hint { font-size: 11px; color: var(--fg-dim); }
-
-/* The strategy, at the top of the operation panel, as a thing rather than as a
-   dropdown entry. */
-.strategy-current-card {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  text-align: left;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 8px 9px;
-  margin-bottom: 6px;
-  cursor: pointer;
-  color: var(--fg);
-  font: inherit;
-}
-.strategy-current-card:hover { background: var(--bg-hover); border-color: var(--accent); }
-.strategy-current-text { flex: 1; min-width: 0; }
-.strategy-current-card .strategy-summary { color: var(--fg-dim); }
-.strategy-change { flex: 0 0 auto; font-size: 11px; color: var(--accent); }
-
-/* --- per-operation path visibility and drag reorder --- */
-
-.tree-eye {
-  flex: 0 0 auto;
-  background: none;
-  border: none;
-  color: var(--fg-dim);
-  cursor: pointer;
-  font-size: 11px;
-  line-height: 1;
-  padding: 2px 3px;
-  border-radius: 3px;
-}
-.tree-eye:hover { color: var(--accent); background: rgba(255, 255, 255, 0.07); }
-.tree-eye.off { color: var(--fg-dim); opacity: 0.6; }
-.tree-item.selected .tree-eye { color: #fff; }
-/* Hidden means "not drawn", which must not read the same as disabled — the
-   operation is still in the program. */
-.tree-op.path-hidden .tree-op-name { opacity: 0.62; font-style: italic; }
-
-.tree-op.dragging { opacity: 0.4; }
-.tree-op.drop-above { box-shadow: inset 0 2px 0 var(--accent); }
-.tree-op.drop-below { box-shadow: inset 0 -2px 0 var(--accent); }
-
-/* --- help dialog --- */
-
-.help-button { font-weight: 700; }
-.help-dialog { width: min(920px, 95vw); }
-.help-body { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; max-height: 62vh; }
-.help-column { min-width: 0; }
-.help-column > h3 {
-  font-size: 12px;
-  color: var(--accent);
-  margin: 0 0 8px;
-  font-weight: 600;
-}
-
-.help-step { display: flex; gap: 9px; margin-bottom: 9px; }
-.help-step-n {
-  flex: 0 0 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: var(--bg-hover);
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 700;
-  text-align: center;
-  line-height: 20px;
-}
-.help-step-title { font-size: 13px; }
-.help-step-detail { font-size: 12px; color: var(--fg-dim); line-height: 1.45; }
-
-.help-key-row { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; }
-.help-keys { flex: 0 0 108px; text-align: right; white-space: nowrap; }
-.help-key-label { font-size: 12px; color: var(--fg-dim); }
-.help-plus { color: var(--fg-dim); font-size: 10px; margin: 0 2px; }
-kbd {
-  display: inline-block;
-  font-family: Consolas, monospace;
-  font-size: 11px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-bottom-width: 2px;
-  border-radius: 3px;
-  padding: 1px 5px;
-  color: var(--fg);
-}
-
-/* --- the whole tool, to scale, beside the business end --- */
-
-.tool-assembly {
-  flex: 0 0 auto;
-  background: rgba(0, 0, 0, 0.18);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 2px;
-}
-
-/* A lathe tool is wide and short — it lies in the ZX plane with its shank
-   running back along Z — so it gets the width of the panel and its own row.
-   Scoped to the properties panel, and it has to be: an SVG with a viewBox
-   answers `width: 100%` with a proportionally taller *height*, so the same rule
-   in the wizard's wider column turned a 108px drawing into 359px and pushed the
-   Create button off the bottom of the dialog. The size the drawing is asked for
-   in code is the size it gets everywhere else. */
-.tool-preview-lathe { flex-direction: column; align-items: stretch; gap: 8px; }
-.tool-preview-lathe .tool-assembly-lathe { width: 100%; height: auto; }
-.tool-legend {
-  display: flex;
-  gap: 9px;
-  margin-top: 6px;
-  font-size: 11px;
-  color: var(--fg-dim);
-}
-.tool-legend-item { display: inline-flex; align-items: center; gap: 4px; }
-.tool-legend-item i {
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
-  border: 1px solid rgba(255, 255, 255, 0.35);
-}
-.tool-legend-cutting i { background: #c3d4e4; }
-.tool-legend-shank i { background: #6c7381; }
-.tool-legend-holder i { background: #4a505c; }
-
-/* --- saying what an operation does, in words --- */
-
-.op-intent {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--fg);
-  background: rgba(74, 158, 255, 0.09);
-  border-left: 2px solid var(--accent);
-  border-radius: 0 4px 4px 0;
-  padding: 7px 9px;
-  margin: 0 0 8px;
-}
-.prop-field { margin-bottom: 6px; }
-.prop-hint {
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--fg-dim);
-  padding: 1px 2px 0;
-}
-
-/* --- Mill / Lathe --------------------------------------------------------
-   The first control on the toolbar, and the only one that changes what the
-   rest of the app is about. Drawn as a segmented control rather than as two
-   more buttons, so it reads as "which of these am I on" and not "what do I
-   want to do". */
-
-.machine-tabs {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  margin-right: 4px;
-  height: 30px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.machine-tab {
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 0 14px;
-  color: var(--fg-dim);
-  font-weight: 600;
-}
-
-.machine-tab:hover { color: var(--fg); background: var(--bg-hover); }
-
-.machine-tab.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-  box-shadow: 0 1px 4px rgba(76, 157, 255, 0.35);
-}
-
-.machine-tab.active:hover { background: var(--accent); color: #fff; }
-
-/* --- the tool list ------------------------------------------------------
-   Compact rows with the cutter laid on its side. A tool list is read by
-   scanning down it for a shape, so the shape gets the room and the text gets
-   what is left. */
-
-.tree-tool {
-  padding: 0 6px;
-  gap: 6px;
-  min-height: 34px;
-}
-
-.tree-tool-number {
-  flex: 0 0 auto;
-  font-family: Consolas, monospace;
-  font-size: 11px;
-  color: var(--fg-dim);
-  min-width: 20px;
-}
-
-/* The name is what varies; everything else on the row is a fixed width, so the
-   name is what gets the leftover space and the only thing that ever truncates. */
-.tree-tool .tree-op-name { font-size: 12px; }
-
-.tree-tool-size {
-  flex: 0 0 auto;
-  font-family: Consolas, monospace;
-  font-size: 11px;
-  color: var(--fg-dim);
-}
-
-.tree-item.selected .tree-tool-number,
-.tree-item.selected .tree-tool-size { color: rgba(255, 255, 255, 0.8); }
-
-.tool-icon-horizontal { flex: 0 0 auto; opacity: 0.95; }
-.tree-tool:hover .tool-icon-horizontal { opacity: 1; }
-
-/* A delete affordance on the row itself. Hidden until the row is under the
-   pointer so a list of tools stays a list of tools, but present — removing a
-   cutter used to be reachable only from the right-click menu. */
-/* The glyph is 11px because a row of tools should not look like a row of
-   delete buttons. The *target* has no business being 11px: this removes an
-   operation, and it sits a few pixels from the name you were trying to click.
-   Stretching it to the row's own height and giving it a floor of 24px wide
-   leaves the mark exactly as small as it was and the thing you press the size
-   of the thing you meant to press. */
-.tree-row-remove {
-  flex: 0 0 auto;
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  padding: 0 4px;
-  border: none;
-  background: transparent;
-  color: var(--fg-dim);
-  font-size: 11px;
-  line-height: 1;
-  visibility: hidden;
-}
-
-.tree-item:hover .tree-row-remove { visibility: visible; }
-.tree-row-remove:hover { color: var(--danger, #e5534b); background: transparent; }
-.tree-item.selected .tree-row-remove { visibility: visible; color: rgba(255, 255, 255, 0.75); }
-
-.tree-add-primary { color: var(--accent); font-weight: 600; }
-
-/* --- the tool wizard ---------------------------------------------------- */
-
-/* Everything here is in service of one rule: the wizard shows all of itself.
-   A dialog you have to scroll to reach "Create tool" is a dialog whose last
-   question is invisible, and `dialog` scrolls by default — so the height is
-   held down by the layout rather than absorbed by a scroll bar. */
-.wiz-dialog {
-  max-width: min(1040px, 96vw);
-  width: min(1040px, 96vw);
-  max-height: 96vh;
-  overflow: hidden;
-}
-/* Title, body, action bar — a column in which the body scrolls and the bar is
-   the floor. With only `overflow: hidden` on the dialog, a window shorter than
-   the wizard (1024×768 is enough) simply cut the bottom off: the name row and
-   the Create button were not scrolled out of view, they were unreachable, and
-   the tool could not be made. Only while open — an author `display` on a
-   dialog would otherwise override the closed one's `display: none`. */
-.wiz-dialog[open] { display: flex; flex-direction: column; }
-.wiz-body { display: flex; flex-direction: column; gap: 10px; }
-.wiz-dialog > .wiz-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-.wiz-dialog > .lib-actions { flex: 0 0 auto; }
-
-.wiz-families {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 6px;
-}
-
-.wiz-family {
-  display: grid;
-  grid-template-columns: 34px 1fr;
-  grid-template-rows: auto auto;
-  gap: 2px 8px;
-  align-items: center;
-  text-align: left;
-  padding: 6px 8px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-}
-
-.wiz-family-icon { grid-row: 1 / 3; display: flex; align-items: center; justify-content: center; }
-.wiz-family-label { font-weight: 600; }
-/* Two lines, and the rest on hover. Ten cards whose hints wrap to three lines
-   are sixty pixels of dialog spent on the sentence under "Flat end mill" — and
-   the dialog has to fit on a laptop with the Create button visible. The whole
-   text is on the card's `title`. */
-.wiz-family-hint {
-  font-size: 11px;
-  color: var(--fg-dim);
-  line-height: 1.25;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.wiz-family:hover { border-color: var(--accent); background: var(--bg-hover); }
-.wiz-family.active { border-color: var(--accent); background: var(--bg-hover); box-shadow: inset 0 0 0 1px var(--accent); }
-/* a lathe insert offered on the mill: still choosable, just not the point */
-.wiz-family.other-machine { opacity: 0.45; }
-.wiz-family.other-machine:hover, .wiz-family.other-machine.active { opacity: 1; }
-
-.wiz-columns {
-  display: grid;
-  grid-template-columns: 1fr 1fr minmax(250px, 1.2fr);
-  gap: 16px;
-  align-items: start;
-}
-.wiz-column h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); }
-.wiz-column-preview { min-width: 250px; }
-
-.wiz-fields { display: flex; flex-direction: column; gap: 4px; }
-.wiz-field { display: grid; grid-template-columns: 1fr 120px; gap: 8px; align-items: center; }
-.wiz-field > span { color: var(--fg-dim); font-size: 12px; }
-.wiz-field input,
-.wiz-field select {
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 3px 6px;
-  font: inherit;
-  width: 100%;
-  min-width: 0;
-}
-/* the insert shape names are long ("C — Rhombic 80°"), so the select gets to
-   be readable at the cost of the label beside it */
-.wiz-field select { font-size: 12px; }
-.wiz-name-row { grid-template-columns: 1fr; gap: 4px; }
-.wiz-name-row input { width: 100%; }
-
-/* the custom-shape row: a button (and a Clear) rather than a number field */
-.wiz-shape-row { grid-template-columns: 1fr auto; align-items: center; }
-.wiz-shape-row button {
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 3px 8px;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.wiz-shape-row button:hover { border-color: var(--accent); }
-.wiz-shape-row .wiz-shape-clear { color: var(--fg-dim); margin-left: 6px; }
-
-/* the custom-insert shape editor */
-.shape-dialog { width: min(620px, 94vw); }
-.shape-body { display: flex; gap: 16px; align-items: flex-start; }
-.shape-canvas-wrap {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px;
-  flex: 0 0 auto;
-}
-.shape-canvas { display: block; touch-action: none; }
-.shape-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.shape-tools { display: flex; flex-wrap: wrap; gap: 6px; }
-.shape-tools button {
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 4px 8px;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.shape-tools button:hover { border-color: var(--accent); }
-.shape-preview { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
-
-.shape-grid { stroke: var(--border); stroke-width: 0.008; }
-.shape-axis { stroke: var(--fg-dim); stroke-width: 0.012; opacity: 0.6; }
-.shape-poly { fill: rgba(233, 196, 106, 0.25); stroke: var(--accent); stroke-width: 0.02; stroke-linejoin: round; }
-.shape-mid { fill: var(--fg-dim); opacity: 0.5; cursor: copy; }
-.shape-handle { fill: var(--bg-panel); stroke: var(--accent); stroke-width: 0.02; cursor: grab; }
-.shape-handle.selected { stroke-width: 0.035; }
-.shape-handle.cutting { fill: var(--accent); stroke: #fff; }
-
-.wiz-preview { display: flex; gap: 12px; align-items: flex-start; }
-/* a lathe tool is drawn lying down, so its description goes underneath it
-   rather than into the sliver of column left beside it */
-.wiz-preview.stacked { flex-direction: column; gap: 8px; align-items: flex-start; }
-/* the drawing is sized in the code and keeps that size: a flex column stretches
-   its children across, and an SVG with a viewBox answers a stretched width with
-   a proportionally stretched *height* — 108px of tool became 359px of column */
-.wiz-preview > svg { flex: 0 0 auto; }
-.wiz-preview-text { flex: 1; min-width: 0; }
-.wiz-preview-name { font-weight: 600; margin-bottom: 4px; }
-
-/* Surface speed and chip load: the two numbers the fields above are judged by,
-   so they read as a value rather than as more prose. */
-.wiz-readout {
-  font-variant-numeric: tabular-nums;
-  color: var(--fg);
-  margin-bottom: 4px;
-}
-
-/* Removing one of your own tools. Bottom corner rather than beside the tick,
-   so a delete is never where a select is expected. */
-.lib-remove {
-  position: absolute;
-  right: 5px;
-  bottom: 5px;
-  border: none;
-  background: transparent;
-  color: var(--fg-dim);
-  font-size: 11px;
-  line-height: 1;
-  padding: 3px 5px;
-  visibility: hidden;
-}
-.lib-item:hover .lib-remove { visibility: visible; }
-.lib-remove:hover { color: var(--danger, #e5534b); background: transparent; }
-
-.primary-outline { border-color: var(--accent); color: var(--accent); }
-
-/* --- snap-to buttons under a height field -------------------------------
-   The Z values the app already knows: the top of the part, the bottom of the
-   billet. Small and quiet, because they sit under every height field. */
-
-.prop-snaps {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 0 4px 0;
-}
-
-.prop-snaps-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--fg-dim);
-  margin-right: 2px;
-}
-
-.prop-snap {
-  padding: 1px 7px;
-  font-size: 11px;
-  border-radius: 10px;
-  color: var(--fg-dim);
-  background: transparent;
-}
-
-.prop-snap:hover { color: var(--fg); background: var(--bg-hover); }
-
-/* the height is already there: say so rather than offering it again */
-.prop-snap.at {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-/* --- machines and options ------------------------------------------------
-   Two dialogs built out of the tool library's furniture, because they are the
-   same shape of task: a few similar things on the left, the one you picked on
-   the right. */
-
-.icon-button {
-  padding: 4px 8px;
-  line-height: 1;
-}
-
-/* an icon in a button with words beside it sits on the words' centre line */
-button > .icon { flex: 0 0 auto; vertical-align: -3px; }
-
-/* Head, body, action bar — a column, so the bar is the bottom of the dialog and
-   not the end of the scroll.
-
-   The two panes inside the body scroll; the dialog does not. That takes saying
-   twice, because a grid item's default `min-height: auto` is "as tall as my
-   content" and it wins against the row: the editor grew to the full height of
-   its fields — a machine's start and end G-code are two text areas, so it is
-   over a thousand pixels — spilled out of the body, and painted straight over
-   the preset dropdown and the buttons underneath. `overflow-y: auto` on the
-   pane cannot scroll a box that was never made short. */
-.machine-dialog {
-  width: min(940px, 95vw);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.machine-body {
-  display: grid;
-  grid-template-columns: minmax(200px, 260px) 1fr;
-  /* One row, and it may not be taller than the body. An implicit `auto` row is
-     sized to its content and the panes then fill *it*, so `min-height: 0` on a
-     pane changes nothing — the row is what has to be told. */
-  grid-template-rows: minmax(0, 1fr);
-  gap: 14px;
-  max-height: 62vh;
-  /* room to be worth opening, but never more than the window has: a floor
-     taller than the dialog is a floor that pushes the action bar off it */
-  min-height: min(320px, 40vh);
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.machine-list {
-  overflow-y: auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding-right: 4px;
-}
-
-.machine-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 2px 6px;
-  text-align: left;
-  padding: 7px 9px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--fg);
-  font: inherit;
-}
-.machine-row:hover { background: var(--bg-hover); border-color: var(--fg-dim); }
-.machine-row.active { border-color: var(--accent); background: rgba(74, 158, 255, 0.12); }
-.machine-row-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
-.machine-row-badge {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: 3px;
-  padding: 0 4px;
-  align-self: center;
-}
-.machine-row-meta {
-  grid-column: 1 / -1;
-  font-size: 11px;
-  color: var(--fg-dim);
-  font-family: Consolas, monospace;
+  pointer-events: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.machine-editor { overflow-y: auto; min-height: 0; padding-right: 6px; }
-.machine-editor h3 { margin: 0 0 4px; font-size: 14px; }
-.machine-editor .prop-row label { flex: 0 0 190px; }
-.machine-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 14px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-.machine-preset { max-width: 280px; }
-/* The action bar is the floor of the dialog: it keeps its own background so
-   nothing shows through it, and does not shrink when the body wants the room. */
-.machine-dialog .lib-actions {
-  flex: 0 0 auto;
-  background: var(--bg-panel);
-}
-
-.options-dialog { width: min(720px, 94vw); }
-.options-body { max-height: 66vh; }
-.options-row { padding: 3px 0 5px; }
-.options-row .prop-row label { flex: 1; }
-.options-row .prop-row select { flex: 0 0 240px; }
-.options-row .prop-row input[type="checkbox"] { flex: 0 0 auto; }
-.options-row .prop-hint { max-width: 62ch; }
-
-/* the caret that opens the rest of the views */
-.view-presets .view-more { padding: 0 4px; }
-
-/* --- hover help ---------------------------------------------------------- */
-
-/* One bubble for the whole app, parented to the body. Inside the properties
-   panel it would be clipped by the panel's own scrolling, which is the usual
-   reason this kind of thing ends up reimplemented as a browser tooltip. */
-.hint-bubble {
-  position: fixed;
-  z-index: 60;
-  width: 280px;
-  max-width: calc(100vw - 24px);
-  padding: 10px 12px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  color: var(--fg);
-  pointer-events: none;
-  opacity: 0;
-  transform: translateX(4px);
-  transition: opacity 0.12s, transform 0.12s;
-}
-.hint-bubble.open {
-  opacity: 1;
-  transform: none;
-  pointer-events: auto;
-}
-
-.hint-bubble-title {
-  font-size: 12px;
-  font-weight: 600;
-  margin-bottom: 6px;
-}
-
-.hint-bubble-text {
-  font: 11px/1.5 system-ui, sans-serif;
-  color: var(--fg-dim);
-}
-
-/* A row with an explanation behind it. Deliberately faint: the point of moving
-   the hints into a bubble was to stop the panel shouting, so the affordance is
-   something you notice on the row you are already pointing at. */
-.prop-row.has-hint { border-radius: 3px; }
-.prop-row.has-hint:hover { background: var(--bg-hover); }
-
-/* --- setting diagrams ---------------------------------------------------- */
-
-.field-art {
-  display: block;
-  width: 100%;
-  height: auto;
-  margin: 2px 0 8px;
-  background: var(--bg);
-  border-radius: 4px;
-}
-
-/* Everything is drawn grey and one dimension is lit. The lit one is the setting
-   being explained, which is what makes the same drawing serve nine fields. */
-.field-art .art-solid { fill: #2f333b; stroke: #4a4f59; stroke-width: 1; }
-.field-art .art-form { fill: none; stroke: #6f7784; stroke-width: 1.4; }
-.field-art .art-form.art-on { stroke: var(--accent); stroke-width: 1.8; }
-.field-art .art-axis {
-  stroke: #565c66;
-  stroke-width: 1;
-  stroke-dasharray: 6 3 2 3;
-}
-.field-art .art-line { stroke: #6f7784; stroke-width: 1; }
-.field-art .art-pass { stroke: #6f7784; stroke-width: 1; }
-.field-art .art-pass.art-on { stroke: var(--accent); stroke-width: 2; }
-.field-art .art-plane { stroke: #6f7784; stroke-width: 1; stroke-dasharray: 4 3; }
-.field-art .art-plane.art-on { stroke: var(--accent); stroke-width: 1.8; stroke-dasharray: none; }
-.field-art .art-arrow { fill: none; stroke: #6f7784; stroke-width: 1.2; }
-.field-art .art-arrow.art-on { stroke: var(--accent); stroke-width: 1.8; }
-
-.field-art .art-dim .art-dim-line { stroke: #6f7784; stroke-width: 1; }
-.field-art .art-dim .art-dim-text { fill: #8a8e98; font: 8px system-ui, sans-serif; }
-.field-art .art-dim.art-on .art-dim-line { stroke: var(--accent); stroke-width: 1.6; }
-.field-art .art-dim.art-on .art-dim-text { fill: var(--accent); font-weight: 600; }
-
-.field-art .art-note { fill: #767b85; font: 7.5px system-ui, sans-serif; }
-.field-art .art-label { fill: #8a8e98; font: 8px system-ui, sans-serif; }
-
-/* Build stamp, at the right-hand end of the status line — which build is
-   deployed, out of the way until you look for it. In the line rather than
-   floating over it: fixed to the corner, it covered the end of every long
-   status message, which is usually the part that says what to do. */
-#build-badge {
-  flex: 0 0 auto;
-  margin-left: auto;
-  padding: 1px 7px;
-  font: 11px "Segoe UI", system-ui, sans-serif;
-  color: var(--fg-dim);
-  background: color-mix(in srgb, var(--bg-panel) 82%, transparent);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  text-decoration: none;
-  opacity: 0.55;
-  transition: opacity 0.15s;
-  pointer-events: auto;
-  user-select: none;
-}
-#build-badge:hover { opacity: 1; color: var(--fg); border-color: var(--accent); }
-
-/* --- tool photographs --- */
-
-/* A photo stands in for the generated drawing wherever a cutter is identified
-   (see app/tool-photo.js). It has to fill exactly the box the SVG would have
-   filled — the picker's cards, the tree's rows and the operation panel all size
-   that box themselves — so it covers rather than fits: the stored image is
-   already a centre crop, and letterboxing it inside a box that was measured for
-   a silhouette leaves the card looking half empty. */
-.tool-photo {
-  object-fit: cover;
-  border-radius: 3px;
-  background: rgba(0, 0, 0, 0.3);
-}
-.lib-preview .tool-photo { width: 100%; height: 100%; border-radius: 0; }
-
-/* The wizard's photo panel: the picture, what to do about it, and a line for
-   the one thing that can go wrong. */
-.wiz-photo {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  padding: 6px;
-  border: 1px dashed var(--border);
-  border-radius: 5px;
-}
-.wiz-photo.drop-target { border-color: var(--accent); background: rgba(74, 158, 255, 0.1); }
-.wiz-photo-frame {
-  flex: 0 0 96px;
-  width: 96px;
-  height: 96px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.22);
-  border-radius: 4px;
-  overflow: hidden;
-}
-.wiz-photo-img { width: 96px; height: 96px; object-fit: cover; }
-.wiz-photo-empty {
-  font-size: 11px;
-  color: var(--fg-dim);
-  text-align: center;
-  padding: 6px;
-  line-height: 1.3;
-}
-.wiz-photo-buttons { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.wiz-photo-error { color: var(--danger); font-size: 11px; }
-
-/* The webcam modal. Sized to the stream rather than to the dialog's usual
-   880px: a 1280×720 preview stretched across that is a wall of face. */
-.cam-dialog { width: min(560px, 92vw); }
-.cam-view {
-  width: 100%;
-  max-height: 60vh;
-  background: #000;
-  border-radius: 4px;
-  margin-bottom: 8px;
-  display: block;
-}
-
-/* --- projects kept in this browser --- */
-
-.proj-dialog { width: min(920px, 96vw); }
-/* The title is three words and the usage figure beside it is the thing being
-   read; left to wrap, the title took two lines and pushed the row down. */
-.proj-dialog .lib-head h2 { white-space: nowrap; }
-.proj-body { display: flex; flex-direction: column; gap: 6px; }
-.proj-name { flex: 0 0 240px; }
-.proj-save { flex-wrap: nowrap; }
-
-.proj-item {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 6px 8px;
-}
-.proj-item.open { border-color: var(--fg-dim); }
-.proj-head { display: flex; align-items: center; gap: 6px; }
-.proj-twisty {
-  flex: 0 0 auto;
-  border: none;
-  background: none;
-  color: var(--fg-dim);
-  padding: 0 4px;
-}
-/* The name takes the slack so the buttons stay in the same place down the
-   list — a row of controls that moves with the length of a project's name is a
-   row you have to re-aim at every time. */
-.proj-id { flex: 1; min-width: 0; }
-.proj-name-text {
-  font-size: 12px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.proj-meta { font-size: 11px; color: var(--fg-dim); font-family: Consolas, monospace; }
-.proj-head button.active { border-color: var(--accent); color: var(--accent); }
-
-.proj-versions {
-  margin: 6px 0 2px 22px;
-  padding-left: 8px;
-  border-left: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.proj-version {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  color: var(--fg-dim);
-}
-.proj-v { font-family: Consolas, monospace; color: var(--fg); flex: 0 0 44px; }
-.proj-when { flex: 0 0 130px; }
-.proj-size { flex: 0 0 70px; font-family: Consolas, monospace; }
-.proj-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.proj-version button { padding: 1px 6px; font-size: 11px; }
-
-/* --- hand-written G-code: the command operation and a machine's own blocks --- */
-
-/* Monospaced, because what goes in these is a program and columns of words are
-   how a program is read. Wide as the panel, tall enough that a typical block —
-   three or four lines — is on screen without scrolling. */
-.gcode-command,
-.machine-gcode {
-  width: 100%;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 6px 8px;
-  font-family: Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.45;
-  resize: vertical;
-}
-.gcode-command:focus,
-.machine-gcode:focus { outline: none; border-color: var(--accent); }
-.gcode-command { margin: 8px 0 4px; }
-
-/* Under its label rather than beside it: a four-line box in the right-hand
-   column of a two-column property row is forty characters wide. */
-.machine-gcode-row { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
-.machine-gcode-row > label { font-size: 11px; color: var(--fg-dim); }
-
-/* Stacked, not in the panel's two columns: the properties panel is 300px wide
-   and a label eats a third of it, which left the preset list showing three
-   characters of a name. */
-.gcode-preset-block { display: flex; flex-direction: column; gap: 3px; margin: 8px 0; }
-.gcode-preset-block > label { font-size: 11px; color: var(--fg-dim); }
-.gcode-preset-row { display: flex; gap: 4px; align-items: center; min-width: 0; }
-.gcode-preset-row > select,
-.gcode-preset-row > input { flex: 1; min-width: 0; }
-.gcode-preset-row > button { flex: 0 0 auto; white-space: nowrap; }
-.gcode-preset-scope { margin-top: 2px; }
-
-/* --- fields and focus, for everything ------------------------------------
-   At the end of the file on purpose: a field's own rule sets its border, and a
-   focus ring has to win that tie by coming later. */
-
-:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) {
-  transition: border-color 0.12s, box-shadow 0.12s, background-color 0.12s;
-}
-:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea):hover {
-  border-color: #464c57;
-}
-input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
-select:focus,
-textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-button:focus-visible,
-a:focus-visible,
-input[type="checkbox"]:focus-visible {
-  outline: none;
-  box-shadow: var(--ring);
-}
-::selection { background: rgba(76, 157, 255, 0.35); }
-
-/* --- a file being dragged over the window --------------------------------- */
-
-.drop-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 900;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: rgba(10, 14, 22, 0.55);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.12s, visibility 0.12s;
-}
-.drop-overlay.on { opacity: 1; visibility: visible; }
-.drop-card {
-  max-width: 460px;
-  padding: 28px 32px;
-  text-align: center;
-  background: rgba(30, 33, 38, 0.92);
-  border: 2px dashed var(--accent);
-  border-radius: 16px;
-  box-shadow: var(--shadow);
-}
-.drop-title { font-size: 18px; font-weight: 600; color: #fff; margin-bottom: 6px; }
-.drop-detail { color: var(--fg-dim); line-height: 1.5; }
+.viewport-label[hidden] { display: none; }
 
 /* --- an empty job ---------------------------------------------------------- */
 
@@ -2281,28 +1373,1288 @@ input[type="checkbox"]:focus-visible {
   align-items: center;
   gap: 8px;
   max-width: 340px;
-  padding: 22px 26px;
+  padding: 24px 28px 22px;
   text-align: center;
-  background: rgba(20, 22, 27, 0.72);
+  background: rgba(22, 23, 26, 0.82);
   border: 1px dashed rgba(255, 255, 255, 0.16);
-  border-radius: 14px;
-  backdrop-filter: blur(8px);
+  border-radius: 8px;
+  backdrop-filter: blur(6px);
   pointer-events: auto;
 }
-.viewport-empty-card .icon { color: var(--accent); }
+.viewport-empty-card .icon { color: var(--fg-dim); }
 .viewport-empty-title { font-size: 15px; font-weight: 600; color: var(--fg); }
 .viewport-empty-detail { color: var(--fg-dim); line-height: 1.5; }
+.viewport-empty-card button { margin-top: 6px; }
 
-/* a button that reads as a link inside a sentence */
-button.link-button {
-  display: inline;
-  padding: 0;
-  background: none;
-  border: none;
-  color: var(--accent);
-  font: inherit;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
+/* --- the G-code listing ------------------------------------------------------ */
+
+#gcode {
+  grid-area: gcode;
+  height: var(--gcode-size);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-inset);
+  border-top: 1px solid var(--border);
+  font: 12px/1.45 var(--mono);
+  white-space: pre;
 }
-button.link-button:hover { color: var(--accent-hover); background: none; }
+#gcode.collapsed { display: none; }
+
+/* The listing scrolls; the bar over it does not, so Copy is always reachable
+   without scrolling twenty thousand lines back to the top. */
+.gcode-lines { flex: 1; min-height: 0; overflow-y: auto; }
+.gcode-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  padding: 2px 6px 2px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  font: 12px/1.4 var(--sans);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.gcode-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+}
+.gcode-count { color: var(--fg-faint); overflow: hidden; text-overflow: ellipsis; }
+.gcode-bar .spacer { flex: 1; }
+.gcode-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  font: 12px/1 var(--sans);
+  padding: 0 9px;
+}
+.gcode-copy.done { color: #8cc39c; border-color: var(--ok); }
+.gcode-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-dim);
+}
+.gcode-close:hover { color: var(--fg); background: var(--bg-hover); border-color: transparent; }
+
+/* The listing is virtualised: only the rows in view exist, positioned from the
+   scroll offset by arithmetic. LINE_HEIGHT in gcode-panel.js is this number. */
+.gcode-scroll { position: relative; }
+.gcode-window { position: absolute; top: 0; left: 0; right: 0; }
+.gcode-line {
+  padding: 0 8px;
+  cursor: pointer;
+  color: var(--fg-dim);
+  height: 17px;
+  line-height: 17px;
+}
+.gcode-line:hover { background: var(--bg-hover); color: var(--fg); }
+.gcode-line.selected { background: var(--accent-mid); color: #fff; }
+
+/* The words of a line, by kind — see gcode-panel.js WORD_CLASS. Muted: the
+   listing is read by scanning a column of G words for the one that changes,
+   and that needs contrast between kinds, not colour for its own sake. */
+.gc-ln { color: #4c5057; user-select: none; }
+.gc-g { color: #8fb3d9; }
+.gc-m { color: #b39cc9; }
+.gc-ax { color: #cfd2d6; }
+.gc-arc { color: #a9bccf; }
+.gc-f { color: #c9a27c; }
+.gc-t { color: #95bf9f; }
+.gc-n { color: #62666d; }
+.gc-p { color: #aab4c0; }
+.gc-c { color: #6c7178; font-style: italic; }
+.gcode-line.selected .gc-ln { color: #9fb2c8; }
+.gcode-empty { padding: 8px 12px; color: var(--fg-faint); font-family: var(--sans); }
+
+/* --- simulation transport --- */
+
+#sim {
+  grid-area: sim;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  background: var(--bg-header);
+  border-top: 1px solid #0d0e10;
+  /* The thumb is drawn by us so that its width is a number this file knows.
+     A native range thumb travels from half its own width in to half its own
+     width from the end, and the bands under it spanned the whole track — so
+     even with both measured in the same units the two were out by half a thumb
+     at each end. Fixing the size lets the strip be inset by exactly as much. */
+  --sim-thumb: 12px;
+}
+#sim.collapsed { display: none; }
+
+/* The five transport buttons, as one control. */
+.sim-transport {
+  display: flex;
+  gap: 1px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  flex: 0 0 auto;
+}
+#sim .sim-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--fg-dim);
+}
+#sim .sim-btn:hover { background: var(--bg-hover); color: var(--fg); }
+#sim .sim-btn .icon { width: 15px; height: 15px; }
+#sim .sim-play { width: 36px; color: var(--fg); }
+#sim .sim-play.playing { background: var(--accent); color: #fff; border-color: var(--accent); }
+#sim .sim-close { margin-left: 2px; }
+
+.sim-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+  margin-right: 4px;
+}
+#sim select {
+  height: 28px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 0 6px;
+  font: inherit;
+}
+
+.sim-time {
+  font: 12px var(--mono);
+  color: var(--fg-dim);
+  /* also fixed, and for the same reason: the elapsed clock ticks past 10:00 and
+     grows a digit, which would otherwise nudge the bar sideways mid-playback */
+  flex: 0 0 auto;
+  min-width: 106px;
+  text-align: right;
+}
+
+/* The scrub bar and the operation bands under it are one control: the bands say
+   *what* is being cut where the slider says how far through. Stacked rather
+   than side by side so a position on one is the same position on the other.
+   The label beside it is the current operation's name, which changes on every
+   scrub, so the track has a floor under it and the label a fixed column —
+   otherwise the bar jumped narrower under the cursor. */
+.sim-track {
+  flex: 1;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+#sim input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+#sim input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+#sim input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+#sim input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--sim-thumb);
+  height: var(--sim-thumb);
+  margin-top: calc((4px - var(--sim-thumb)) / 2);
+  border: none;
+  border-radius: 50%;
+  background: var(--fg);
+}
+#sim input[type="range"]::-moz-range-thumb {
+  width: var(--sim-thumb);
+  height: var(--sim-thumb);
+  border: none;
+  border-radius: 50%;
+  background: var(--fg);
+}
+
+.sim-bands {
+  display: flex;
+  height: 12px;
+  /* exactly the span the thumb's centre travels — see above */
+  margin: 0 calc(var(--sim-thumb) / 2);
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* Alternating greys rather than a colour per operation: the bands are there to
+   show where one ends and the next begins, and a palette that has to stretch
+   to thirty operations stops distinguishing anything. Adjacent bands always
+   differ, which is the only property that matters. */
+.sim-band {
+  min-width: 2px;
+  overflow: hidden;
+  white-space: nowrap;
+  font: 9px/12px var(--sans);
+  color: transparent;
+  text-align: center;
+  cursor: pointer;
+  transition: color 0.1s;
+  box-shadow: inset -1px 0 0 rgba(0, 0, 0, 0.35);
+}
+.sim-band-0 { background: #3a3d43; }
+.sim-band-1 { background: #45484f; }
+.sim-band-2 { background: #34373c; }
+.sim-band-3 { background: #4d5058; }
+.sim-band:hover { filter: brightness(1.3); color: var(--fg); }
+.sim-band.active { background: var(--accent); color: #fff; }
+
+/* A fixed column, not a label that sizes to its text — see .sim-track. */
+.sim-op {
+  font: 12px var(--sans);
+  color: var(--fg-dim);
+  flex: 0 0 150px;
+  width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The widest bite in the program, and a way to go and look at it. A floor
+   rather than a fixed size: the text is bounded (one number, a unit, one more
+   number) so letting it size to its content cannot run away, and a fixed width
+   cut "at 3.0mm deep" off mid-word. */
+.sim-load, .sim-verify {
+  font: 11px/1 var(--mono);
+  color: var(--fg-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 4px 6px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  text-align: right;
+  cursor: pointer;
+}
+.sim-load { min-width: 118px; }
+.sim-verify { min-width: 104px; }
+.sim-load:empty, .sim-verify:empty { visibility: hidden; }
+.sim-load:hover, .sim-verify:hover { border-color: var(--border-strong); color: var(--fg); }
+.sim-load.warn { color: var(--warn); }
+/* The verification verdict, beside the load. Its own colours: a gouge is not a
+   heavy cut, it is a scrapped part. */
+.sim-verify.ok { color: #7fb98f; }
+.sim-verify.left { color: var(--info); }
+.sim-verify.bad { color: var(--danger-text); }
+
+/* --- the status line -------------------------------------------------------- */
+
+.status {
+  grid-area: status;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 26px;
+  padding: 0 6px 0 4px;
+  background: var(--bg-header);
+  border-top: 1px solid #0d0e10;
+  color: var(--fg-dim);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+/* The message, as a button that opens the last few. */
+.status-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.status-message:hover { background: var(--bg-hover); border-color: transparent; }
+.status-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.status-text.error { color: var(--danger-text); }
+.status-text.error::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+  vertical-align: 1px;
+}
+.status-summary { flex: 0 0 auto; color: var(--fg-dim); }
+.status-summary:empty { display: none; }
+
+/* A job is running. Silence for several seconds reads as a hang, and a hang
+   invites a second click that queues a second identical job. */
+.busy {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  display: none;
+}
+.busy.on {
+  display: block;
+  border-color: var(--accent) var(--accent) transparent transparent;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .busy.on { animation: none; border-color: var(--accent); }
+  .tree-badge.pending { animation: none; border-color: var(--accent); }
+  .toolbar .tb-primary.running::before { animation: none; border-color: #fff; }
+}
+
+/* Build stamp, at the right-hand end of the status line — which build is
+   deployed, out of the way until you look for it. In the line rather than
+   floating over it: fixed to the corner, it covered the end of every long
+   status message, which is usually the part that says what to do. */
+#build-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  font: 11px var(--sans);
+  color: var(--fg-faint);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  text-decoration: none;
+  transition: color 0.15s, border-color 0.15s;
+  pointer-events: auto;
+  user-select: none;
+}
+#build-badge:hover { color: var(--fg); border-color: var(--border-strong); }
+
+/* --- popup menus ------------------------------------------------------------ */
+
+.context-menu {
+  position: fixed;
+  min-width: 200px;
+  max-width: min(560px, calc(100vw - 16px));
+  background: #202226;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 4px;
+  box-shadow: var(--shadow);
+  z-index: 1000;
+  animation: fade-in 0.08s ease-out;
+}
+.context-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px 5px 4px;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font: inherit;
+}
+.context-item:hover:not(:disabled), .context-item:focus-visible {
+  background: var(--accent-mid);
+  border-color: transparent;
+  box-shadow: none;
+  outline: none;
+}
+.context-item.danger { color: var(--danger-text); }
+.context-item.danger:hover:not(:disabled) { background: var(--danger-soft); }
+.context-check {
+  flex: 0 0 14px;
+  width: 14px;
+  text-align: center;
+  font-size: 8px;
+  color: var(--accent-text);
+}
+.context-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-keys {
+  flex: 0 0 auto;
+  margin-left: 18px;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+}
+.context-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 6px;
+}
+/* the status line's recent messages: whole sentences, so they may wrap */
+.context-log .context-label { white-space: normal; font-size: 12px; line-height: 1.4; color: var(--fg-dim); }
+.context-log.error .context-label { color: var(--danger-text); }
+
+/* --- dialogs ----------------------------------------------------------------- */
+
+.lib-dialog {
+  width: min(880px, 94vw);
+  max-height: 86vh;
+  background: var(--bg-panel);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 18px 20px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.lib-dialog::backdrop { background: rgba(6, 7, 9, 0.6); }
+/* A dialog arrives rather than appears: a short rise and fade, over before the
+   pointer has reached anything in it. */
+.lib-dialog[open] { animation: dialog-in 0.14s var(--ease); }
+.lib-dialog[open]::backdrop { animation: fade-in 0.14s ease-out; }
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .lib-dialog[open], .lib-dialog[open]::backdrop, .context-menu { animation: none; }
+}
+/* A title, in words, the size of a title. Each dialog says what it is for in a
+   sentence; set in small capitals that sentence was the least readable thing
+   in it. */
+.lib-dialog h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0 32px 12px 0;
+}
+.lib-dialog h3 {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+  margin: 16px 0 8px;
+}
+.lib-group:first-child h3 { margin-top: 0; }
+.lib-group-count { color: var(--fg-faint); font-weight: 500; letter-spacing: 0; }
+
+/* Every dialog's way out, in the corner where every dialog keeps it. */
+.dialog-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+}
+
+.lib-head { display: flex; align-items: center; gap: 10px; margin: 0 32px 12px 0; }
+.lib-head h2 { margin: 0; }
+.lib-count {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+}
+.lib-search {
+  flex: 0 0 260px;
+  height: 28px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 0 9px;
+  font: inherit;
+  font-size: 12.5px;
+}
+
+/* Which drawer is open, and what can be done to it. Its own row rather than
+   more buttons in the footer: the footer is about the *project* — add these
+   cutters, import into it, export it — and this row is about the library
+   itself, which is a different question that happens to be asked in the same
+   dialog. */
+.lib-catalogs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.lib-catalogs .spacer { flex: 1; }
+.lib-catalog-label { font-size: 11.5px; color: var(--fg-dim); }
+.lib-catalog-select { max-width: 220px; height: 28px; }
+/* the note about the open catalogue: it wraps rather than pushing the buttons
+   off the row, and never grows the dialog */
+.lib-catalogs .lib-hint {
+  flex: 1 1 200px;
+  min-width: 0;
+  text-align: right;
+}
+.wiz-catalog { max-width: 180px; }
+
+.lib-body { max-height: 60vh; overflow-y: auto; padding-right: 4px; }
+
+/* A grid of cards, not a list of rows. A tool is found by its shape, so the
+   shape gets the room and the numbers go underneath it. */
+.lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(216px, 1fr));
+  gap: 8px;
+}
+.lib-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px;
+  padding: 7px 8px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  min-width: 0;
+}
+.lib-item:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.lib-item.checked { border-color: var(--accent); background: rgba(74, 129, 187, 0.2); box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* The tick sits in the corner of the card; the whole card is the label, so it
+   is a state to read rather than a target to hit. */
+.lib-check {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  margin: 0;
+}
+.lib-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 80px;
+  margin-bottom: 3px;
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+/* the drawing is the thing being scanned for, so it gets the card's width */
+.lib-preview .tool-icon { width: 100%; height: 100%; }
+.lib-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.lib-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-meta {
+  color: var(--fg-dim);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-speeds {
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-family: var(--mono);
+  opacity: 0.85;
+}
+
+.lib-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  align-items: center;
+}
+.lib-actions .spacer { flex: 1; }
+.lib-hint { font-size: 11.5px; color: var(--fg-dim); }
+
+/* Removing one of your own tools. Bottom corner rather than beside the tick,
+   so a delete is never where a select is expected. */
+.lib-remove {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 5px;
+  visibility: hidden;
+}
+.lib-item:hover .lib-remove { visibility: visible; }
+.lib-remove:hover { color: var(--danger-text); background: transparent; }
+
+/* --- strategy icons and the strategy picker --- */
+
+/* Filled shapes are material, stroked ones are the tool's motion, and the
+   heavier stroke marks the feature the strategy exists to make. Read at 18–30px,
+   so the only thing that has to survive is the shape of the cut. One ink: the
+   icon is a diagram, and a diagram in three colours is a sticker. */
+.op-icon { flex: 0 0 auto; }
+.op-icon > * { fill: rgba(255, 255, 255, 0.16); stroke: none; }
+.op-icon .stroke {
+  fill: none;
+  stroke: #9fb6cf;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.op-icon .stroke.wide { stroke-width: 2; }
+.op-icon .stroke.dashed { stroke-dasharray: 2.5 2; opacity: 0.75; }
+.op-icon .stroke.accent { stroke: #dfe3e8; stroke-width: 2.2; }
+.tree-item.selected .op-icon > * { fill: rgba(255, 255, 255, 0.3); }
+.tree-item.selected .op-icon .stroke { stroke: #fff; fill: none; }
+.tree-op-icon { margin-right: 1px; }
+
+.strategy-dialog { width: min(900px, 94vw); }
+.strategy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 8px;
+}
+/* A column, not a block: a <button> centres its content vertically whatever
+   its display says, so in a row of cards stretched to the tallest one every
+   shorter card floated its icon and name down to the middle. */
+.strategy-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: stretch;
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 10px 11px;
+  cursor: pointer;
+  color: var(--fg);
+  font: inherit;
+}
+.strategy-card:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.strategy-card.checked {
+  border-color: var(--accent);
+  background: rgba(74, 129, 187, 0.2);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.strategy-head { display: flex; align-items: center; gap: 9px; margin-bottom: 5px; }
+.strategy-name { font-weight: 600; }
+.strategy-current {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent-text);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.strategy-summary { font-size: 12px; line-height: 1.45; }
+.strategy-when { font-size: 12px; line-height: 1.45; color: var(--fg-dim); margin-top: 4px; }
+.strategy-cutter { font-size: 11.5px; color: var(--fg-dim); margin-top: 6px; }
+
+/* --- help dialog --- */
+
+.help-button { font-weight: 700; }
+.help-dialog { width: min(940px, 95vw); }
+.help-body { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; max-height: 62vh; }
+.help-column { min-width: 0; }
+.help-column > h3 { margin-top: 0; }
+
+.help-step { display: flex; gap: 10px; margin-bottom: 10px; }
+.help-step-n {
+  flex: 0 0 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 18px;
+}
+.help-step-title { font-size: 13px; font-weight: 600; }
+.help-step-detail { font-size: 12px; color: var(--fg-dim); line-height: 1.5; margin-top: 1px; }
+
+.help-key-row { display: flex; align-items: baseline; gap: 10px; padding: 2px 0; }
+.help-keys { flex: 0 0 112px; text-align: right; white-space: nowrap; }
+.help-key-label { font-size: 12px; color: var(--fg-dim); }
+.help-plus { color: var(--fg-faint); font-size: 10px; margin: 0 2px; }
+kbd {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--fg);
+}
+
+/* --- the tool wizard ---------------------------------------------------- */
+
+/* Everything here is in service of one rule: the wizard shows all of itself.
+   A dialog you have to scroll to reach "Create tool" is a dialog whose last
+   question is invisible, and `dialog` scrolls by default — so the height is
+   held down by the layout rather than absorbed by a scroll bar. */
+.wiz-dialog {
+  max-width: min(1040px, 96vw);
+  width: min(1040px, 96vw);
+  max-height: 96vh;
+  overflow: hidden;
+}
+/* Title, body, action bar — a column in which the body scrolls and the bar is
+   the floor. Only while open — an author `display` on a dialog would otherwise
+   override the closed one's `display: none`. */
+.wiz-dialog[open] { display: flex; flex-direction: column; }
+.wiz-body { display: flex; flex-direction: column; gap: 12px; }
+.wiz-dialog > .wiz-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.wiz-dialog > .lib-actions { flex: 0 0 auto; }
+
+.wiz-families {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px;
+}
+.wiz-family {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  grid-template-rows: auto auto;
+  gap: 2px 8px;
+  align-items: center;
+  text-align: left;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.wiz-family-icon { grid-row: 1 / 3; display: flex; align-items: center; justify-content: center; }
+.wiz-family-label { font-weight: 600; font-size: 12.5px; }
+/* Two lines, and the rest on hover. Ten cards whose hints wrap to three lines
+   are sixty pixels of dialog spent on the sentence under "Flat end mill" — and
+   the dialog has to fit on a laptop with the Create button visible. The whole
+   text is on the card's `title`. */
+.wiz-family-hint {
+  font-size: 11px;
+  color: var(--fg-dim);
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.wiz-family:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+.wiz-family.active { border-color: var(--accent); background: rgba(74, 129, 187, 0.2); box-shadow: inset 0 0 0 1px var(--accent); }
+/* a lathe insert offered on the mill: still choosable, just not the point */
+.wiz-family.other-machine { opacity: 0.45; }
+.wiz-family.other-machine:hover, .wiz-family.other-machine.active { opacity: 1; }
+
+.wiz-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr minmax(250px, 1.2fr);
+  gap: 18px;
+  align-items: start;
+}
+.wiz-column h3 { margin: 0 0 8px; }
+.wiz-column-preview { min-width: 250px; }
+
+.wiz-fields { display: flex; flex-direction: column; gap: 4px; }
+.wiz-field { display: grid; grid-template-columns: 1fr 120px; gap: 8px; align-items: center; }
+.wiz-field > span { color: var(--fg-dim); font-size: 12px; }
+.wiz-field input,
+.wiz-field select {
+  height: 28px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 0 7px;
+  font: inherit;
+  width: 100%;
+  min-width: 0;
+}
+/* the insert shape names are long ("C — Rhombic 80°"), so the select gets to
+   be readable at the cost of the label beside it */
+.wiz-field select { font-size: 12px; }
+.wiz-name-row { grid-template-columns: 1fr; gap: 4px; }
+.wiz-name-row input { width: 100%; }
+
+/* the custom-shape row: a button (and a Clear) rather than a number field */
+.wiz-shape-row { grid-template-columns: 1fr auto; align-items: center; }
+.wiz-shape-row button { font-size: 12px; padding: 4px 8px; }
+.wiz-shape-row .wiz-shape-clear { color: var(--fg-dim); margin-left: 6px; }
+
+.wiz-preview { display: flex; gap: 12px; align-items: flex-start; }
+/* a lathe tool is drawn lying down, so its description goes underneath it
+   rather than into the sliver of column left beside it */
+.wiz-preview.stacked { flex-direction: column; gap: 8px; align-items: flex-start; }
+/* the drawing is sized in the code and keeps that size: a flex column stretches
+   its children across, and an SVG with a viewBox answers a stretched width with
+   a proportionally stretched *height* — 108px of tool became 359px of column */
+.wiz-preview > svg { flex: 0 0 auto; }
+.wiz-preview-text { flex: 1; min-width: 0; }
+.wiz-preview-name { font-weight: 600; margin-bottom: 4px; }
+
+/* Surface speed and chip load: the two numbers the fields above are judged by,
+   so they read as a value rather than as more prose. */
+.wiz-readout {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  margin-bottom: 4px;
+}
+
+/* the custom-insert shape editor */
+.shape-dialog { width: min(620px, 94vw); }
+.shape-body { display: flex; gap: 16px; align-items: flex-start; }
+.shape-canvas-wrap {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 6px;
+  flex: 0 0 auto;
+}
+.shape-canvas { display: block; touch-action: none; }
+.shape-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.shape-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.shape-tools button { font-size: 12px; padding: 4px 8px; }
+.shape-preview { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 6px; }
+
+.shape-grid { stroke: var(--border); stroke-width: 0.008; }
+.shape-axis { stroke: var(--fg-dim); stroke-width: 0.012; opacity: 0.6; }
+.shape-poly { fill: rgba(185, 193, 202, 0.2); stroke: var(--accent-text); stroke-width: 0.02; stroke-linejoin: round; }
+.shape-mid { fill: var(--fg-dim); opacity: 0.5; cursor: copy; }
+.shape-handle { fill: var(--bg-panel); stroke: var(--accent-text); stroke-width: 0.02; cursor: grab; }
+.shape-handle.selected { stroke-width: 0.035; }
+.shape-handle.cutting { fill: var(--accent); stroke: #fff; }
+
+/* --- machines and options ------------------------------------------------
+   Two dialogs built out of the tool library's furniture, because they are the
+   same shape of task: a few similar things on the left, the one you picked on
+   the right. */
+
+/* Head, body, action bar — a column, so the bar is the bottom of the dialog and
+   not the end of the scroll. The two panes inside the body scroll; the dialog
+   does not. That takes saying twice, because a grid item's default
+   `min-height: auto` is "as tall as my content" and it wins against the row:
+   the editor grew to the full height of its fields, spilled out of the body,
+   and painted straight over the buttons underneath. */
+.machine-dialog {
+  width: min(960px, 95vw);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.machine-body {
+  display: grid;
+  grid-template-columns: minmax(200px, 260px) 1fr;
+  /* One row, and it may not be taller than the body — the row is what has to
+     be told, not the pane. */
+  grid-template-rows: minmax(0, 1fr);
+  gap: 16px;
+  max-height: 62vh;
+  /* room to be worth opening, but never more than the window has */
+  min-height: min(320px, 40vh);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.machine-list {
+  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 4px;
+}
+.machine-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 6px;
+  text-align: left;
+  padding: 7px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--fg);
+  font: inherit;
+}
+.machine-row:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.machine-row.active { border-color: var(--accent); background: rgba(74, 129, 187, 0.2); box-shadow: inset 0 0 0 1px var(--accent); }
+.machine-row-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.machine-row-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent-text);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 0 4px;
+  align-self: center;
+}
+.machine-row-meta {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.machine-editor { overflow-y: auto; min-height: 0; padding-right: 6px; }
+.machine-editor h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--fg); }
+.machine-editor .prop-row label { flex: 0 0 190px; }
+.machine-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.machine-preset { max-width: 280px; }
+/* The action bar is the floor of the dialog: it keeps its own background so
+   nothing shows through it, and does not shrink when the body wants the room. */
+.machine-dialog .lib-actions {
+  flex: 0 0 auto;
+  background: var(--bg-panel);
+}
+
+.options-dialog { width: min(720px, 94vw); }
+.options-body { max-height: 66vh; }
+.options-row { padding: 4px 0 6px; }
+.options-row + .options-row { border-top: 1px solid rgba(255, 255, 255, 0.03); }
+.options-row .prop-row label { flex: 1; color: var(--fg); }
+.options-row .prop-row select { flex: 0 0 240px; }
+.options-row .prop-row input[type="checkbox"] { flex: 0 0 auto; }
+.options-row .prop-hint { max-width: 62ch; }
+
+/* --- tool photographs --- */
+
+/* A photo stands in for the generated drawing wherever a cutter is identified
+   (see app/tool-photo.js). It has to fill exactly the box the SVG would have
+   filled, so it covers rather than fits: the stored image is already a centre
+   crop. */
+.tool-photo {
+  object-fit: cover;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.3);
+}
+.lib-preview .tool-photo { width: 100%; height: 100%; border-radius: 0; }
+
+/* The wizard's photo panel: the picture, what to do about it, and a line for
+   the one thing that can go wrong. */
+.wiz-photo {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 6px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+.wiz-photo.drop-target { border-color: var(--accent); background: var(--accent-soft); }
+.wiz-photo-frame {
+  flex: 0 0 96px;
+  width: 96px;
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.wiz-photo-img { width: 96px; height: 96px; object-fit: cover; }
+.wiz-photo-empty {
+  font-size: 11px;
+  color: var(--fg-dim);
+  text-align: center;
+  padding: 6px;
+  line-height: 1.3;
+}
+.wiz-photo-buttons { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wiz-photo-error { color: var(--danger-text); font-size: 11px; }
+
+/* The webcam modal. Sized to the stream rather than to the dialog's usual
+   880px: a 1280×720 preview stretched across that is a wall of face. */
+.cam-dialog { width: min(560px, 92vw); }
+.cam-view {
+  width: 100%;
+  max-height: 60vh;
+  background: #000;
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  display: block;
+}
+
+/* --- projects kept in this browser --- */
+
+.proj-dialog { width: min(920px, 96vw); }
+/* The title is three words and the usage figure beside it is the thing being
+   read; left to wrap, the title took two lines and pushed the row down. */
+.proj-dialog .lib-head h2 { white-space: nowrap; }
+.proj-body { display: flex; flex-direction: column; gap: 6px; }
+.proj-name { flex: 0 0 240px; }
+.proj-save { flex-wrap: nowrap; }
+
+.proj-item {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 6px 8px;
+}
+.proj-item.open { border-color: var(--border-strong); }
+.proj-head { display: flex; align-items: center; gap: 6px; }
+.proj-twisty {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--fg-dim);
+  padding: 0 4px;
+}
+/* The name takes the slack so the buttons stay in the same place down the
+   list — a row of controls that moves with the length of a project's name is a
+   row you have to re-aim at every time. */
+.proj-id { flex: 1; min-width: 0; }
+.proj-name-text {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.proj-meta { font-size: 11px; color: var(--fg-dim); font-family: var(--mono); }
+.proj-head button.active { border-color: var(--accent); color: var(--accent-text); }
+
+.proj-versions {
+  margin: 6px 0 2px 22px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.proj-version {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.proj-v { font-family: var(--mono); color: var(--fg); flex: 0 0 44px; }
+.proj-when { flex: 0 0 130px; }
+.proj-size { flex: 0 0 70px; font-family: var(--mono); }
+.proj-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-version button { padding: 1px 6px; font-size: 11px; }
+
+/* --- hand-written G-code: the command operation and a machine's own blocks --- */
+
+/* Monospaced, because what goes in these is a program and columns of words are
+   how a program is read. Wide as the panel, tall enough that a typical block —
+   three or four lines — is on screen without scrolling. */
+.gcode-command,
+.machine-gcode {
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
+.gcode-command { margin: 8px 0 4px; }
+
+/* Under its label rather than beside it: a four-line box in the right-hand
+   column of a two-column property row is forty characters wide. */
+.machine-gcode-row { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
+.machine-gcode-row > label { font-size: 11.5px; color: var(--fg-dim); }
+
+/* Stacked, not in the panel's two columns: a label eats a third of the panel,
+   which left the preset list showing three characters of a name. */
+.gcode-preset-block { display: flex; flex-direction: column; gap: 3px; margin: 8px 0; }
+.gcode-preset-block > label { font-size: 11.5px; color: var(--fg-dim); }
+.gcode-preset-row { display: flex; gap: 4px; align-items: center; min-width: 0; }
+.gcode-preset-row > select,
+.gcode-preset-row > input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 0 7px;
+  font: inherit;
+}
+.gcode-preset-row > button { flex: 0 0 auto; white-space: nowrap; }
+.gcode-preset-scope { display: flex; align-items: center; gap: 6px; margin-top: 2px; color: var(--fg-dim); font-size: 12px; }
+
+/* --- hover help ---------------------------------------------------------- */
+
+/* One bubble for the whole app, parented to the body. Inside the properties
+   panel it would be clipped by the panel's own scrolling, which is the usual
+   reason this kind of thing ends up reimplemented as a browser tooltip. */
+.hint-bubble {
+  position: fixed;
+  z-index: 60;
+  width: 290px;
+  max-width: calc(100vw - 24px);
+  padding: 10px 12px;
+  background: #202226;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  color: var(--fg);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(4px);
+  transition: opacity 0.12s, transform 0.12s;
+}
+.hint-bubble.open {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+.hint-bubble-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.hint-bubble-text {
+  font: 12px/1.5 var(--sans);
+  color: var(--fg-dim);
+}
+
+/* A row with an explanation behind it. Deliberately faint: the point of moving
+   the hints into a bubble was to stop the panel shouting, so the affordance is
+   something you notice on the row you are already pointing at. */
+.prop-row.has-hint { border-radius: var(--radius); }
+.prop-row.has-hint:hover { background: rgba(255, 255, 255, 0.025); }
+.prop-row.has-hint > label {
+  text-decoration: underline dotted rgba(255, 255, 255, 0.2);
+  text-underline-offset: 3px;
+}
+
+/* --- setting diagrams ---------------------------------------------------- */
+
+.field-art {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 2px 0 8px;
+  background: var(--bg);
+  border-radius: var(--radius);
+}
+
+/* Everything is drawn grey and one dimension is lit. The lit one is the setting
+   being explained, which is what makes the same drawing serve nine fields. */
+.field-art .art-solid { fill: #2e3034; stroke: #4a4d53; stroke-width: 1; }
+.field-art .art-form { fill: none; stroke: #6f747c; stroke-width: 1.4; }
+.field-art .art-form.art-on { stroke: var(--accent-text); stroke-width: 1.8; }
+.field-art .art-axis {
+  stroke: #55585f;
+  stroke-width: 1;
+  stroke-dasharray: 6 3 2 3;
+}
+.field-art .art-line { stroke: #6f747c; stroke-width: 1; }
+.field-art .art-pass { stroke: #6f747c; stroke-width: 1; }
+.field-art .art-pass.art-on { stroke: var(--accent-text); stroke-width: 2; }
+.field-art .art-plane { stroke: #6f747c; stroke-width: 1; stroke-dasharray: 4 3; }
+.field-art .art-plane.art-on { stroke: var(--accent-text); stroke-width: 1.8; stroke-dasharray: none; }
+.field-art .art-arrow { fill: none; stroke: #6f747c; stroke-width: 1.2; }
+.field-art .art-arrow.art-on { stroke: var(--accent-text); stroke-width: 1.8; }
+
+.field-art .art-dim .art-dim-line { stroke: #6f747c; stroke-width: 1; }
+.field-art .art-dim .art-dim-text { fill: #8a8e96; font: 8px var(--sans); }
+.field-art .art-dim.art-on .art-dim-line { stroke: var(--accent-text); stroke-width: 1.6; }
+.field-art .art-dim.art-on .art-dim-text { fill: var(--accent-text); font-weight: 600; }
+
+.field-art .art-note { fill: #767a82; font: 7.5px var(--sans); }
+.field-art .art-label { fill: #8a8e96; font: 8px var(--sans); }
+
+/* --- a file being dragged over the window --------------------------------- */
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 9, 11, 0.6);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s, visibility 0.12s;
+}
+.drop-overlay.on { opacity: 1; visibility: visible; }
+.drop-card {
+  max-width: 460px;
+  padding: 28px 32px;
+  text-align: center;
+  background: #1f2124;
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+.drop-title { font-size: 17px; font-weight: 600; color: var(--fg); margin-bottom: 6px; }
+.drop-detail { color: var(--fg-dim); line-height: 1.5; }
+
+/* --- fields and focus, for everything ------------------------------------
+   At the end of the file on purpose: a field's own rule sets its border, and a
+   focus ring has to win that tie by coming later. */
+
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) {
+  transition: border-color 0.12s, box-shadow 0.12s, background-color 0.12s;
+}
+:where(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea):hover {
+  border-color: #4a4d53;
+}
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+button:focus-visible,
+a:focus-visible,
+input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+::selection { background: rgba(74, 129, 187, 0.4); }

@@ -16,7 +16,7 @@
 // shorter than the depth you meant to cut — all of them are obvious in a
 // picture and invisible in a number.
 
-import { el } from './layout.js';
+import { el, dialogCloseButton } from './layout.js';
 import { numberInput, parseNumber, formatNumber } from './number-input.js';
 import { toolIcon, toolAssembly, describeTool, TYPE_COLORS } from './tool-shape.js';
 import {
@@ -755,6 +755,7 @@ export function openToolWizard({
   });
 
   dialog.append(
+    dialogCloseButton(dialog),
     // A catalogue entry has no tool number — that belongs to the project it is
     // pulled into, not to the drawer it sits in — so editing one says its name
     // rather than "Edit Tundefined". See doc/tool-library.js.

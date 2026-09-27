@@ -186,9 +186,16 @@ export const HEIGHT_LABELS_BY_OP = {
 };
 
 /** Panel tabs shown for an operation. */
-// Strategy first, and deliberately: it is what the operation *is*, and opening
-// on Heights meant every selected operation threw three translucent planes over
-// the part before you had asked anything about its depths.
+// The strategy's own settings first, and deliberately: they are what the
+// operation *is*, and opening on Heights meant every selected operation threw
+// three translucent planes over the part before you had asked anything about
+// its depths.
+//
+// The tab is called Passes, not Strategy. The strategy is the card at the top
+// of the panel — "Z-level rough, change…" — and a tab with the same name under
+// it read as a second place to change the strategy, when what is on it is how
+// the passes are cut: stepdowns, stepovers, allowances, cycles. The key stays
+// 'strategy'; it is stored in nothing but this panel.
 //
 // The hole cycles used to keep what they are — the pitch of a tap, the width of
 // a spot, where a drill finds its holes — on a "Drill" tab of their own, last,
@@ -197,7 +204,7 @@ export const HEIGHT_LABELS_BY_OP = {
 // fourth opened on a Strategy tab holding a lone Tolerance. Their settings are
 // on Strategy now, the same place every other operation keeps its own.
 export const OP_TABS = [
-  { key: 'strategy', label: 'Strategy' },
+  { key: 'strategy', label: 'Passes' },
   { key: 'heights', label: 'Heights' },
   { key: 'entry', label: 'Entry' },
   { key: 'tabs', label: 'Tabs' },
@@ -341,11 +348,24 @@ export const OP_PARAM_GROUPS = [
             : op.type === 'turnBore' ? 'Depth of cut (radial, outward, mm)'
               : op.type === 'turnRough' ? 'Depth of cut (radial, mm)'
                 : null),
-        hint: 'For waterline this is the Z spacing between contours — the cusp control',
-        hintFor: (op) => (op.type === 'bore'
-          ? 'How far the spiral descends in one turn round the bore — the whole cut is '
-            + 'the entry, so this is what keeps the plunge gentle'
-          : null),
+        // Said per strategy. The one sentence there was — "for waterline this is
+        // the Z spacing between contours" — was the help on this field for
+        // every strategy but one, so a pocket's stepdown was explained as a
+        // waterline setting the pocket has never heard of.
+        hint: 'How deep each pass cuts. The depth from Top Z to Bottom Z is shared out '
+          + 'in equal passes no deeper than this.',
+        hintFor: (op) => ({
+          bore: 'How far the spiral descends in one turn round the bore — the whole cut is '
+            + 'the entry, so this is what keeps the plunge gentle',
+          waterline: 'The Z spacing between contours — the cusp control on steep walls. '
+            + 'Shallow areas are what a parallel pass is for.',
+          face: 'How much each pass across the top takes off. The depth to face is Top Z '
+            + 'to Bottom Z, shared out in equal passes no deeper than this.',
+          turnFace: 'How much each facing pass takes off the end of the bar.',
+          turnRough: 'How much each roughing pass takes off the radius — half what it '
+            + 'takes off the diameter.',
+          turnBore: 'How much each pass opens the bore by, on the radius.',
+        })[op.type] ?? null,
       },
       {
         key: 'flatPasses', label: 'Pass at every flat face', type: 'checkbox',

@@ -7,9 +7,9 @@ import { MOVE_STRIDE, OP, FEED } from '../engine/cl.js';
 // quieter than either: the metal being cut is what a backplot is read for, and
 // on a job with a lot of retracts the rapids are most of the lines on screen.
 const COLORS = {
-  rapid: new THREE.Color(0xf08a4b).multiplyScalar(0.8),
-  cut: new THREE.Color(0x4fb4ff),
-  plunge: new THREE.Color(0xffcf5c),
+  rapid: new THREE.Color(0xe38a4e).multiplyScalar(0.8),
+  cut: new THREE.Color(0x5aa8ec),
+  plunge: new THREE.Color(0xe8c25e),
 };
 
 /** How loud the backplot is, as a multiplier on every colour. */

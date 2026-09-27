@@ -180,8 +180,12 @@ export class Viewport {
     );
     this.scene.updateMatrixWorld(true);
     this.raycaster.setFromCamera(ndc, this.activeCamera());
-    // the surfaces only: the crease-edge overlay is not something to click on
-    const targets = [...this.modelObjects.values()].map((o) => o.userData.surface);
+    // the surfaces only: the crease-edge overlay is not something to click on —
+    // and only of the models on screen, since a raycast does not care what is
+    // hidden and a click would otherwise pick a face of a part nobody can see
+    const targets = [...this.modelObjects.values()]
+      .filter((o) => o.visible)
+      .map((o) => o.userData.surface);
     const hits = this.raycaster.intersectObjects(targets, false);
     if (hits.length === 0) return null;
     const hit = hits[0];
@@ -299,7 +303,7 @@ export class Viewport {
   makeGrid(size, divisions) {
     // lines a step lighter than the backdrop they are drawn on, with the two
     // through zero a step lighter again
-    const grid = new THREE.GridHelper(size, divisions, 0x4a5261, 0x30353e);
+    const grid = new THREE.GridHelper(size, divisions, 0x4b4e54, 0x313337);
     grid.rotation.x = Math.PI / 2;   // GridHelper is XZ by default; we want XY
     grid.position.z = -Math.max(0.02, size * 0.001);
     grid.material.depthWrite = false;
@@ -319,7 +323,7 @@ export class Viewport {
         new THREE.Vector3(0, 0, -500), new THREE.Vector3(0, 0, 500),
       ]),
       new THREE.LineDashedMaterial({
-        color: 0x5aa9ff, dashSize: 6, gapSize: 4, transparent: true, opacity: 0.7,
+        color: 0x5b92d8, dashSize: 6, gapSize: 4, transparent: true, opacity: 0.7,
       }),
     );
     this.spindleAxis.computeLineDistances();
@@ -904,7 +908,7 @@ export class Viewport {
       if (fixture.kind === 'cylinder') geometry.rotateX(Math.PI / 2);
 
       const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
-        color: 0xff5566,
+        color: 0xc8625e,
         transparent: true,
         opacity: 0.4,
         depthWrite: false,
@@ -1052,7 +1056,7 @@ export class Viewport {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       const lines = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({
-        color: selected ? 0x7fe08a : 0x4a9eff,
+        color: selected ? 0x86c496 : 0x5a93cc,
         transparent: true,
         opacity: selected ? 1 : 0.75,
         depthTest: false,
@@ -1101,7 +1105,7 @@ export class Viewport {
     if (position) {
       this.markerObject = new THREE.Mesh(
         new THREE.SphereGeometry(radius, 16, 12),
-        new THREE.MeshBasicMaterial({ color: 0xff4477 }),
+        new THREE.MeshBasicMaterial({ color: 0xe0566c }),
       );
       this.markerObject.position.set(...position);
       this.scene.add(this.markerObject);
@@ -1129,6 +1133,28 @@ export class Viewport {
     this.requestRender();
   }
 
+  /**
+   * Which models the scene draws: the ones the setup in front of you machines,
+   * or every one when `ids` is null.
+   *
+   * A project can hold two parts — a shaft for the lathe and a plate for the
+   * mill — and a setup can be told to machine only one of them. The other was
+   * still drawn, in this setup's frame, over the top of the part being cut:
+   * a picture of a job that is not the one being programmed.
+   */
+  setModelsShown(ids) {
+    const shown = ids ? new Set(ids) : null;
+    let changed = false;
+    for (const [id, object] of this.modelObjects) {
+      const visible = !shown || shown.has(id);
+      if (object.visible !== visible) {
+        object.visible = visible;
+        changed = true;
+      }
+    }
+    if (changed) this.requestRender();
+  }
+
   setHighlight(modelId) {
     for (const [id, object] of this.modelObjects) {
       object.userData.surface.material.emissive.setHex(id === modelId ? 0x1a3a5c : 0x000000);
@@ -1148,9 +1174,22 @@ export class Viewport {
   frameAll({ animate = false } = {}) {
     this.stopGlide(false);
     this.modelGroup.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(this.modelGroup);
+    // the models this setup shows, not every model in the project: a Box3 walks
+    // hidden objects as happily as shown ones, and framed a part that is not
+    // on screen
+    const box = new THREE.Box3();
+    for (const object of this.modelObjects.values()) {
+      if (object.visible) box.expandByObject(object);
+    }
     if (this.stockObject) box.expandByObject(this.stockObject);
-    if (box.isEmpty()) return;
+    // A job with no solid in it still has something to look at: the drawing
+    // an engraving follows, or a program read back in to be checked. Fit
+    // refused both — "nothing to fit" over a toolpath on the screen.
+    if (box.isEmpty()) {
+      for (const object of this.drawingObjects ?? []) box.expandByObject(object);
+      if (this.toolpathObject) box.expandByObject(this.toolpathObject);
+    }
+    if (box.isEmpty()) return false;
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3()).length() || 100;
     for (const camera of [this.camera, this.orthoCamera]) {
@@ -1192,6 +1231,7 @@ export class Viewport {
     });
     this.resize();
     this.scaleEnvironment();
+    return true;
   }
 
   resize() {
@@ -1274,7 +1314,7 @@ function buildChuck(fixture) {
     transparent: true, opacity: 0.55, depthWrite: false,
   });
   const jawMaterial = new THREE.MeshStandardMaterial({
-    color: 0xff5566, metalness: 0.3, roughness: 0.6,
+    color: 0xc8625e, metalness: 0.3, roughness: 0.6,
     transparent: true, opacity: 0.55, depthWrite: false,
   });
 
@@ -1304,7 +1344,7 @@ function buildChuck(fixture) {
   const limit = new THREE.Mesh(
     new THREE.RingGeometry(Math.max(0.1, grip), bodyD / 2, 48),
     new THREE.MeshBasicMaterial({
-      color: 0xff5566, transparent: true, opacity: 0.18,
+      color: 0xc8625e, transparent: true, opacity: 0.18,
       side: THREE.DoubleSide, depthWrite: false,
     }),
   );

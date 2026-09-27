@@ -9,7 +9,7 @@
 // read-only rack here: the numbers on a machine are the numbers *of your
 // machine*, and a preset you cannot correct is a preset that is wrong.
 
-import { el } from './layout.js';
+import { el, dialogCloseButton } from './layout.js';
 import {
   MACHINE_PRESETS, createMachine, describeMachine, machinesFor, activeMachine,
   ROTARY_KINDS, rotaryKindOf, rotaryPreset,
@@ -348,6 +348,7 @@ export function openMachineManager(doc, { onDone } = {}) {
 
   build();
   dialog.append(
+    dialogCloseButton(dialog),
     el('div', { class: 'lib-head' }, [
       el('h2', {}, ['Machines']),
       kindTabs,

@@ -889,14 +889,23 @@ test('picks on a model that has gone stop the operation, rather than vanishing',
 
   // and a pass that follows a drawing needs no model at all
   const plate = new Document();
+  const drawing = createDrawing('marks', 'marks.dxf', [], null);
+  plate.addDrawing(drawing);
   const engrave = createOperation('engrave');
   engrave.toolId = tool.id;
-  engrave.params.drawingId = 'drawing_1';
+  engrave.params.drawingId = drawing.id;
   plate.addTool(tool);
   const s = createSetup('Setup 1');
   plate.addSetup(s);
   plate.addOperation(s, engrave);
   assert.eq(opBlockedReason(plate, engrave), null, 'a drawing-only engraving is not blocked');
+
+  // …but one whose drawing has gone is. Generate refuses it rather than
+  // re-aiming it at the part, and the row has to say so before anyone presses
+  // Generate — it used to show the old path as merely out of date.
+  plate.removeDrawing(drawing.id);
+  assert.ok(/drawing it follows is no longer in the project/.test(opBlockedReason(plate, engrave) ?? ''),
+    'an operation following a removed drawing says it cannot generate');
 });
 
 test('tool changes are counted the way the post writes them', () => {
@@ -1124,7 +1133,7 @@ test('the pass count on screen is the pass count in the program', () => {
       tolerance: 0.05, clearanceHeight: 40,
     });
     const said = describeIntent(op, tool);
-    const [, count, per] = /in (\d+) passe?s? of ([\d.]+)mm/.exec(said) ?? [];
+    const [, upTo, count, per] = /in (up to )?(\d+) passe?s? of ([\d.]+)mm/.exec(said) ?? [];
     assert.ok(count, `${type} says how many passes: ${said}`);
     // the depth is the depth each pass takes, not the limit that was typed
     assert.close(Number(per), 20 / Number(count), 0.01,
@@ -1136,6 +1145,23 @@ test('the pass count on screen is the pass count in the program', () => {
     });
     assert.eq(levelled(cl), / and one at each flat face/.test(said),
       `${type} ${levelled(cl) ? 'takes' : 'does not take'} a pass at the Z8 floor: ${said}`);
+
+    // …and the count is the program's, or said as the most it can be. The
+    // clearing strategies stop where the part does: over this 12mm pocket they
+    // cut four of the seven even levels, and the sentence used to say seven.
+    const even = new Set(depthPasses(20, 0, 3).map((z) => z.toFixed(2)));
+    const cut = new Set();
+    let prev = null;
+    eachMove(cl, (o, x, y, z, i, j, k, feed) => {
+      if (prev && o === OP.LINE && feed !== FEED.RAPID && Math.abs(z - prev[2]) < 1e-6
+        && even.has(z.toFixed(2))) cut.add(z.toFixed(2));
+      prev = [x, y, z];
+    });
+    if (upTo) {
+      assert.ok(cut.size <= Number(count), `${type} cuts no more levels than it says: ${cut.size}`);
+    } else {
+      assert.eq(cut.size, Number(count), `${type} cuts every level it says it does: ${said}`);
+    }
   }
 });
 

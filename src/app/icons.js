@@ -36,7 +36,35 @@ const PATHS = {
   fit: '<path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15"/>',
   paths: '<circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h7.5a3 3 0 0 0 0-6h-7a3 3 0 0 1 0-6H16"/>',
   chevron: '<path d="m7 10 5 5 5-5"/>',
+  'chevron-right': '<path d="m10 7 5 5-5 5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  // a sheet with its corner turned and a plus on it: a new, empty project
+  'file-plus': '<path d="M14 3.5H7A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8z"/>'
+    + '<path d="M14 3.5V8h4.5"/><path d="M12 11v6M9 14h6"/>',
+  // an arrow going into a tray: something from outside coming into the job
+  import: '<path d="M12 3.5v10"/><path d="m8 9.5 4 4 4-4"/><path d="M4.5 14.5v3.5A1.5 1.5 0 0 0 6 19.5h12a1.5 1.5 0 0 0 1.5-1.5v-3.5"/>',
+  eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>',
+  'eye-off': '<path d="M4 4l16 16"/><path d="M9.9 6A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.6 3.4"/>'
+    + '<path d="M6.3 7.6A16.5 16.5 0 0 0 2.5 12s3.5 6.5 9.5 6.5a9 9 0 0 0 4.2-1"/><path d="M10 10a2.8 2.8 0 0 0 4 4"/>',
+  // a setup: the part standing on the table, with a zero marked on its corner
+  setup: '<path d="M3 19.5h18"/><path d="M6.5 19.5v-9h11v9"/><path d="M6.5 10.5l2-3h7l2 3"/><circle cx="6.5" cy="10.5" r="1.4"/>',
+  // a clamp: the bar across the work and the bolt through it
+  clamp: '<path d="M3.5 19.5h17"/><path d="M5 11.5h12.5l1.5 2"/><path d="M11 8v11.5"/><path d="M9 8h4"/><path d="M5 11.5v3"/>',
+  // a chuck, face on: the body and three jaws
+  chuck: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.5"/>'
+    + '<path d="M12 3.5v4.5M4.6 16.3l3.9-2.2M19.4 16.3l-3.9-2.2"/>',
+  // a drawing: a curve with its end points, the way a vector editor draws one
+  drawing: '<path d="M4 18c3-9 9-12 16-12"/><rect x="2.5" y="16.5" width="3" height="3" rx=".5"/>'
+    + '<rect x="18.5" y="4.5" width="3" height="3" rx=".5"/><path d="M8 18h5"/>',
+  more: '<circle cx="5.5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/>'
+    + '<circle cx="18.5" cy="12" r="1.3" fill="currentColor"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="1.5"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/>',
+  pencil: '<path d="M15.5 4.5l4 4L8 20H4v-4z"/><path d="M13 7l4 4"/>',
+  warn: '<path d="M12 4 2.8 19.5h18.4z"/><path d="M12 10v4.5"/><path d="M12 17.2v.1"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>',
+  gauge: '<path d="M4.5 16.5a8 8 0 1 1 15 0"/><path d="m12 13 4-4"/><circle cx="12" cy="13" r="1.3"/>',
+  target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/>',
 };
 
 /**

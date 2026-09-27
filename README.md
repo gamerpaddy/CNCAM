@@ -165,7 +165,7 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
   here answers — every other check compares a stage with the stage before it.
 * Holding tabs, lead in and lead out, ramped and helical entry, arc fitting on
   the way out to G2/G3.
-* **Reading a program back in.** *Export… → Check a file* opens any `.nc` —
+* **Reading a program back in.** *Export → Check a G-code file* opens any `.nc` —
   ours, another CAM system's, or one somebody typed — draws it, simulates it
   against the billet, measures what it leaves against the model, and checks it
   for travels, clamps and rapids that take metal. Inch programs, incremental
@@ -175,7 +175,7 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
   file is read straight back and compared with the path it was printed from, so
   a flipped G2/G3 or a lost modal word is a warning rather than a scrapped part.
 * Projects save to a file, and the browser keeps a drawer of them for you —
-  **Projects…** — where every save is a new version, nothing is overwritten, and
+  **File → Projects in this browser** — where every save is a new version, nothing is overwritten, and
   any version can be opened or downloaded as a .cncam file. The session autosaves
   there too, geometry included, so a reload does not cost you an afternoon of setup.
 * Tools can carry a photograph of the actual cutter, taken with the webcam or
@@ -269,13 +269,26 @@ git config core.hooksPath .githooks
 
 ### Tests
 
-There are around 580 of them.
+There are around 770 of them.
 
 ```bash
 node src/test/node-run.js
 ```
 
 The ones that need a browser live at `/test.html` on the running server.
+
+And one more pass that neither of those can make: the app itself, driven through
+its own buttons, menus, tree rows, panel fields, dialogs and keys, about three
+hundred checks in half a minute. Open the app on the running server and, in the
+browser console:
+
+```js
+const report = await (await import('/src/test/app-sweep.js')).sweep();
+```
+
+It works on the job in front of you and puts it back afterwards — the project,
+the session file and every preference. `sweep({ only: ['tree', 'keys'] })` runs
+some of it.
 
 ## Licence
 

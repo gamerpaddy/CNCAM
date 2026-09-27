@@ -16,7 +16,7 @@
 //   * That opening one is free. It replaces the project in front of you, so it
 //     asks first when there is anything to lose.
 
-import { el } from './layout.js';
+import { el, dialogCloseButton } from './layout.js';
 import {
   listProjects, readVersion, saveVersion, deleteProject,
   deleteVersion, renameProject, usage, storeAvailable, MAX_VERSIONS,
@@ -293,6 +293,7 @@ export function openProjectBrowser({
   }
 
   dialog.append(
+    dialogCloseButton(dialog),
     el('div', { class: 'lib-head' }, [
       el('h2', {}, ['Projects in this browser']),
       note,

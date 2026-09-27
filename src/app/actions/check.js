@@ -268,8 +268,10 @@ export function makeCheckActions(ctx, space) {
    * cutter, and a file does not say which one it meant.
    */
   function summarise({ file, stats, cl, findings, simulated, tool, why, stock, setup }) {
+    // a sentence of its own: joined to the next one with a space, the report
+    // read "written in mm There is no stock…"
     const parts = [`${file.name}: ${plural(stats.blocks, 'block')}, `
-      + `${plural(cl.count, 'move')}, written in ${stats.units}`];
+      + `${plural(cl.count, 'move')}, written in ${stats.units}.`];
     if (!stock) {
       parts.push('There is no stock to simulate it against — add a setup with a billet.');
     } else if (!simulated) {

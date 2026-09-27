@@ -319,7 +319,8 @@ stepover, which in a finishing pass means uncut material.
 
 **Project persistence** — projects live in the browser's own filesystem (OPFS;
 `doc/project-store.js`), one directory per project holding numbered versions, so
-a save never overwrites the save before it. The **Projects…** dialog lists them
+a save never overwrites the save before it. The **Projects in this browser**
+dialog (under File) lists them
 with their history and can open, download, upload, rename or delete any of them.
 The session autosaves to the same store as a single whole-project file —
 geometry included, because OPFS has no meaningful size limit where localStorage
@@ -330,7 +331,7 @@ version of (beside it, in `cncam.sessionProject`), so a reload still saves into
 the same drawer; a save still waiting on its debounce is made at once when the
 page is hidden or closed; and one failed write does not stop the ones after it.
 Switching "Keep the session" off forgets the kept session rather than restoring
-it forever. A **Clear** button discards everything and starts over — asking
+it forever. **File → New project** discards everything and starts over — asking
 first whenever there is anything to lose, drawings included.
 
 **Hand-written G-code.** Two places the app writes lines it does not understand,
@@ -400,6 +401,29 @@ duplicates it; `Delete` removes it, asking first when the deletion reaches
 further than the row you clicked — a setup takes its operations with it, and a
 deleted tool leaves every operation that used it unable to generate. Undo and
 Redo grey out when there is nothing to do and name the edit they will act on.
+
+**The screen is laid out in the order a job is built.** The bar across the top
+reads left to right the way the work goes: the File menu and the project's name
+(click it to rename; it is what every save and export is called), then which
+machine — Mill or Lathe, the machine itself, its settings — then what the job is
+made of — Import… and Tools… — and at the far end the program: Generate, Simulate
+and Export, in that order, beside the G-code listing's toggle. Generate carries
+the number of operations waiting on it (none generated, or generated from
+settings that have since changed) and is only lit as the primary action once
+there is a program to compute. The tree on the left folds by section and by
+setup. The panel on the right is headed by what is selected — its kind, its
+name as a box to type into, the one switch it has (an operation's "in the
+program", a clamp's keep-out), the same menu its row opens on a right-click, and
+a delete — so nothing about the selection is at the bottom of a scrolling panel.
+With nothing selected it is about the project. The status line keeps the last
+thirty messages a click away, and its right-hand end sums up the program in
+front of you — how many operations, how many are generated, how long it runs.
+
+The look is deliberately an instrument's: neutral greys, one muted steel blue
+for "selected" and "the next step", and the status colours kept for what they
+mean. Cutters are drawn in the grey of what they are made of rather than in a
+colour per family; the family is in the shape of the end, which is what the
+drawings are for.
 
 **Getting to a program is a checklist.** Import a model, pull a cutter, check
 the stock, add operations, generate — ticked off as each is done, with the step

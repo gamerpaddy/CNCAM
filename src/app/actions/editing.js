@@ -450,7 +450,20 @@ export function makeEditActions(ctx, space) {
     for (let n = 2; ; n++) if (!taken.has(`${base} ${n}`)) return `${base} ${n}`;
   }
 
+  /**
+   * Call the project something. It is the name of the save, of the export and
+   * of the program's first comment, so it is an edit like any other: undoable,
+   * and said on the status line.
+   */
+  function renameProject(name) {
+    const next = String(name ?? '').trim();
+    if (!next || next === doc.project.name) return;
+    doc.updateItem(doc.project, { name: next }, 'rename project');
+    ctx.ui.setStatus(`The project is now called ${next}`);
+  }
+
   return {
+    renameProject,
     addOperation,
     addOperationTo,
     engraveDrawing,

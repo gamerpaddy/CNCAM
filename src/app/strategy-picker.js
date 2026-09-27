@@ -11,7 +11,7 @@
 // for creating an operation and for changing an existing one's strategy, since
 // they are the same question asked at different times.
 
-import { el } from './layout.js';
+import { el, dialogCloseButton } from './layout.js';
 import { opsForMode } from '../engine/toolpath.js';
 import { OP_GROUPS, strategyCard, opIcon } from './op-catalog.js';
 
@@ -107,6 +107,7 @@ export function openStrategyPicker({
   });
 
   dialog.append(
+    dialogCloseButton(dialog),
     el('h2', {}, [title]),
     el('div', { class: 'lib-body' }, groups),
     el('div', { class: 'lib-actions' }, [

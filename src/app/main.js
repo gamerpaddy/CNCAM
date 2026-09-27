@@ -28,6 +28,9 @@ import { whenSettled, rebuildKeepingFocus } from './keep-focus.js';
 import { getSetting } from './settings.js';
 import { paramApplies, OP_PARAM_GROUPS } from './op-params.js';
 import { setupModelIds } from './actions/setup-space.js';
+import {
+  opStatus, opBlockedReason, formatTime, toolChangesIn,
+} from './op-status.js';
 import { BUILD } from '../version.js';
 
 /**
@@ -112,7 +115,74 @@ function refresh(kind) {
   if (wasPicking && !pickingLive()) ctx.pickMode = null;
   applyPickHandler();
   syncHint();
+  syncProgramState();
   ui.setHistory(doc.undoStack);
+  ui.setProjectName(doc.project.name);
+}
+
+/**
+ * What the program in front of you comes to, and what is still to compute.
+ *
+ * Two answers that used to need a Generate to find out: how many operations
+ * have no path — or a path from settings that have since changed — and how
+ * long the whole thing takes. The first is the number on the Generate button,
+ * the second the right-hand end of the status line. Both are for the machine
+ * in front of you, the way the tree's counts are, and the time is the one the
+ * Generate report gives: the paths at this machine's rapid rate, plus its tool
+ * changes.
+ */
+function syncProgramState() {
+  const { doc, ui } = ctx;
+  let enabled = 0;
+  let outdated = 0;
+  let generated = 0;
+  let blocked = 0;
+  let seconds = 0;
+  const ops = [];
+  for (const { op } of doc.allOperations()) {
+    if (!op.enabled) continue;
+    enabled++;
+    ops.push(op);
+    if (doc.pending?.has(op.id)) continue;
+    // One that cannot be generated is not waiting on Generate, whatever path it
+    // still shows — its row says why, and the next Generate drops that path.
+    // Counted as waiting, a deleted tool put a 1 on the button that pressing it
+    // could never clear.
+    if (opBlockedReason(doc, op)) { blocked++; continue; }
+    const status = opStatus(doc, op);
+    if (status) {
+      generated++;
+      seconds += status.seconds;
+      if (status.stale) outdated++;
+    } else {
+      outdated++;
+    }
+  }
+  const setups = doc.setups();
+  const machine = doc.machineRecord();
+  let text = '';
+  let title = '';
+  if (enabled > 0) {
+    const ran = ops.filter((op) => doc.toolpaths.has(op.id));
+    const changes = toolChangesIn(doc, ran).changes;
+    const total = seconds + changes * (machine?.toolChangeSeconds ?? 0);
+    const count = `${enabled} operation${enabled === 1 ? '' : 's'}`;
+    const stuck = blocked ? ` · ${blocked} cannot generate` : '';
+    if (generated === 0) {
+      text = `${count} · not generated${stuck}`;
+      title = blocked ? 'The "!" on a row in the tree says why it cannot' : '';
+    } else if (generated < enabled || outdated > 0) {
+      text = `${count} · ${generated} of ${enabled} generated${stuck}`;
+      title = `${outdated} to compute — Generate does only those`
+        + (blocked ? '. The "!" on a row in the tree says why it cannot generate' : '');
+    } else {
+      text = `${count} · ≈ ${formatTime(total)}`;
+      title = `Cycle time on ${machine?.name ?? 'this machine'}, including `
+        + `${changes} tool change${changes === 1 ? '' : 's'}`
+        + (setups.length > 1 ? `, across ${setups.length} setups` : '');
+    }
+  }
+  ui.setProgramState({ outdated, operations: enabled, text, title });
 }
 
 // --- rebuilding the side panels without losing the gesture that caused it ---
@@ -470,6 +540,14 @@ function syncDrawings() {
 function syncStock() {
   const { doc, viewport } = ctx;
   const setup = doc.activeSetup();
+  // which fixturing the scene is drawn in — said only when there is a choice
+  // of more than one, where it is the answer to "why did the part turn round"
+  const setups = doc.setups();
+  ctx.ui.setSceneLabel(setup && setups.length > 1
+    ? `${setup.name} · ${setup.wcs ?? 'G54'} — ${setups.indexOf(setup) + 1} of ${setups.length} setups`
+    : null);
+  // the part this setup machines, and not the rest of the project's models
+  viewport.setModelsShown(setup ? setupModelIds(setup, doc.project) : null);
   if (!setup) {
     viewport.setSetupTransform(null);
     viewport.setFixtures(null);

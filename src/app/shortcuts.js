@@ -61,6 +61,7 @@ export function shortcuts(ctx) {
       run: () => ctx.actions.addOperation(),
     },
     {
+      id: 'duplicate',
       group: 'Operations',
       keys: 'Ctrl+D',
       label: 'Duplicate the selected operation',
@@ -68,6 +69,7 @@ export function shortcuts(ctx) {
       run: () => ctx.actions.duplicateOperation(selectedOp()),
     },
     {
+      id: 'hidePath',
       group: 'Operations',
       keys: 'H',
       label: "Hide or show the selected operation's path",
@@ -78,12 +80,14 @@ export function shortcuts(ctx) {
       },
     },
     {
+      id: 'showAllPaths',
       group: 'Operations',
       keys: 'Shift+H',
       label: 'Show every path again',
       run: () => ctx.doc.showAllPaths(),
     },
     {
+      id: 'delete',
       group: 'Operations',
       keys: 'Delete',
       label: 'Delete the selected item',
@@ -95,6 +99,7 @@ export function shortcuts(ctx) {
     { group: 'Editing', keys: 'Ctrl+Shift+Z', label: 'Redo', run: () => ctx.actions.redo(), alias: true },
 
     {
+      id: 'rename',
       group: 'Operations',
       keys: 'F2',
       label: 'Rename whatever is selected',
@@ -174,6 +179,11 @@ export function withKey(title, id) {
   // enough to read the keys off it
   const entry = shortcuts({}).find((s) => s.id === id);
   return entry ? `${title} (${entry.keys})` : title;
+}
+
+/** The key a shortcut is bound to, as printed — for a menu row to show it. */
+export function keyFor(id) {
+  return shortcuts({}).find((s) => s.id === id)?.keys ?? null;
 }
 
 /**

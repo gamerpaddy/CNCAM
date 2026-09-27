@@ -57,7 +57,7 @@ const EDGE_BAND = 0.25;
  */
 const WALL_TANGENCY = 0.1;
 
-const OVERLAY_COLORS = { include: 0x3ddc84, avoid: 0xff5566 };
+const OVERLAY_COLORS = { include: 0x62b681, avoid: 0xd2625b };
 
 const faceCache = new Map(); // modelId -> { mesh, groups }
 

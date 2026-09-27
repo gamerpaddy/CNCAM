@@ -34,28 +34,39 @@ const NS = 'http://www.w3.org/2000/svg';
 let uid = 0;
 
 /**
- * Colour by family, so a list scans by shape *and* by hue. Bright enough to
- * read against the dark panel — the first pass at these was muted so as not to
- * compete with the status colours, and muted on a dark background is invisible.
+ * Colour by material, not by family.
+ *
+ * These were a hue per family — a cyan ball nose, a green bull nose, a pink
+ * chamfer mill, a violet face mill — so the list scanned by colour. It also
+ * read like a box of crayons, on the one panel whose drawings are supposed to
+ * be the real thing: a family is told apart by the shape of its end, which is
+ * what these drawings exist to show, and the shape does not need help from a
+ * colour to do it. What a cutter is made of is the difference a machinist sees
+ * on the bench: ground carbide, HSS and cobalt drills and taps with their
+ * warmer grey, and the dark coated grey of an insert. Bright enough to read
+ * against the dark panel; not so different that the list becomes a legend.
  */
+const CARBIDE = '#bcc4cd';
+const HSS = '#c7c0b1';
+const INSERT = '#a3abb5';
 export const TYPE_COLORS = {
-  flat: '#c3d4e4',
-  turning: '#e9c46a',
-  boring: '#f2b56b',
-  parting: '#f4a261',
-  threading: '#ef8f6b',
-  ball: '#7fd4ec',
-  bull: '#9fd89f',
-  drill: '#e8bd76',
-  spot: '#f0d08a',
-  chamfer: '#e2a8d6',
-  face: '#b8b3ee',
-  tap: '#8fc9b3',
-  threadmill: '#6fbfa0',
+  flat: CARBIDE,
+  ball: CARBIDE,
+  bull: CARBIDE,
+  chamfer: CARBIDE,
+  face: '#b3bbc4',
+  threadmill: CARBIDE,
+  drill: HSS,
+  spot: HSS,
+  tap: HSS,
+  turning: INSERT,
+  boring: INSERT,
+  parting: INSERT,
+  threading: INSERT,
 };
 
-const SHANK_COLOR = '#8d949f';
-const HOLDER_COLOR = '#5b6270';
+const SHANK_COLOR = '#7f8691';
+const HOLDER_COLOR = '#4c525c';
 
 /**
  * The cutting end as an SVG path, in tool coordinates: X across the diameter
@@ -350,7 +361,7 @@ function engagementBite(engagement, stroke, layer) {
   const g = document.createElementNS(NS, 'g');
   g.setAttribute('class', 'tool-engagement');
   const [nose, end] = engagement.edge;
-  const hot = engagement.overloaded ? '#ff5a52' : '#39d98a';
+  const hot = engagement.overloaded ? '#d9605a' : '#6fbf88';
 
   if (layer === 'under') {
     // the removed material, as the wedge between the finished surface and the

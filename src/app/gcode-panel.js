@@ -4,6 +4,7 @@
 import { MOVE_STRIDE, OP } from '../engine/cl.js';
 import { plural } from '../engine/text.js';
 import { el } from './layout.js';
+import { icon } from './icons.js';
 
 /**
  * The height of one listing row, in pixels. Must match `.gcode-line` in
@@ -85,6 +86,7 @@ function highlighted(line) {
 export function renderGcodePanel(container, program, ctx) {
   if (!program) {
     container.replaceChildren(
+      gcodeBar(null, 0, ctx, container),
       el('div', { class: 'gcode-empty' }, ['Generate toolpaths to preview G-code']),
     );
     return;
@@ -139,7 +141,7 @@ export function renderGcodePanel(container, program, ctx) {
     markMove(selected, program, ctx);
   });
 
-  container.replaceChildren(gcodeBar(program, lines.length, ctx), view);
+  container.replaceChildren(gcodeBar(program, lines.length, ctx, container), view);
   draw(true);
 }
 
@@ -152,32 +154,49 @@ export function renderGcodePanel(container, program, ctx) {
  * not a way to do that. The button always copies the *whole* program, including
  * the lines the panel truncates.
  */
-function gcodeBar(program, lineCount, ctx) {
+function gcodeBar(program, lineCount, ctx, container) {
+  // The panel's own way out. The toolbar's G-code button closes it too, but a
+  // panel with no close on it reads as a fixture of the window rather than as
+  // something you opened.
+  const close = el('button', {
+    class: 'gcode-close',
+    type: 'button',
+    title: 'Close the G-code listing',
+    'aria-label': 'Close the G-code listing',
+    onclick: () => container?.dispatchEvent(new CustomEvent('gcode-close')),
+  }, [icon('close', 14)]);
+  const title = el('span', { class: 'gcode-title' }, ['G-code']);
+  if (!program) {
+    return el('div', { class: 'gcode-bar' }, [title, el('span', { class: 'spacer' }), close]);
+  }
+
+  const copyLabel = el('span', {}, ['Copy']);
   const copy = el('button', {
     class: 'gcode-copy',
     type: 'button',
     title: `Copy all ${lineCount} lines to the clipboard`,
-  }, ['Copy']);
+  }, [icon('copy', 13), copyLabel]);
 
   copy.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(program.text);
-      copy.textContent = 'Copied';
+      copyLabel.textContent = 'Copied';
       copy.classList.add('done');
       ctx?.ui?.setStatus(`Copied ${lineCount} lines of G-code to the clipboard`);
     } catch (err) {
       // A clipboard write is refused without a secure context or a user gesture
       // the browser believes in. Saying so beats a button that does nothing.
-      copy.textContent = 'Blocked';
+      copyLabel.textContent = 'Blocked';
       ctx?.ui?.setStatus(`The browser refused the clipboard (${err.name}) — use Export instead`, true);
     }
     setTimeout(() => {
-      copy.textContent = 'Copy';
+      copyLabel.textContent = 'Copy';
       copy.classList.remove('done');
     }, 1600);
   });
 
   return el('div', { class: 'gcode-bar' }, [
+    title,
     el('span', { class: 'gcode-count' }, [program.imported
       // somebody's file being checked, not this project's program — said, so
       // the two cannot be mistaken for each other
@@ -185,6 +204,7 @@ function gcodeBar(program, lineCount, ctx) {
       : `${lineCount} lines · ${plural(program.ops.length, 'operation')}`]),
     el('span', { class: 'spacer' }),
     copy,
+    close,
   ]);
 }
 

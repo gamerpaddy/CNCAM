@@ -78,16 +78,34 @@ export function fieldRow(doc, item, field, beforeEdit, afterEdit, app) {
     return true;
   };
 
+  /**
+   * Write the value, with whatever has to happen either side of it, as one
+   * undoable step.
+   *
+   * The hooks are real edits of their own — choosing "Fixed box" for the stock
+   * writes the kind, and then `afterEdit` gives the box a size — and each was
+   * its own entry on the stack. One Ctrl+Z after choosing the box took the size
+   * away and left the kind: a setup whose stock was a box with no box in it.
+   * One gesture, one undo (see doc/undo.js group).
+   */
+  const commit = (next) => {
+    const write = () => {
+      beforeEdit?.();
+      const target = resolvePath(item, field.path);
+      doc.updateItem(target.owner, { [target.key]: next }, `edit ${field.label}`);
+      afterEdit?.();
+    };
+    if (doc.group && (beforeEdit || afterEdit)) doc.group(`edit ${field.label}`, write);
+    else write();
+  };
+
   if (field.type === 'select') {
     input = el('select', {}, field.options.map((o) =>
       el('option', { value: String(o) }, [field.labels?.[o] ?? String(o)])));
     input.value = String(value);
     input.addEventListener('change', () => {
       if (custom(input.value)) return;
-      beforeEdit?.();
-      const target = resolvePath(item, field.path);
-      doc.updateItem(target.owner, { [target.key]: input.value }, `edit ${field.label}`);
-      afterEdit?.();
+      commit(input.value);
     });
   } else if (field.type === 'checkbox') {
     input = el('input', { type: 'checkbox' });
@@ -105,11 +123,8 @@ export function fieldRow(doc, item, field, beforeEdit, afterEdit, app) {
       : el('input', { type: field.type, value: value ?? '' });
     input.addEventListener('change', () => {
       if (field.type !== 'number') {
-        if (custom(input.value)) return;
-        beforeEdit?.();
-        const target = resolvePath(item, field.path);
-        doc.updateItem(target.owner, { [target.key]: input.value }, `edit ${field.label}`);
-        return afterEdit?.();
+        if (custom(input.value)) return undefined;
+        return commit(input.value);
       }
       const parsed = parseNumber(input.value);
       // an unreadable entry puts the old value back rather than silently
@@ -122,10 +137,7 @@ export function fieldRow(doc, item, field, beforeEdit, afterEdit, app) {
       if (field.min != null && next < field.min) next = field.min;
       if (field.max != null && next > field.max) next = field.max;
       if (custom(next)) return undefined;
-      beforeEdit?.();
-      const target = resolvePath(item, field.path);
-      doc.updateItem(target.owner, { [target.key]: next }, `edit ${field.label}`);
-      return afterEdit?.();
+      return commit(next);
     });
   }
   if (field.min != null) input.min = String(field.min);

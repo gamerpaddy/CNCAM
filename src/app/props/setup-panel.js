@@ -30,6 +30,14 @@ const ORIENTATION_FIELDS = [
     options: ORIGIN_MODES, labels: ORIGIN_LABELS,
     onChange: (app, setup, mode) => setZeroPoint(app, setup, mode),
   },
+  // Beside the zero point, because it is the other half of the same fact: where
+  // zero is on the part, and which of the control's registers holds it.
+  {
+    path: 'wcs', label: 'Work offset', type: 'select',
+    options: ['G54', 'G55', 'G56', 'G57', 'G58', 'G59'],
+    hint: 'Which of the control\'s work coordinate systems this setup\'s zero is '
+      + 'set in. Two setups on the table at once need two different ones.',
+  },
   // These rotate the *model* into setup space, so they survive on the lathe:
   // a shaft modelled with its axis along Y has to be stood up on the spindle
   // axis before anything else is true about it.
@@ -255,6 +263,7 @@ export function setupSections(doc, setup, app) {
         + 'the largest radius at each point along it. X in the G-code is a diameter.'
       : 'Mill setup. The part is held still and the cutter moves in X, Y and Z.',
   ])];
+  rows.push(...partRows(doc, setup));
   rows.push(...jobSummarySection(doc, setup), el('h2', {}, ['Orientation']));
   rows.push(orientationPresetRow(doc, setup));
   for (const f of ORIENTATION_FIELDS) rows.push(fieldRow(doc, setup, f, null, null, app));
@@ -271,6 +280,47 @@ export function setupSections(doc, setup, app) {
     if (f.path === 'stock.cylinder.innerDiameter') rows.push(snapBoreRow(doc, setup));
   }
   rows.push(stockSummaryRow(doc, setup));
+  return rows;
+}
+
+/**
+ * Which of the project's models this setup machines.
+ *
+ * The document has always been able to say — `modelIds`, empty for "all of
+ * them" — and nothing on screen could set it. So a project holding two parts,
+ * a shaft for the lathe and a plate for the mill, machined both in every setup:
+ * the lathe roughed a bar sized round the plate as well as the shaft, and the
+ * travel check said the program needed 249mm of X on a 220mm lathe. Only shown
+ * when there is a choice to make.
+ *
+ * Every model ticked is stored as the empty list, not as the list of all of
+ * them, so a part imported later is machined too — which is what "all" meant.
+ */
+function partRows(doc, setup) {
+  const models = doc.project.models;
+  if (models.length < 2) return [];
+  const chosen = new Set(setupModelIds(setup, doc.project));
+  const rows = [el('h2', {}, ['Part'])];
+  for (const model of models) {
+    const box = el('input', { type: 'checkbox' });
+    box.checked = chosen.has(model.id);
+    box.addEventListener('change', () => {
+      const next = models.map((m) => m.id)
+        .filter((id) => (id === model.id ? box.checked : chosen.has(id)));
+      if (next.length === 0) {
+        box.checked = true;
+        return;
+      }
+      const all = next.length === models.length;
+      doc.updateItem(setup, { modelIds: all ? [] : next },
+        box.checked ? `machine ${model.name}` : `leave out ${model.name}`);
+    });
+    rows.push(propRow(model.name, box));
+  }
+  rows.push(el('div', { class: 'prop-hint' }, [
+    'The models this setup machines. Its stock is sized round them, and the '
+    + 'viewport draws only them while you are in it.',
+  ]));
   return rows;
 }
 
@@ -314,10 +364,11 @@ function snapDiameterRow(doc, setup) {
     ...unique.map((option) => el('button', {
       class: `prop-snap${Math.abs(current - option.value) < 0.0005 ? ' at' : ''}`,
       title: option.hint,
-      onclick: () => {
+      // one gesture, one undo: the bar given a shape and the shape its size
+      onclick: () => doc.group('snap stock diameter', () => {
         ensureStockShape(doc, setup);
         doc.updateItem(setup.stock.cylinder, { diameter: option.value }, 'snap stock diameter');
-      },
+      }),
     }, [option.label])),
   ]);
 }
@@ -341,10 +392,10 @@ function snapBoreRow(doc, setup) {
     el('button', {
       class: `prop-snap${Math.abs(current - value) < 0.0005 ? ' at' : ''}`,
       title: 'The smallest hole in the part — tube that size needs no boring at all',
-      onclick: () => {
+      onclick: () => doc.group('snap stock bore', () => {
         ensureStockShape(doc, setup);
         doc.updateItem(setup.stock.cylinder, { innerDiameter: value }, 'snap stock bore');
-      },
+      }),
     }, [`⌀${trim(value)}`]),
   ]);
 }

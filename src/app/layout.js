@@ -4,6 +4,12 @@
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
+    // An attribute given no value is an attribute left off. `setAttribute`
+    // writes whatever it is handed as a string, and for a boolean attribute
+    // the string does not matter, only its presence: `disabled: undefined`
+    // wrote disabled="undefined", which is disabled — the Machines dialog's
+    // Remove button was greyed out with five machines in the list.
+    if (v == null || v === false) continue;
     if (k === 'class') node.className = v;
     else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
     else node.setAttribute(k, v);
@@ -25,13 +31,13 @@ import {
   PROJECTION_HINTS,
 } from '../view/views.js';
 // eslint-disable-next-line import/first
-import { openContextMenu } from './context-menu.js';
+import { openContextMenu, anchorBelow, anchorAbove } from './context-menu.js';
 // eslint-disable-next-line import/first
 import { getSetting } from './settings.js';
 // eslint-disable-next-line import/first
 import { describeMachine } from '../doc/machines.js';
 // eslint-disable-next-line import/first
-import { withKey } from './shortcuts.js';
+import { withKey, keyFor } from './shortcuts.js';
 // eslint-disable-next-line import/first
 import { icon } from './icons.js';
 
@@ -40,11 +46,13 @@ import { icon } from './icons.js';
  * the icon stays, so the name moves to `aria-label` as well as the tooltip —
  * a button that is only a drawing still has to be called something.
  *
- * @param collapse which widths lose the word first: 'late' keeps it longest
+ * @param collapse which widths lose the word first: 'early' goes first, then
+ *   'late'; 'keep' never loses it
  */
 function toolButton(iconName, label, attrs = {}, collapse = 'late') {
   const { class: extra = '', ...rest } = attrs;
   return el('button', {
+    type: 'button',
     ...rest,
     class: `tb tb-${collapse} ${extra}`.trim(),
     'aria-label': label.replace(/…$/, ''),
@@ -54,7 +62,26 @@ function toolButton(iconName, label, attrs = {}, collapse = 'late') {
 /** An icon with no word at all, named for whoever cannot see it. */
 function iconButton(iconName, label, attrs = {}) {
   const { class: extra = '', ...rest } = attrs;
-  return el('button', { ...rest, class: `tb tb-icon ${extra}`.trim(), 'aria-label': label }, [icon(iconName)]);
+  return el('button', {
+    type: 'button', ...rest, class: `tb tb-icon ${extra}`.trim(), 'aria-label': label,
+  }, [icon(iconName)]);
+}
+
+/**
+ * The way out of a dialog, in the corner every dialog keeps it.
+ *
+ * Every dialog here closes on Escape and has a Cancel or a Done at the bottom —
+ * which is two ways out that you have to know about or scroll to. The corner
+ * cross is the one you do not have to look for.
+ */
+export function dialogCloseButton(dialog, onClose = () => dialog.close()) {
+  return el('button', {
+    type: 'button',
+    class: 'ghost-icon dialog-close',
+    title: 'Close (Esc)',
+    'aria-label': 'Close',
+    onclick: onClose,
+  }, [icon('close', 15)]);
 }
 
 /** A hairline between groups of buttons that belong together. */
@@ -71,19 +98,32 @@ function divider() {
  * cheap.
  */
 const SIZE_KEY = 'cncam.panelSizes';
-const DEFAULT_SIZES = { tree: 260, props: 300, gcode: 160 };
+// The properties panel is wider than it was: the operation panel's tab bar
+// needs about 330px to stand in one row, and at 300 it broke onto two rows
+// whose second one held one or two orphans.
+const DEFAULT_SIZES = { tree: 260, props: 340, gcode: 180 };
+
+/**
+ * Where the panels start, for a window this wide. On a laptop screen the part
+ * gets the room: at 1024px the two side panels at their full width left the
+ * viewport 414px across. Only a starting point — a drag is remembered.
+ */
+function defaultSizes() {
+  const width = typeof window === 'undefined' ? 1440 : window.innerWidth;
+  return width < 1200 ? { tree: 230, props: 300, gcode: 160 } : { ...DEFAULT_SIZES };
+}
 const SIZE_LIMITS = {
-  tree: [170, 620],
-  props: [220, 700],
-  gcode: [70, 640],
+  tree: [180, 620],
+  props: [260, 720],
+  gcode: [80, 640],
 };
 
 function loadSizes() {
   try {
     const stored = JSON.parse(localStorage.getItem(SIZE_KEY) ?? '{}');
-    return { ...DEFAULT_SIZES, ...(stored ?? {}) };
+    return { ...defaultSizes(), ...(stored ?? {}) };
   } catch {
-    return { ...DEFAULT_SIZES };
+    return defaultSizes();
   }
 }
 
@@ -139,7 +179,7 @@ function makeSplitter(name, axis, sign, apply) {
   };
   bar.addEventListener('pointerup', end);
   bar.addEventListener('pointercancel', end);
-  bar.addEventListener('dblclick', () => apply(DEFAULT_SIZES[name], true));
+  bar.addEventListener('dblclick', () => apply(defaultSizes()[name], true));
   return bar;
 }
 
@@ -152,7 +192,7 @@ let hintFolded = (() => {
 })();
 
 /**
- * Mill or lathe, as the first thing on the toolbar.
+ * Mill or lathe, as the first thing in the machine group.
  *
  * This used to be an entry in the post-processor dropdown, which said that
  * turning was a way of writing the same program out. It is not: a lathe has its
@@ -168,11 +208,13 @@ const MACHINES = [
 
 function buildMachineTabs(actions) {
   const buttons = MACHINES.map(({ id, label, hint }) => el('button', {
+    type: 'button',
     class: 'machine-tab',
+    role: 'tab',
     title: hint,
     onclick: () => actions.setMachine(id),
   }, [label]));
-  const bar = el('div', { class: 'machine-tabs', role: 'tablist' }, buttons);
+  const bar = el('div', { class: 'machine-tabs', role: 'tablist', 'aria-label': 'Machine type' }, buttons);
   return {
     bar,
     sync(machine) {
@@ -180,6 +222,59 @@ function buildMachineTabs(actions) {
         buttons[i].classList.toggle('active', id === machine);
         buttons[i].setAttribute('aria-selected', id === machine ? 'true' : 'false');
       });
+    },
+  };
+}
+
+/**
+ * The project's name, on the bar, as the thing you click to rename it.
+ *
+ * It was nowhere on screen. The name is what a save is called, what an export
+ * is called and what the program's first comment says — and the only way to
+ * find out it was "Untitled" was to export a file and look at the name it came
+ * out with. A click turns it into a text box, the way a row in the tree does.
+ */
+function buildProjectName(onRename) {
+  const button = el('button', {
+    type: 'button',
+    class: 'project-name',
+    title: 'The project\'s name — what a save or an export is called. Click to rename.',
+  }, ['Untitled']);
+  let name = 'Untitled';
+  let editing = null;
+
+  const finish = (commit) => {
+    if (!editing) return;
+    const next = editing.value.trim();
+    const box = editing;
+    editing = null;
+    box.replaceWith(button);
+    if (commit && next && next !== name) onRename(next);
+  };
+
+  button.addEventListener('click', () => {
+    if (editing) return;
+    const box = el('input', { type: 'text', class: 'project-name-input', 'aria-label': 'Project name' });
+    box.value = name;
+    box.addEventListener('keydown', (e) => {
+      // the single-key shortcuts are not for a box somebody is typing a name in
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    box.addEventListener('blur', () => finish(true));
+    editing = box;
+    button.replaceWith(box);
+    box.focus();
+    box.select();
+  });
+
+  return {
+    node: button,
+    set(next) {
+      name = next || 'Untitled';
+      button.textContent = name;
+      if (typeof document !== 'undefined') document.title = `${name} — CNCAM`;
     },
   };
 }
@@ -192,9 +287,11 @@ export function buildLayout(root, actions, project) {
   const machineSelect = el('select', {
     class: 'machine-select',
     title: 'The machine this program will run on',
+    'aria-label': 'Machine',
     onchange: (e) => actions.setMachineRecord(e.target.value),
   });
   const machineTabs = buildMachineTabs(actions);
+  const projectName = buildProjectName((name) => actions.renameProject?.(name));
 
   const gcode = el('div', { id: 'gcode', class: 'collapsed' });
 
@@ -215,106 +312,174 @@ export function buildLayout(root, actions, project) {
   // those are the user asking.
   let dismissed = false;
 
-  const gcodeToggle = toolButton('code', 'G-code', {
+  const gcodeToggle = iconButton('code', 'G-code', {
     class: 'tb-toggle',
     onclick: () => {
       const open = gcode.classList.contains('collapsed');
       dismissed = !open;
       setGcodeOpen(open);
     },
-    title: 'Show or hide the G-code preview',
-  }, 'early');
+    title: 'Show or hide the G-code listing',
+  });
 
-  const toolbar = el('div', { class: 'toolbar' }, [
+  // --- File ---------------------------------------------------------------
+  //
+  // One menu, the way every desktop program has one. New, Open, Save and the
+  // browser's drawer of projects were four buttons across the bar, which put
+  // the least-used commands in the app — Clear was one of them, as a bin at
+  // the far end — in the most expensive place there is, and pushed the things
+  // a job is actually built with towards the edge of a 1280px screen. The
+  // menu says each command's key, so it also teaches them.
+  const fileMenu = () => [
+    {
+      label: 'New project',
+      hint: 'Discard the models, tools, setups and operations and start again (asks first)',
+      onclick: actions.clearProject,
+    },
+    {
+      label: 'Open project file…',
+      hint: 'Open a .cncam project from a file',
+      onclick: () => actions.openProject(),
+    },
+    {
+      label: 'Save project file',
+      keys: keyFor('save'),
+      hint: 'Save the project to a file, geometry included',
+      onclick: actions.saveProject,
+    },
+    // Save and Open write files to disk; this is the drawer of jobs the browser
+    // keeps for you, where every save is a version and nothing overwrites
+    // anything. See doc/project-store.js.
+    {
+      label: 'Projects in this browser…',
+      hint: 'Every save is a version: save, open, download or upload one',
+      onclick: actions.browseProjects,
+    },
+    { separator: true },
+    {
+      label: 'Import model or drawing…',
+      keys: keyFor('import'),
+      hint: 'STEP, IGES, STL or OBJ — or a DXF, which lands as a drawing to engrave',
+      // wrapped, not passed straight through: a click handler is called with
+      // the event, and openModel's first argument is a file to import
+      onclick: () => actions.openModel(),
+    },
+    {
+      label: 'Check a G-code file…',
+      hint: 'Open any .nc file: drawn, simulated against this setup\'s billet and checked',
+      onclick: () => actions.checkGcode(),
+    },
+    { separator: true },
+    ...exportItems(),
+  ];
+
+  // The two ways a program leaves the app, said in full. Shared by the File
+  // menu and the Export button, which is the same question asked from the end
+  // of the workflow rather than from the file.
+  function exportItems() {
+    return [
+      {
+        label: 'Export G-code — one file',
+        keys: keyFor('export'),
+        hint: 'One .ngc file: every enabled operation, in machining order',
+        onclick: actions.exportGcode,
+      },
+      {
+        label: 'Export G-code — a file per operation…',
+        hint: 'One complete .ngc file per operation, numbered in machining order, '
+          + 'into a folder you pick. For proving a program out one operation at a time.',
+        onclick: actions.exportOperationsSeparately,
+      },
+    ];
+  }
+
+  const fileButton = toolButton('folder', 'File', {
+    class: 'tb-menu',
+    'aria-haspopup': 'menu',
+    title: 'New, open and save the project; import a model; export the program',
+    onclick: (e) => openContextMenu(anchorBelow(e), fileMenu()),
+  }, 'keep');
+
+  // --- the program: the end of the workflow, in the order it goes ----------
+  //
+  // Generate, Simulate and Export used to be in two places: the first two
+  // floating over the bottom of the part and the third on the toolbar. They
+  // are one sequence — compute it, watch it, write it out — so they sit
+  // together, left to right in that order, and nothing floats over the part.
+  const generateButton = el('button', {
+    type: 'button',
+    class: 'tb tb-keep tb-primary',
+    onclick: (e) => actions.generate({ force: e.shiftKey }),
+    title: `${withKey('Compute the toolpaths that changed', 'generate')} — Shift+click recomputes all of them`,
+  }, [
+    icon('bolt'),
+    el('span', { class: 'tb-label' }, ['Generate']),
+    // how many operations have no path, or a path from older settings
+    el('span', { class: 'tb-count', hidden: '' }, []),
+  ]);
+  const generateCount = generateButton.querySelector('.tb-count');
+  const simulateButton = toolButton('play', 'Simulate', {
+    onclick: actions.simulateOrGenerate,
+    title: withKey('Watch the stock being cut away; generates first if needed', 'simulate'),
+  }, 'late');
+  const exportButton = toolButton('download', 'Export', {
+    class: 'tb-menu',
+    'aria-haspopup': 'menu',
+    title: 'Write the G-code — the whole program, or a file per operation',
+    onclick: (e) => openContextMenu(anchorBelow(e), [
+      ...exportItems(),
+      { separator: true },
+      // The other direction, and it lives here because this is the menu about
+      // the *file*. A program is motion whichever way it is travelling, and
+      // everything this app can say about a path it generated it can say about
+      // one it is handed.
+      {
+        label: 'Check a G-code file…',
+        hint: 'Open any .nc file: it is drawn, simulated against this setup\'s billet, '
+          + 'measured against the model and checked for travels, clamps and rapids '
+          + 'through the job. Ours or anybody else\'s.',
+        onclick: () => actions.checkGcode(),
+      },
+    ]),
+  }, 'late');
+
+  const toolbar = el('div', { class: 'toolbar', role: 'toolbar', 'aria-label': 'CNCAM' }, [
     el('a', {
       class: 'brand',
       href: 'https://github.com/gamerpaddy/CNCAM',
       target: '_blank',
       rel: 'noopener noreferrer',
       title: 'CNCAM on GitHub',
-    }, [el('span', { class: 'brand-mark', 'aria-hidden': 'true' }), 'CNCAM']),
+    }, [el('span', { class: 'brand-mark', 'aria-hidden': 'true' }), el('span', { class: 'brand-word' }, ['CNCAM'])]),
+    fileButton,
+    projectName.node,
+    divider(),
+    // Which machine: the kind, then the one, then its settings. The group a
+    // job starts from, so it comes before anything that goes into the job.
     machineTabs.bar,
-    divider(),
-    // wrapped, not passed straight through: a click handler is called with the
-    // event, and openModel's first argument is a file to import
-    toolButton('cube', 'Model…', {
-      onclick: () => actions.openModel(),
-      title: withKey('Import STEP, IGES, STL, OBJ or DXF', 'import'),
-    }),
-    toolButton('cutter', 'Tools…', {
-      onclick: actions.addToolsFromLibrary,
-      title: 'Add cutters from the preset library',
-    }),
-    divider(),
     machineSelect,
     iconButton('machine', 'Machines', {
       onclick: actions.openMachines,
       title: withKey('Create and edit machines — travel, rapids, spindle range, dialect', 'machines'),
     }),
     divider(),
-    // One button that opens a chooser, spelling both choices out in full.
-    //
-    // This has been all three ways round. "Export" with a caret beside it hid
-    // the second choice behind an affordance nobody clicked. Splitting it into
-    // "Export all" and "Export each" made both visible, but two buttons whose
-    // labels differ by one word is a thing you have to stop and read, and it
-    // was the pair of them that pushed Save, Open and Clear off the right-hand
-    // edge of a 1280px screen.
-    //
-    // The trailing ellipsis is the app's own convention for a button that asks
-    // before it acts — Model… and Tools… are two along the same bar — so the
-    // choice is where you would look for it, and the menu can afford to say
-    // what each one does rather than hinting at it in a label.
-    toolButton('download', 'Export…', {
-      onclick: (e) => openContextMenu(e, [
-        {
-          label: 'Export all — one file',
-          hint: 'One .ngc file: every enabled operation, in machining order (Ctrl+E)',
-          onclick: actions.exportGcode,
-        },
-        {
-          label: 'Export each — one file per operation',
-          hint: 'One complete .ngc file per operation, numbered in machining order, '
-            + 'into a folder you pick. For proving a program out one operation at a time.',
-          onclick: actions.exportOperationsSeparately,
-        },
-        // The other direction, and it lives here because this is the menu about
-        // the *file*. A program is motion whichever way it is travelling, and
-        // everything this app can say about a path it generated it can say
-        // about one it is handed.
-        {
-          label: 'Check a file — read a program back in',
-          hint: 'Open any .nc file: it is drawn, simulated against this setup\'s billet, '
-            + 'measured against the model and checked for travels, clamps and rapids '
-            + 'through the job. Ours or anybody else\'s.',
-          onclick: () => actions.checkGcode(),
-        },
-      ]),
-      title: 'Write the G-code — or read a program back in and check it',
+    // What the job is made of: the part, and the cutters
+    toolButton('import', 'Import…', {
+      onclick: () => actions.openModel(),
+      title: withKey('Import a model (STEP, IGES, STL, OBJ) or a DXF drawing', 'import'),
     }),
-    gcodeToggle,
+    toolButton('cutter', 'Tools…', {
+      onclick: actions.addToolsFromLibrary,
+      title: 'Add cutters from the tool library',
+    }),
     el('span', { class: 'spacer' }),
     undoButton,
     redoButton,
     divider(),
-    toolButton('save', 'Save', {
-      onclick: actions.saveProject,
-      title: withKey('Save the project to a file, geometry included', 'save'),
-    }, 'early'),
-    // Options… and Open… carry the ellipsis Model…, Tools… and Projects… do: the
-    // app's convention for a button that asks something before it acts.
-    toolButton('folder', 'Open…', {
-      // wrapped, as Model… is: the click's event is not a file to open
-      onclick: () => actions.openProject(),
-      title: 'Open a .cncam project from a file',
-    }, 'early'),
-    // Save and Open write files to disk; this is the drawer of jobs the browser
-    // keeps for you, where every save is a version and nothing overwrites
-    // anything. See doc/project-store.js.
-    toolButton('layers', 'Projects…', {
-      onclick: actions.browseProjects,
-      title: 'Projects kept in this browser, with their history — save, open, download or upload one',
-    }, 'early'),
+    generateButton,
+    simulateButton,
+    exportButton,
+    gcodeToggle,
     divider(),
     iconButton('sliders', 'Options', {
       onclick: actions.openOptions,
@@ -325,11 +490,6 @@ export function buildLayout(root, actions, project) {
       title: withKey('How a job goes together, and every keyboard shortcut', 'help'),
       onclick: actions.showShortcuts,
     }),
-    iconButton('trash', 'Clear', {
-      class: 'danger',
-      onclick: actions.clearProject,
-      title: 'Clear — discard everything and start over',
-    }),
   ]);
 
   // The checklist lives above the tree, not over the part. It used to sit in
@@ -339,23 +499,7 @@ export function buildLayout(root, actions, project) {
   // was no way to put it away.
   const hint = el('div', { class: 'tree-hint' });
   const treeBody = el('div', { class: 'tree-body' });
-  const tree = el('div', { id: 'tree', class: 'panel' }, [hint, treeBody]);
-
-  // The viewport hosts its own action buttons at the bottom — actions belong
-  // where the eyes already are, not on a distant toolbar
-  const canvas = el('div', { id: 'viewport-canvas' });
-  const overlay = el('div', { class: 'viewport-overlay' }, [
-    // Shift recomputes everything; a plain click only what has changed
-    el('button', {
-      class: 'primary',
-      onclick: (e) => actions.generate({ force: e.shiftKey }),
-      title: `${withKey('Compute the toolpaths that changed', 'generate')} — Shift+click recomputes all of them`,
-    }, [icon('bolt'), 'Generate']),
-    el('button', {
-      onclick: actions.simulateOrGenerate,
-      title: withKey('Watch the stock being cut away; generates first if needed', 'simulate'),
-    }, [icon('play'), 'Simulate']),
-  ]);
+  const tree = el('div', { id: 'tree', class: 'panel', 'aria-label': 'Project' }, [hint, treeBody]);
 
   // Fit is the way back from any camera you have lost yourself in, so it lives
   // in the viewport permanently rather than firing only on import. Without it,
@@ -365,16 +509,18 @@ export function buildLayout(root, actions, project) {
   // The named views beside it are the other half of the same problem: orbiting
   // to "square on from the front" by hand is a game of degrees, and the answer
   // is one button on every other CAD package there is.
+  const canvas = el('div', { id: 'viewport-canvas' });
   const viewButtons = el('div', { class: 'view-presets' });
   // The rest of the views, and the projection, one click behind a caret. Eleven
   // buttons on a bar is not a toolbar, it is a keypad — but "the isometric from
   // the other corner" and "square-on, so I can compare two diameters" are both
   // things you want without hunting through a settings dialog for them.
   const viewMenuButton = el('button', {
+    type: 'button',
     class: 'view-preset view-more',
     title: 'More views, and perspective or orthographic',
     'aria-label': 'More views',
-    onclick: (e) => openContextMenu(e, viewMenuItems()),
+    onclick: (e) => openContextMenu(anchorBelow(e, 'right'), viewMenuItems()),
   }, [icon('chevron', 14)]);
   let currentMachine = project.machine ?? 'mill';
   // Which named view the camera is in, or null once it has been orbited away.
@@ -403,8 +549,9 @@ export function buildLayout(root, actions, project) {
       // projection that is resolving to right now. Showing only the preference
       // is what let the menu read Perspective while the screen was square-on.
       ...PROJECTIONS.map((mode) => ({
-        label: `${mode === projection ? '● ' : '○ '}${PROJECTION_LABELS[mode]}`
+        label: `${PROJECTION_LABELS[mode]}`
           + (mode === 'auto' ? ` (${PROJECTION_LABELS[live()]?.toLowerCase()} here)` : ''),
+        checked: mode === projection,
         hint: PROJECTION_HINTS[mode],
         onclick: () => actions.setProjection(mode),
       })),
@@ -422,44 +569,83 @@ export function buildLayout(root, actions, project) {
   // not in Options: it is something you reach for several times while checking
   // one surface, not something you set once.
   const pathsButton = el('button', {
-    class: 'view-toggle',
+    type: 'button',
+    class: 'view-toggle on',
     title: 'Show or hide the toolpath backplot (the program is unchanged)',
+    'aria-pressed': 'true',
     onclick: () => { actions.toggleToolpaths(); syncPathsButton(); },
-  }, [icon('paths', 15), 'Paths']);
+  }, [icon('paths', 15), el('span', {}, ['Paths'])]);
 
   function syncPathsButton() {
-    pathsButton.classList.toggle('off', actions.toolpathsVisible?.() === false);
+    const shown = actions.toolpathsVisible?.() !== false;
+    pathsButton.classList.toggle('off', !shown);
+    pathsButton.classList.toggle('on', shown);
+    pathsButton.setAttribute('aria-pressed', shown ? 'true' : 'false');
   }
 
   const viewTools = el('div', { class: 'viewport-tools' }, [
     viewButtons,
     pathsButton,
-    el('button', { onclick: () => actions.fitView(), title: withKey('Fit everything in view', 'fit') },
-      [icon('fit', 15), 'Fit']),
+    el('button', {
+      type: 'button',
+      class: 'view-fit',
+      onclick: () => actions.fitView(),
+      title: withKey('Fit everything in view', 'fit'),
+    }, [icon('fit', 15), el('span', {}, ['Fit'])]),
   ]);
+
+  // Which setup the scene is showing. The viewport draws one fixturing at a
+  // time — the part is somewhere else in the next one — and nothing on it said
+  // which, so selecting an operation in the second setup turned the part round
+  // with no word about why.
+  const sceneLabel = el('div', { class: 'viewport-label', hidden: '' });
+
   // What an empty viewport says: where a part comes from. The checklist in the
   // tree says it too, but the viewport is where a newcomer is looking, and a
   // dark grid on its own reads as something that failed to load.
   const emptyState = el('div', { class: 'viewport-empty' }, [
     el('div', { class: 'viewport-empty-card' }, [
-      icon('cube', 28),
+      icon('import', 26),
       el('div', { class: 'viewport-empty-title' }, ['Drop a part here']),
       el('div', { class: 'viewport-empty-detail' }, [
-        'STEP, IGES, STL or OBJ — or a DXF to engrave. ',
-        'Or ', el('button', {
-          class: 'link-button',
-          onclick: () => actions.openModel(),
-          title: withKey('Import STEP, IGES, STL, OBJ or DXF', 'import'),
-        }, ['open one']), '.',
+        'STEP, IGES, STL or OBJ — or a DXF to engrave.',
       ]),
+      el('button', {
+        type: 'button',
+        class: 'primary',
+        onclick: () => actions.openModel(),
+        title: withKey('Import STEP, IGES, STL, OBJ or DXF', 'import'),
+      }, ['Import a model…']),
     ]),
   ]);
-  const viewport = el('div', { id: 'viewport' }, [canvas, emptyState, viewTools, overlay]);
-  const props = el('div', { id: 'props', class: 'panel' });
+  const viewport = el('div', { id: 'viewport' }, [canvas, sceneLabel, emptyState, viewTools]);
+  const props = el('div', { id: 'props', class: 'panel', 'aria-label': 'Properties' });
 
-  const statusText = el('span', {}, ['Ready']);
+  // --- the status line ------------------------------------------------------
+  //
+  // A message on the left, and on the right what the program in front of you
+  // comes to. The message is the answer to the last thing you did and it is
+  // replaced by the next one — which made a long report from Generate, the one
+  // that names every operation that cut nothing, gone the moment anything else
+  // said a word. The last few are kept, a click away.
+  const statusText = el('span', { class: 'status-text' }, ['Ready']);
   const busy = el('span', { class: 'busy' });
-  const status = el('div', { class: 'status' }, [busy, statusText]);
+  const log = [];
+  const statusMessage = el('button', {
+    type: 'button',
+    class: 'status-message',
+    title: 'Click for the recent messages',
+    onclick: (e) => openContextMenu(anchorAbove(e), log.length
+      ? log.slice().reverse().map((entry) => ({
+        label: `${entry.time}  ${entry.text}`,
+        className: entry.isError ? 'context-log error' : 'context-log',
+        onclick: () => copyText(entry.text),
+        hint: 'Click to copy this message',
+      }))
+      : [{ label: 'No messages yet', disabled: true }]),
+  }, [busy, statusText]);
+  const summary = el('span', { class: 'status-summary' }, []);
+  const status = el('div', { class: 'status' }, [statusMessage, summary]);
 
   const timeline = buildTimeline(
     (step, seconds) => actions.seekSimulation(step, seconds),
@@ -502,6 +688,8 @@ export function buildLayout(root, actions, project) {
     gcodeToggle.setAttribute('aria-pressed', open ? 'true' : 'false');
     actions.viewportResized?.();
   }
+  // the listing's own close button asks for the same thing the toolbar does
+  gcode.addEventListener('gcode-close', () => { dismissed = true; setGcodeOpen(false); });
 
   root.replaceChildren(
     toolbar,
@@ -537,7 +725,7 @@ export function buildLayout(root, actions, project) {
       const chosen = machines.find((m) => m.id === machineSelect.value);
       machineSelect.title = chosen
         ? `${chosen.name} — ${describeMachine(chosen)}`
-        : 'No machine — add one from Options ⚙';
+        : 'No machine — add one in Machines';
       document.body.dataset.machine = machine;
       // the views worth having are not the same on the two machines: a lathe
       // wants the ZX plane square on, a mill wants six faces of a box
@@ -546,6 +734,7 @@ export function buildLayout(root, actions, project) {
         ...viewsFor(machine).map((key) => {
           const preset = VIEW_PRESETS[key];
           const button = el('button', {
+            type: 'button',
             class: 'view-preset',
             title: preset.hint,
             onclick: () => actions.setView(key),
@@ -566,10 +755,51 @@ export function buildLayout(root, actions, project) {
     showGcodePanel() { if (!dismissed) setGcodeOpen(true); },
     /** Whether there is nothing in the job to look at yet. */
     setEmpty(empty) { emptyState.classList.toggle('on', !!empty); },
+    /** The project's name, on the bar and in the window title. */
+    setProjectName(name) { projectName.set(name); },
+    /** Which setup the scene is drawing, or null for none. */
+    setSceneLabel(text) {
+      sceneLabel.hidden = !text;
+      sceneLabel.textContent = text ?? '';
+    },
+    /**
+     * What the program in front of you comes to, and how much of it is not
+     * computed yet.
+     *
+     * @param outdated operations whose path is missing or older than their
+     *   settings — the number on the Generate button
+     * @param text the summary at the right-hand end of the status line
+     */
+    setProgramState({
+      outdated = 0, operations = 0, text = '', title = '',
+    } = {}) {
+      // the next step only when there is a program to compute: lit on an empty
+      // job it pointed at the one button that could do nothing yet
+      generateButton.classList.toggle('idle', operations === 0);
+      generateCount.hidden = !(outdated > 0);
+      generateCount.textContent = outdated > 0 ? String(outdated) : '';
+      generateButton.classList.toggle('needed', outdated > 0);
+      generateButton.setAttribute('aria-label', outdated > 0
+        ? `Generate — ${outdated} to compute` : 'Generate');
+      summary.textContent = text;
+      summary.title = title || text;
+    },
     setStatus(text, isError = false) {
       statusText.textContent = text;
-      statusText.className = isError ? 'error' : '';
-      status.title = text;   // long messages get cut off; the tooltip has it all
+      statusText.className = `status-text${isError ? ' error' : ''}`;
+      statusMessage.title = `${text}\n\nClick for the recent messages`;
+      // the same message twice in a row is one entry — a status set again by a
+      // refresh is not news
+      const last = log[log.length - 1];
+      if (text && (!last || last.text !== text)) {
+        const now = new Date();
+        log.push({
+          text,
+          isError,
+          time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+        });
+        if (log.length > 30) log.shift();
+      }
     },
     /**
      * Long jobs need to say they are running. Generating a heavy clearing pass
@@ -578,7 +808,10 @@ export function buildLayout(root, actions, project) {
      */
     setBusy(on) {
       busy.classList.toggle('on', !!on);
-      overlay.classList.toggle('busy', !!on);
+      // the buttons that would start another job stand down while one runs
+      generateButton.disabled = !!on;
+      simulateButton.disabled = !!on;
+      generateButton.classList.toggle('running', !!on);
     },
     /**
      * Reflect the undo stack. A button that is always live tells you nothing
@@ -611,34 +844,39 @@ export function buildLayout(root, actions, project) {
       if (list.length === 0) return hint.replaceChildren();
 
       const done = list.filter((s) => s.state === 'done').length;
-      const body = el('div', { class: 'hint-steps' }, list.map((step) => {
-        const mark = { done: '✓', next: '▸', todo: '·' }[step.state] ?? '·';
-        return el(step.onclick ? 'button' : 'div', {
+      const body = el('ol', { class: 'hint-steps' }, list.map((step, i) => {
+        const mark = step.state === 'done' ? icon('check', 12) : String(i + 1);
+        return el('li', {}, [el(step.onclick ? 'button' : 'div', {
           class: `hint-step ${step.state}`,
-          ...(step.onclick ? { onclick: step.onclick } : {}),
-        }, [el('span', { class: 'hint-mark' }, [mark]), step.label]);
+          ...(step.onclick ? { type: 'button', onclick: step.onclick } : {}),
+        }, [el('span', { class: 'hint-mark' }, [mark]), el('span', { class: 'hint-label' }, [step.label])])]);
       }));
       body.hidden = hintFolded;
 
       const fold = el('button', {
-        class: 'hint-fold',
+        type: 'button',
+        class: `hint-fold${hintFolded ? ' folded' : ''}`,
         title: hintFolded ? 'Show the remaining steps' : 'Fold this away',
+        'aria-expanded': hintFolded ? 'false' : 'true',
         onclick: () => {
           hintFolded = !hintFolded;
           try { localStorage.setItem(HINT_KEY, hintFolded ? '1' : '0'); } catch { /* private mode */ }
           this.setHint(steps);
         },
-      }, [hintFolded ? '▸' : '▾']);
+      }, [icon('chevron', 14), el('span', {}, ['Getting to a program']),
+        el('span', { class: 'hint-count' }, [`${done} of ${list.length}`])]);
 
-      hint.replaceChildren(
-        el('div', { class: 'hint-title' }, [
-          fold,
-          el('span', {}, ['Getting to a program']),
-          el('span', { class: 'hint-count' }, [`${done}/${list.length}`]),
-        ]),
-        body,
-      );
+      // how far along, as a bar as well as a count
+      const progress = el('div', { class: 'hint-progress', 'aria-hidden': 'true' }, [
+        el('span', { style: `width:${Math.round((done / list.length) * 100)}%` }),
+      ]);
+
+      hint.replaceChildren(fold, progress, body);
       return undefined;
     },
   };
+}
+
+function copyText(text) {
+  navigator.clipboard?.writeText(text).catch(() => {});
 }

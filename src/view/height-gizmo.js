@@ -11,9 +11,9 @@
 import * as THREE from 'three';
 
 export const HEIGHT_HANDLES = [
-  { key: 'topZ', label: 'Top', color: 0x6fd3ff },
-  { key: 'bottomZ', label: 'Bottom', color: 0xff8a5c },
-  { key: 'clearanceHeight', label: 'Clearance', color: 0x9be36f },
+  { key: 'topZ', label: 'Top', color: 0x6caad6 },
+  { key: 'bottomZ', label: 'Bottom', color: 0xd48d62 },
+  { key: 'clearanceHeight', label: 'Clearance', color: 0x8cbb70 },
 ];
 
 export class HeightGizmos {
