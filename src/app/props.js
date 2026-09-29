@@ -7,7 +7,7 @@
 
 import { el } from './layout.js';
 import { plural } from '../engine/text.js';
-import { TOOL_TYPES, TOOL_TYPE_LABELS } from '../doc/schema.js';
+import { TOOL_TYPES, TOOL_TYPE_LABELS, setupModelIds } from '../doc/schema.js';
 import { toolIcon, toolAssembly, describeTool } from './tool-shape.js';
 import {
   toolLength, toolMaxRadius, fluteLengthOf, reachCheck, latheReachOf,
@@ -781,7 +781,7 @@ function modelSummary(doc, model) {
   const size = [0, 1, 2].map((k) => (max[k] - min[k]).toFixed(2)).join(' × ');
   const triangles = (mesh.indices?.length ?? mesh.positions.length / 3) / 3;
   const faces = mesh.faceRanges?.length ?? 0;
-  const setups = doc.project.setups.filter((s) => !s.modelIds?.length || s.modelIds.includes(model.id));
+  const setups = doc.project.setups.filter((s) => setupModelIds(s, doc.project).includes(model.id));
   rows.push(reportRows([
     ['File', model.sourceName ?? '—'],
     ['Size', `${size} mm`],

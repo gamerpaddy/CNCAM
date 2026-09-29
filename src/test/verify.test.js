@@ -5,6 +5,7 @@ import { CLBuilder, FEED } from '../engine/cl.js';
 import { rotationMatrix } from '../engine/setup.js';
 import { cutFromSimulation } from '../engine/workpiece.js';
 import { makeBox, makeStepped } from './fixtures.js';
+import { meshFromSoup } from '../geom/mesh.js';
 
 const FLAT = {
   number: 1, type: 'flat', diameter: 8, fluteLength: 20,
@@ -121,6 +122,66 @@ test('a wall is not a gouge', () => {
   const result = verifyRun({ sim, mesh: step.mesh, stock, cuts, frame: IDENTITY });
   assert.eq(result.gougeCells, 0,
     `the ledge is on the model, so nothing is gouged (worst ${result.worstGouge?.mm ?? 0})`);
+});
+
+/**
+ * A 20×20 block 10mm tall on nothing, its walls a few hundredths of a degree
+ * off vertical the way a CAD export leaves them, in a billet with air round it.
+ */
+function leaningBlock(lean) {
+  const h = 10;
+  const w = 10;
+  const d = Math.tan((lean * Math.PI) / 180) * h;
+  const lo = [[-w, -w], [w, -w], [w, w], [-w, w]];
+  // each side leans the other way from the one before it
+  const hi = [[-w - d, -w + d], [w + d, -w - d], [w - d, w + d], [-w + d, w - d]];
+  const soup = [];
+  const q = (a, b, c, e) => soup.push(...a, ...b, ...c, ...a, ...c, ...e);
+  for (let k = 0; k < 4; k++) {
+    const n = (k + 1) % 4;
+    q([...lo[k], -h], [...lo[n], -h], [...hi[n], 0], [...hi[k], 0]);
+  }
+  q([...hi[0], 0], [...hi[1], 0], [...hi[2], 0], [...hi[3], 0]);
+  q([...lo[0], -h], [...lo[3], -h], [...lo[2], -h], [...lo[1], -h]);
+  return meshFromSoup(new Float32Array(soup));
+}
+
+/** One lap round the block at z = −5, the cutter `into` millimetres into its wall. */
+function lapRound(into) {
+  const cl = new CLBuilder();
+  cl.event('feeds', { cut: 600, plunge: 200 });
+  const o = 10 + 3 - into;
+  cl.rapid(-o, -o - 5, 5);
+  cl.rapid(-o, -o - 5, -5);
+  cl.cut(-o, -o, -5);
+  for (const [x, y] of [[o, -o], [o, o], [-o, o], [-o, -o]]) cl.cut(x, y, -5);
+  cl.rapid(-o, -o, 5);
+  return { cl: cl.finish(), tool: { ...FLAT, diameter: 6 } };
+}
+
+test('a wall cut to size on the outline of the part is not a gouge', () => {
+  // Two faults, both on the part's outline, where the cells beside it have no
+  // model at all and so cannot widen the range a cell is judged against:
+  //  - a wall a few hundredths of a degree off vertical covers a sliver of
+  //    plan, and a cell centre landing in it read a height from half-way up;
+  //  - a column is cut or not, so the cutter running along the wall on size
+  //    took cells whose centres were a micron inside it.
+  // On clamp1 both were reported as gouges 2 to 10mm deep.
+  const stock = { kind: 'box', min: [-20, -20, -10], max: [20, 20, 0] };
+  for (const lean of [0, 0.03]) {
+    const mesh = leaningBlock(lean);
+    const check = (into) => {
+      const sim = simulateRemoval({ stock, ops: [lapRound(into)], maxCells: 250000 });
+      return verifyRun({ sim, mesh, stock });
+    };
+    const onSize = check(0);
+    assert.eq(onSize.gougeCells, 0,
+      `walls leaning ${lean}°, cut on size: ${onSize.gougeCells} cells, worst ${onSize.worstGouge?.mm}`);
+    // and a real one is still a real one
+    const into = check(0.1);
+    assert.ok(into.gougeCells > 100, `walls leaning ${lean}°, 0.1mm in: only ${into.gougeCells} cells`);
+    assert.close(into.worstGouge.mm, 5, 0.05, 'the whole 5mm of wall below the cut');
+  }
 });
 
 test('a tighter tolerance finds what a loose one forgives', () => {

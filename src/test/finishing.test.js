@@ -750,7 +750,11 @@ test('waterline reads the cutter shape, not just its diameter', () => {
   const gapUnderABall = (cl) => {
     const nearest = new Map();
     eachMove(cl, (op, x, y, z, i, j, k, feed) => {
-      if (op !== OP.LINE || feed === FEED.RAPID) return;
+      // the level's own cut, not the way down to it: an entry is vertical over
+      // the pass's start and ends wherever the tool was told to get to — an
+      // entry gap above the level, off the end of the part — so reading its
+      // end as a point of the level measured a slope that is not there
+      if (op !== OP.LINE || feed === FEED.RAPID || feed === FEED.PLUNGE) return;
       const level = Math.round(z * 1000) / 1000;
       if (!(nearest.get(level) <= x)) nearest.set(level, x);
     });

@@ -36,7 +36,7 @@ import {
   offsetLoops, offsetNormalized, diffLoops, clipOpenPaths, loopToOpenPath,
   loopsBounds, loopArea, unionWithHoles,
 } from '../../geom/clipper.js';
-import { pointInLoops } from '../../geom/inside.js';
+import { pointInLoops, segmentInLoops } from '../../geom/inside.js';
 import { ClearingMap, engagementFraction } from '../../geom/coverage.js';
 import { SilhouetteStack } from '../../geom/silhouette.js';
 import { depthLevelsFor, depthRefusal, stockOutline } from '../stock.js';
@@ -186,6 +186,9 @@ export function generateAdaptive({
       feedPlane: entryPlane(params, zEntry, z),
       stockPlane,
       direction, allowed, report, minSegment,
+      // how far a link may stray outside `allowed` and still not reach the
+      // part: the allowance, less the tolerance — see canStayDown
+      linkSlack: Math.max(tolerance, stockToLeave - tolerance),
     });
 
     // The stock boundary marched inward one bite at a time, starting one bite
@@ -876,7 +879,20 @@ class LevelCutter {
       // was already standing next to.
       if (this.map.engagementAt(x, y) > this.contactLimit) return false;
     }
-    return true;
+    // And the line itself, against the region as it really is. The reading
+    // above is a cell generous so that a link may set off from the boundary it
+    // starts on, and a cell is also how far a straight link can cut across a
+    // bend in the boundary without the raster noticing. The region has the
+    // finishing allowance built into it, which is what was meant to make that
+    // harmless, and at an allowance of zero it is not: on clamp1 a link across
+    // the chord of a boss's keep-out, at full depth, took 0.3mm off the boss
+    // wall. Refusing every link the eroded mask doubts instead cost twice the
+    // cutting — each refusal is an entry — so it is asked exactly, last, of the
+    // few links that got this far, and asked only what matters: whether the
+    // line reaches the *part*. Straying into the allowance is what the cell of
+    // slack always allowed, and refusing that too cost a fifth more cutting on
+    // parts that were never touched.
+    return segmentInLoops(this.allowed, from[0], from[1], to[0], to[1], this.linkSlack);
   }
 
   finish() {

@@ -14,7 +14,7 @@ import {
 } from '../doc/schema.js';
 import {
   formatTime, opPreflight, opFingerprint, toolNumberClashes, toolChangesIn,
-  opBlockedReason, stalePicks,
+  opBlockedReason, stalePicks, roughingLeftover, suggestedEntryGap,
 } from '../app/op-status.js';
 import { defaultParamsFor, retypeParams, depthRangeFor } from '../engine/op-defaults.js';
 import { generateToolpath, toolpathStats } from '../engine/toolpath.js';
@@ -887,6 +887,31 @@ test('picks on a model that has gone stop the operation, rather than vanishing',
   assert.ok(/no longer in the project/.test(opBlockedReason(doc, op) ?? ''),
     'and the operation says it cannot generate, and why');
 
+  // The same pick, still in the project, on a part the setup has been told
+  // not to machine: the pocket went on generating — the other plate, inside
+  // the first one's face — and nothing said a word.
+  const two = new Document();
+  const left = createModel('left plate');
+  const right = createModel('right plate');
+  two.addModel(left, makeBox(40, 40, 10));
+  two.addModel(right, makeBox(40, 40, 10));
+  two.addTool(tool);
+  const both = createSetup('Setup 1');
+  two.addSetup(both);
+  const picked = createOperation('pocket');
+  picked.toolId = tool.id;
+  picked.regions = { include: [{ modelId: left.id, faceId: 0 }], avoid: [] };
+  two.addOperation(both, picked);
+  assert.eq(opBlockedReason(two, picked), null, 'picked on a part the setup machines');
+  two.updateItem(both, { modelIds: [right.id] }, 'only the right plate');
+  assert.eq(stalePicks(two, picked), 1, 'the pick is on a part this setup no longer holds');
+  assert.ok(/does not machine/.test(opBlockedReason(two, picked) ?? ''),
+    `and it says which, got: ${opBlockedReason(two, picked)}`);
+  // and "machined in" agrees with the setup about a list whose parts have gone
+  two.updateItem(both, { modelIds: ['model_deleted_long_ago'] }, 'stale list');
+  assert.ok(two.usageOf('model', left.id).operations === 1,
+    'a setup whose listed models are all gone machines everything, and counts so');
+
   // and a pass that follows a drawing needs no model at all
   const plate = new Document();
   const drawing = createDrawing('marks', 'marks.dxf', [], null);
@@ -1452,4 +1477,38 @@ test('a tool with no speed or no width is refused or named, not posted as S0', (
     'and so is a missing feed');
   assert.ok(!at({}).notes.some((n) => /S0|no cutting feed|no diameter/.test(n.text)),
     'a tool with all three says none of it');
+});
+
+test('a finishing pass is told when its entries would run into the roughing steps', () => {
+  // A finishing pass rapids to its entry gap above the part and links across
+  // at that height. After a Z-level rough the slopes are a staircase as tall as
+  // the roughing stepdown, and a 1mm gap is inside every step: the simulator
+  // counted waterline rapids 1.1mm into them, parallel finishing 1.9mm.
+  const doc = new Document();
+  doc.addModel(createModel('part'), makeBox(40, 40, 10));
+  const flat = toolFor('flat', 6);
+  const ball = toolFor('ball', 6);
+  ball.number = 2;
+  doc.addTool(flat);
+  doc.addTool(ball);
+  const setup = createSetup('Setup 1');
+  doc.addSetup(setup);
+  const rough = createOperation('clear2d');
+  rough.toolId = flat.id;
+  rough.params.stepdown = 3;
+  rough.params.stockToLeave = 0.3;
+  doc.addOperation(setup, rough);
+  const finish = createOperation('waterline');
+  finish.toolId = ball.id;
+  finish.params.entryGap = 1;
+  doc.addOperation(setup, finish);
+  assert.close(roughingLeftover(setup, finish), 3.3, 1e-9, 'a stepdown and the allowance on top of it');
+  assert.ok(opPreflight(doc, finish).some((n) => /steps up to 3\.3mm/.test(n)),
+    'the pass says its gap is inside the steps');
+  doc.updateItem(finish.params, { entryGap: suggestedEntryGap(3.3) }, 'gap');
+  assert.eq(finish.params.entryGap, 4, 'the suggestion clears them with room to spare');
+  assert.ok(!opPreflight(doc, finish).some((n) => /steps up to/.test(n)), 'and then says nothing');
+  // a finishing pass *before* the roughing has nothing of it to clear
+  doc.updateItem(rough, { enabled: false }, 'off');
+  assert.eq(roughingLeftover(setup, finish), 0, 'a disabled roughing pass leaves nothing');
 });

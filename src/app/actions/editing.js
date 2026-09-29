@@ -19,6 +19,14 @@ import { tipLengthOf } from '../../engine/tool-geometry.js';
 import { getSetting } from '../settings.js';
 import { openStrategyPicker } from '../strategy-picker.js';
 import { removalOf, nounFor } from '../item-labels.js';
+import { roughingLeftover, suggestedEntryGap, isFinishingPass } from '../op-status.js';
+
+/**
+ * How much bar a new chuck leaves between its jaws and the part: a parting
+ * blade's slot, which is cut behind the part's last face, and a little air
+ * either side of it. See sizeChuckToStock.
+ */
+const PART_OFF_ROOM = 6;
 
 export function makeEditActions(ctx, space) {
   const { doc } = ctx;
@@ -51,12 +59,19 @@ export function makeEditActions(ctx, space) {
     if (!existing && doc.project.models.length === 0 && (doc.project.drawings ?? []).length === 0) {
       return ctx.ui.setStatus('Import a model or a DXF before adding operations', true);
     }
-    const target = existing ?? ensureSetup();
+    // The setup a first operation needs is made when the operation is — not
+    // when the picker opens. Made up front, cancelling the picker left an empty
+    // "Setup 1" behind that nobody had asked for, and choosing a strategy took
+    // two presses of Ctrl+Z to undo: one for the operation, one for the setup.
     return openStrategyPicker({
-      title: `Add an operation to ${target.name}`,
+      title: existing ? `Add an operation to ${existing.name}` : 'Add an operation to a new setup',
       confirm: 'Add operation',
-      mode: target.mode ?? 'mill',
-      onPick: (type) => addOperationTo(target, type),
+      mode: existing?.mode ?? doc.machine ?? 'mill',
+      onPick: (type) => {
+        let op = null;
+        doc.group('add operation', () => { op = addOperationTo(existing ?? ensureSetup(), type); });
+        return op;
+      },
     });
   }
 
@@ -111,7 +126,7 @@ export function makeEditActions(ctx, space) {
       }
     }
     op.toolId = tool?.id ?? null;
-    Object.assign(op.params, params);
+    Object.assign(op.params, params, clearOfRoughing(setup, op, type, params));
     op.name = uniqueOpName(setup, OP_LABELS[type] ?? type);
     doc.addOperation(setup, op);
     doc.select('op', op.id);
@@ -119,6 +134,18 @@ export function makeEditActions(ctx, space) {
     else if (!op.toolId) ctx.ui.setStatus(noToolYet(op), true);
     else ctx.ui.setStatus(`Added ${op.name} with T${tool.number} ${tool.name}`);
     return op;
+  }
+
+  /**
+   * A finishing pass's entry gap, raised to clear what the roughing before it
+   * leaves — see op-status.js roughingLeftover. Only ever raised, and only for
+   * a pass that treats the part's surface as all there is.
+   */
+  function clearOfRoughing(setup, op, type, params) {
+    if (!setup || !isFinishingPass(type)) return {};
+    const leftover = roughingLeftover(setup, op);
+    if (!(leftover > 0) || (params.entryGap ?? 1) > leftover) return {};
+    return { entryGap: suggestedEntryGap(leftover) };
   }
 
   /**
@@ -213,6 +240,7 @@ export function makeEditActions(ctx, space) {
     // A name the user chose is theirs and is left alone; one that is still the
     // strategy's own label (with or without the number that made it unique) was
     // never a decision, so it moves with the strategy.
+    Object.assign(params, clearOfRoughing(setup, op, type, params));
     const patch = { type, params };
     // A command holds no cutter, and an operation that was one has none to
     // bring — so the tool goes with the change in either direction.
@@ -419,12 +447,16 @@ export function makeEditActions(ctx, space) {
    * in the app — and it grips at the bar's own diameter.
    *
    * How far it reaches up the bar is the number that matters, and the answer is
-   * "as far as the part, and not past it". Bar stock arrives with a chucking
-   * allowance behind the part for exactly this (see engine/stock.js), so
-   * gripping that allowance holds the work without burying any of it. Where
-   * there is no allowance — a part the full length of its stock — the jaws take
-   * a diameter's worth and the operations say so, which is the honest answer
-   * rather than a chuck that pretends to hold nothing.
+   * "not as far as the part". Bar stock arrives with a chucking allowance behind
+   * the part for exactly this (see engine/stock.js), so gripping that allowance
+   * holds the work without burying any of it — but not all of it: the part is
+   * parted off from the bar behind it, and the blade cuts its slot there, in
+   * front of the jaws. Jaws brought right up to the part's last face left no
+   * room for it at all, and the part-off went into them.
+   *
+   * Where there is not that much allowance — a part the full length of its
+   * stock — the jaws take a diameter's worth and the operations say so, which
+   * is the honest answer rather than a chuck that pretends to hold nothing.
    */
   function sizeChuckToStock(fixture, stock, modelBounds) {
     const diameter = stock.cylinder?.diameter
@@ -434,9 +466,10 @@ export function makeEditActions(ctx, space) {
     fixture.faceZ = round3(stock.min[2]);
 
     const spare = modelBounds ? modelBounds.min[2] - stock.min[2] : 0;
-    fixture.jawLength = round3(spare > 1
-      ? Math.min(spare, Math.max(10, diameter))
-      : Math.max(5, Math.min(diameter, (stock.max[2] - stock.min[2]) * 0.25)));
+    const grip = spare - PART_OFF_ROOM;
+    fixture.jawLength = round3(grip >= 5 ? Math.min(grip, Math.max(10, diameter))
+      : spare > 1 ? Math.min(spare, Math.max(10, diameter))
+        : Math.max(5, Math.min(diameter, (stock.max[2] - stock.min[2]) * 0.25)));
     fixture.jawWidth = round3(Math.max(8, diameter * 0.5));
     fixture.bodyDiameter = round3(Math.max(80, diameter * 3));
     fixture.bodyLength = round3(Math.max(40, diameter * 1.6));

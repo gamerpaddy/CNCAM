@@ -6,34 +6,17 @@
 // which is why they agree — and why this is a module rather than three copies
 // of the same three lines.
 
-import { createSetup } from '../../doc/schema.js';
+import { createSetup, setupModelIds } from '../../doc/schema.js';
 import { computeStock, deriveCylinder, isRoundStock } from '../../engine/stock.js';
 import { resolveSetup } from '../../engine/setup.js';
 import { computeBounds, mergeMeshes } from '../../geom/mesh.js';
 import { boreProfile } from '../../engine/lathe.js';
 import { placedPaths, boundsOfPaths } from '../../engine/drawing.js';
 
-/**
- * Which models a setup actually machines.
- *
- * An empty `modelIds` means "everything in the project", which is the normal
- * state; the setup panel's Part list fills it in when a project holds more than
- * one model and the setup is told to machine only some. Either way the models a
- * setup machines are not simply the field, and anything that has to notice
- * when they change has to ask *this* question rather than read it. That is why
- * it is a function on its own: `opFingerprint` was comparing `modelIds`, which
- * stays `[]` however many models are imported, so importing a second part
- * silently changed the stock and every toolpath in the project while every
- * operation went on reporting itself up to date.
- *
- * A model named in the list and since removed is not machined — and a list
- * whose every model has gone means the setup is back to machining the part in
- * front of you, which is what replacing a part with its next revision is.
- */
-export function setupModelIds(setup, project) {
-  const listed = (setup.modelIds ?? []).filter((id) => project.models.some((m) => m.id === id));
-  return listed.length ? listed : project.models.map((m) => m.id);
-}
+// Which models a setup machines is a question about the project, and lives
+// with it in doc/schema.js so the document can ask it too. Re-exported here,
+// where the app has always found it.
+export { setupModelIds };
 
 export function makeSetupSpace(doc) {
   function setupMeshes(setup) {

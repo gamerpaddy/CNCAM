@@ -94,3 +94,31 @@ test('every strategy runs on the real model without throwing', async () => {
     assert.ok(cl.count >= 0, `${type} returned a program`);
   }
 });
+
+test('Z-level clearing never leaves a spine for the next level to rapid into', async () => {
+  // Rings further apart than the cutter's radius do not meet where one bends
+  // away from the next, and the stock left there stood through every level —
+  // each level below entered over it at rapid, as though the level above had
+  // cleared it. Measured on the slope part turned 30°: a 0.7×D stepover put
+  // three rapids through metal, the deepest 11.5mm.
+  const { simulateRemoval } = await import('../engine/simulate.js');
+  const { defaultParamsFor } = await import('../engine/op-defaults.js');
+  const raw = meshFromSoup(parseSTL(await loadSampleBuffer('test-slope.stl')));
+  const setup = createSetup();
+  setup.orientation.rotationDeg = [0, 0, 30];
+  const { meshes, stock } = resolveSetup(setup, [raw], computeStock);
+  const bounds = computeBounds(meshes[0].positions);
+  const tool = toolFor('12mm flat 3FL');
+  const params = {
+    ...createOperation('clear2d').params,
+    ...defaultParamsFor('clear2d', { stock, modelBounds: bounds, tool }),
+    stepover: 0.7,
+    stockToLeave: 0,
+  };
+  const cl = generateToolpath({ type: 'clear2d', params, tool, stock, mesh: meshes[0] });
+  const sim = simulateRemoval({ stock, ops: [{ cl, tool }], maxCells: 150000 });
+  assert.eq(sim.rapidCut.count, 0,
+    `no rapid takes metal — deepest ${sim.rapidCut.depth.toFixed(2)}mm`);
+  assert.ok((cl.notes ?? []).some((n) => /rather than the 0\.70×D asked for/.test(n.text)),
+    'and the pass says it stepped less than it was asked to, and why');
+});

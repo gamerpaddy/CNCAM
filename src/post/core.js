@@ -119,6 +119,13 @@ export function buildProgram(dialect, ops, options = {}) {
   // spindle rather than fed. See CLBuilder.tapping.
   let tapPitch = 0;
   let tapHand = 'right';
+  // Where the control's programmed point is from the point the CL names, as
+  // [X, Z] to add — a lathe tool is touched off at its tip and planned about
+  // its nose centre. Zero for everything that does not say otherwise, and for
+  // every mill. See engine/tool-geometry.js latheControlPoint. `finalControlX`
+  // is the X of it in force when the program ends, for the footer's retract.
+  let controlPoint = [0, 0];
+  let finalControlX = 0;
 
   const endCycle = () => {
     if (!cycle) return;
@@ -231,6 +238,18 @@ export function buildProgram(dialect, ops, options = {}) {
       }
       if (silent) return;
       if (e.type === 'tool' && e.tool !== activeTool) {
+        // A change made by hand is made with somebody's hands at the spindle,
+        // and the stop that waits for them does not stop anything else: GRBL's
+        // M0 is a feed hold, which leaves the spindle and the pump running. So
+        // a GRBL job paused for its second cutter with the first still turning
+        // at 8000rpm under flood — "fit tool T2 — press cycle start" — and the
+        // next thing written was the new cutter's own M3. Stopped here, the
+        // way a re-fixturing stops them, and restarted by the next operation's
+        // spindle and coolant words, which a tool change always restates.
+        if (changesByHand(dialect, options)) {
+          stopCoolant();
+          if (spindleOn) { w.line('M5'); spindleOn = false; }
+        }
         // the options go through because whether the machine can change its own
         // tool is a fact about the machine, not about the dialect
         dialect.toolChange(w, modal, e, options);
@@ -273,6 +292,9 @@ export function buildProgram(dialect, ops, options = {}) {
         modal.force('G');
         modal.force('F');
       }
+      // a lathe's; a mill drives the tip of its cutter on the axis, which is
+      // the point its CL already names
+      if (e.type === 'controlPoint' && dialect.lathe) controlPoint = [e.x ?? 0, e.z ?? 0];
       if (e.type === 'thread') {
         // A post with no synchronised motion cannot cut a thread, and the one
         // thing it must not do is write G1 and let the file look finished.
@@ -492,7 +514,7 @@ export function buildProgram(dialect, ops, options = {}) {
         const rapid = opcode === OP.RAPID;
         emit(w, modal, {
           rapid,
-          x: d[o + 1], y: d[o + 2], z: d[o + 3],
+          x: d[o + 1] + controlPoint[0], y: d[o + 2], z: d[o + 3] + controlPoint[1],
           feed: feedRate(d[o + 7], feeds, descentOf(at, positionOf(n))),
           // a rapid inside a threading run is the lead-in or the retract, and
           // neither of those is synchronised to anything
@@ -515,6 +537,9 @@ export function buildProgram(dialect, ops, options = {}) {
     // operation that opened it
     threadPitch = 0;
     tapPitch = 0;
+    // nor does the point a tool is driven by, which belongs to that tool
+    if (!silent) finalControlX = controlPoint[0];
+    controlPoint = [0, 0];
     modal.force('F');
   });
 
@@ -536,7 +561,7 @@ export function buildProgram(dialect, ops, options = {}) {
   // because the last operation retracts to clearance and the footer then said so
   // again, bypassing the modal tracker that would have known.
   dialect.footer(w, {
-    safeZ: safeZ(ops), safeX: safeX(ops), spindleOn, modal,
+    safeZ: safeZ(ops), safeX: safeX(ops) + finalControlX, spindleOn, modal,
     endGcode: options.endGcode,
   });
   return { text: w.toString(), lineMap };
@@ -612,6 +637,18 @@ function spindleKey(e) {
 }
 
 
+/**
+ * Whether a tool change in this program is made by a person rather than by a
+ * changer — the machine's answer where it gave one, the dialect's otherwise.
+ * GRBL has no changer unless the machine says it has; everything else is
+ * assumed to, which is what its M6 is written for. One rule, read by the core
+ * and by post/grbl.js alike, so the stop and the words around it cannot
+ * disagree about which kind of change this is.
+ */
+export function changesByHand(dialect, options = {}) {
+  return (options.toolChanger ?? dialect.toolChanger ?? 'auto') === 'manual';
+}
+
 /** G54…G59 is standard across dialects; a post only overrides it if it differs. */
 function defaultWcs(w, { code }) {
   w.line(code);
@@ -641,8 +678,12 @@ function defaultMotion(w, modal, {
   if (rapid) { w.line(modal.word('G', 0, 0), wx, wy, wz, wr); return; }
   // Under inverse time every cutting block states its own F — it is the block's
   // duration rather than a rate, so there is nothing modal about it and a
-  // control that finds one missing faults.
-  const wf = forceFeed ? `F${num(feed, 1)}` : modal.word('F', feed, 1);
+  // control that finds one missing faults. And it is written to four places,
+  // not one: a rate of 600 loses nothing at a tenth, but a duration is 1/minutes
+  // and a long slow move is a small number — 300mm at 100mm/min is F0.3333,
+  // and printed as F0.3 it ran eleven per cent slow; past ten minutes a block
+  // printed as F0, which is no feed at all.
+  const wf = forceFeed ? `F${num(feed, 4)}` : modal.word('F', feed, 1);
   w.line(modal.word('G', 1, 0), wx, wy, wz, wr, wf);
 }
 

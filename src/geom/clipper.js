@@ -10,6 +10,125 @@ import '../../vendor/clipper/clipper.js';
 const ClipperLib = globalThis.ClipperLib;
 const SCALE = 1e5; // 10 nm integer resolution
 
+/**
+ * Two sorted linked lists in the JavaScript port of Clipper, made into a sort
+ * and a heap — with exactly the order the lists produced.
+ *
+ * Clipper keeps its local minima and its scanbeams (the Y values the sweep
+ * stops at) in singly linked lists kept in order by walking from the head on
+ * every insert. The C++ original uses a priority queue for the scanbeams; the
+ * port does not, and a union of N triangles — which is what a silhouette is,
+ * one loop per triangle in the band — costs N² list steps. Measured on an
+ * 82,000-triangle terrain: 78% of a 23s clearing pass was `InsertLocalMinima`,
+ * and doubling the mesh quadrupled the wait. A 180,000-triangle STL left
+ * adaptive clearing running for minutes, with nothing on screen but a spinner.
+ *
+ * Nothing about *what* Clipper computes changes, and it must not: the order
+ * the lists hold decides the order paths come back in and where each starts,
+ * and every toolpath downstream is built on that. So the minima are collected
+ * and sorted once into precisely the list the inserts would have built —
+ * highest Y first and, among equal Ys, the most recently added first — and the
+ * scanbeams, which are a set of Ys popped highest first, become a binary heap.
+ */
+function patchClipper(proto) {
+  proto.InsertLocalMinima = function (lm) {
+    (this.pendingMinima ??= []).push(lm);
+  };
+  const reset = proto.Reset;
+  proto.Reset = function () {
+    this.scanbeams = [];
+    flushMinima(this);
+    return reset.call(this);
+  };
+  const dispose = proto.DisposeLocalMinimaList;
+  proto.DisposeLocalMinimaList = function () {
+    this.pendingMinima = null;
+    return dispose.call(this);
+  };
+  proto.InsertScanbeam = function (y) {
+    heapPush(this.scanbeams ??= [], y);
+  };
+  proto.PopScanbeam = function (out) {
+    const heap = this.scanbeams;
+    if (!heap || heap.length === 0) {
+      out.v = 0;
+      return false;
+    }
+    const y = heapPop(heap);
+    // the list never held a Y twice; the heap may, so the copies go together
+    while (heap.length && heap[0] === y) heapPop(heap);
+    out.v = y;
+    return true;
+  };
+}
+
+/** Merge the minima added since the last sweep into the list, as the inserts would have. */
+function flushMinima(clipper) {
+  const pending = clipper.pendingMinima;
+  if (!pending?.length) return;
+  clipper.pendingMinima = null;
+  const order = pending.map((lm, i) => ({ lm, i }));
+  order.sort((a, b) => (b.lm.Y - a.lm.Y) || (b.i - a.i));
+  let head = null;
+  let tail = null;
+  const append = (lm) => {
+    lm.Next = null;
+    if (tail) tail.Next = lm; else head = lm;
+    tail = lm;
+  };
+  let old = clipper.m_MinimaList;
+  let k = 0;
+  while (k < order.length || old) {
+    // on a tie the newer minimum goes first — every pending one is newer
+    if (k < order.length && (!old || order[k].lm.Y >= old.Y)) {
+      append(order[k++].lm);
+    } else {
+      const next = old.Next;
+      append(old);
+      old = next;
+    }
+  }
+  clipper.m_MinimaList = head;
+}
+
+function heapPush(heap, y) {
+  let i = heap.length;
+  heap.push(y);
+  while (i > 0) {
+    const parent = (i - 1) >> 1;
+    if (heap[parent] >= y) break;
+    heap[i] = heap[parent];
+    i = parent;
+  }
+  heap[i] = y;
+}
+
+function heapPop(heap) {
+  const top = heap[0];
+  const last = heap.pop();
+  if (heap.length === 0) return top;
+  let i = 0;
+  const n = heap.length;
+  for (;;) {
+    let child = i * 2 + 1;
+    if (child >= n) break;
+    if (child + 1 < n && heap[child + 1] > heap[child]) child++;
+    if (heap[child] <= last) break;
+    heap[i] = heap[child];
+    i = child;
+  }
+  heap[i] = last;
+  return top;
+}
+
+// The port copies the base class's methods onto Clipper when it loads, so both
+// prototypes carry their own copy and both are patched.
+if (!ClipperLib.Clipper.prototype.pendingMinimaPatched) {
+  patchClipper(ClipperLib.ClipperBase.prototype);
+  patchClipper(ClipperLib.Clipper.prototype);
+  ClipperLib.Clipper.prototype.pendingMinimaPatched = true;
+}
+
 function toPath(loop) {
   const path = [];
   for (let i = 0; i < loop.length; i += 2) {

@@ -129,7 +129,8 @@ test('the inverse-time number is the move, not the rate', () => {
 });
 
 test('it says what it wrapped round, in the file', () => {
-  assert.ok(/wrapped round ⌀20/.test(posted()), 'the bar');
+  // in ASCII, as every comment is — see post/format.js asciiComment
+  assert.ok(/wrapped round D20/.test(posted()), 'the bar');
   assert.ok(/62\.8mm is one turn/.test(posted()), 'and what a turn is worth');
 });
 
@@ -190,4 +191,23 @@ test('a setup cannot be indexed and wrapped at once', () => {
   // the identity orientation is the face that is already up: no swing, no clash
   const flatFace = { ...both, orientation: { rotationDeg: [0, 0, 0] } };
   assert.ok(wrapFor(flatFace, MACHINE).reachable, 'an unswung indexed setup still wraps');
+});
+
+test('a long slow wrapped move keeps its duration to the digit', () => {
+  // F under G93 is 1/minutes. 300mm at 100mm/min is three minutes, F0.3333 —
+  // written to one decimal it was F0.3, eleven per cent slow.
+  const cl = new CLBuilder();
+  cl.toolChange(1);
+  cl.event('feeds', { cut: 100, plunge: 50 });
+  cl.rapid(0, 0, 5);
+  cl.cut(0, 0, -1, FEED.PLUNGE);
+  cl.cut(0, 300, -1);
+  cl.rapid(0, 300, 5);
+  const wrap = wrapFor(setup({ enabled: true, axis: 'A', diameter: 100 }), MACHINE);
+  const { text } = buildGcode('linuxcnc', [{ name: 'long', cl: cl.finish(), wrap }]);
+  const line = text.split('\n').find((l) => /\bA[-\d.]+/.test(l) && /F/.test(l) && !/Z-?1\b.*A0\b/.test(l)
+    && Number(/A(-?[\d.]+)/.exec(l)[1]) > 300);
+  assert.ok(line, `the long move is there:\n${text}`);
+  const f = Number(/F([\d.]+)/.exec(line)[1]);
+  assert.close(f, 1 / 3, 1e-3, `three minutes is F0.3333, got ${line}`);
 });

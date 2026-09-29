@@ -10,7 +10,7 @@
 
 import { CLBuilder } from '../cl.js';
 import { pluralEs } from '../text.js';
-import { concentricRings } from '../rings.js';
+import { concentricRings, coreEntry } from '../rings.js';
 import { mergeTolerance } from '../simplify.js';
 import {
   offsetLoops, offsetNormalized, enclosedVoids, diffLoops, loopArea,
@@ -126,7 +126,10 @@ export function generatePocket({
     // pocket to cut six rings, on a two-pocket test part. Grouping the rings by
     // the pocket that contains them costs nothing and the tool finishes what it
     // is in before it goes anywhere.
-    for (const group of pocketGroups(rings, area, from)) {
+    for (const found of pocketGroups(rings, area, from)) {
+      const group = entryRings(found, {
+        depth: above - z, rampAngle: params.rampAngle ?? 0, radius: r, tolerance, area,
+      });
       // The first pass of a group opens the level, and there is nowhere for the
       // chip to go while it does — see `pocketGroups`. How far it runs like
       // that is worth knowing, so it is added up rather than left to be found
@@ -307,6 +310,22 @@ function pocketGroups(rings, area, from) {
     at = [last[0], last[1]];
   }
   return ordered;
+}
+
+/**
+ * The rings of one pocket, starting from one that can be ramped down on — the
+ * core dropped where the ring round it clears it, or cut by a helix where it
+ * does not. See engine/rings.js coreEntry.
+ */
+function entryRings(group, options) {
+  let rings = group;
+  for (;;) {
+    if (rings.length === 0 || rings[0].isWall) return rings;
+    const plan = coreEntry(rings[0].loop, rings[1]?.loop ?? null, options);
+    if (plan.action === 'drop') { rings = rings.slice(1); continue; }
+    if (plan.action === 'replace') return [{ loop: plan.loop, isWall: false }, ...rings.slice(1)];
+    return rings;
+  }
 }
 
 /** Does this pass enter through a lead-in arc rather than straight onto the loop? */

@@ -77,6 +77,74 @@ export function loopBorderedBy(loop, loops, distance = 0.05) {
   return false;
 }
 
+/** How far a point is from the nearest edge of any of `loops`. */
+export function distanceToLoops(loops, x, y) {
+  let best = Infinity;
+  for (const loop of loops) {
+    const n = loop.length / 2;
+    for (let i = 0, k = n - 1; i < n; k = i++) {
+      const ax = loop[k * 2];
+      const ay = loop[k * 2 + 1];
+      const dx = loop[i * 2] - ax;
+      const dy = loop[i * 2 + 1] - ay;
+      const lenSq = dx * dx + dy * dy;
+      let t = lenSq > 0 ? ((x - ax) * dx + (y - ay) * dy) / lenSq : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const d = Math.hypot(x - (ax + dx * t), y - (ay + dy * t));
+      if (d < best) best = d;
+    }
+  }
+  return best;
+}
+
+/**
+ * Does the straight line from a to b stay within the area `loops` fill — never
+ * more than `eps` outside it?
+ *
+ * Exact, for the question a raster can only answer to a cell: a segment whose
+ * ends are on the boundary and whose middle is not. It leaves the area either
+ * by crossing an edge, or — with no crossing at all — by lying wholly outside
+ * it, which is what the chord of an arc does when the area bends round
+ * something: then its midpoint is outside, and it is a question of how far.
+ * Touching the boundary, running along it, and ending on it are all inside.
+ */
+export function segmentInLoops(loops, ax, ay, bx, by, eps = 1e-6) {
+  const sx = bx - ax;
+  const sy = by - ay;
+  const sLen = Math.hypot(sx, sy);
+  if (sLen < 1e-12) return pointInLoops(loops, ax, ay) || distanceToLoops(loops, ax, ay) <= eps;
+  const minX = Math.min(ax, bx) - eps;
+  const maxX = Math.max(ax, bx) + eps;
+  const minY = Math.min(ay, by) - eps;
+  const maxY = Math.max(ay, by) + eps;
+  for (const loop of loops) {
+    const n = loop.length / 2;
+    for (let i = 0, k = n - 1; i < n; k = i++) {
+      const px = loop[k * 2];
+      const py = loop[k * 2 + 1];
+      const qx = loop[i * 2];
+      const qy = loop[i * 2 + 1];
+      if ((px < minX && qx < minX) || (px > maxX && qx > maxX)
+        || (py < minY && qy < minY) || (py > maxY && qy > maxY)) continue;
+      // A proper crossing: the edge's ends strictly either side of the segment,
+      // and the segment's ends strictly either side of the edge — by more than
+      // `eps` each, so an end lying on the boundary is not a crossing.
+      const p = (sx * (py - ay) - sy * (px - ax)) / sLen;
+      const q = (sx * (qy - ay) - sy * (qx - ax)) / sLen;
+      if (!((p > eps && q < -eps) || (p < -eps && q > eps))) continue;
+      const ex = qx - px;
+      const ey = qy - py;
+      const eLen = Math.hypot(ex, ey);
+      const a = (ex * (ay - py) - ey * (ax - px)) / eLen;
+      const b = (ex * (by - py) - ey * (bx - px)) / eLen;
+      if ((a > eps && b < -eps) || (a < -eps && b > eps)) return false;
+    }
+  }
+  const mx = (ax + bx) / 2;
+  const my = (ay + by) / 2;
+  return pointInLoops(loops, mx, my) || distanceToLoops(loops, mx, my) <= eps;
+}
+
 /** Is (x, y) inside the filled area described by `loops`? */
 export function pointInLoops(loops, x, y) {
   let inside = false;

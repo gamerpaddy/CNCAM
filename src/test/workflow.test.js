@@ -13,7 +13,9 @@ import {
   BOTH_MACHINES,
 } from '../engine/toolpath.js';
 import { OP_CATALOG, OP_GROUPS, strategyCard } from '../app/op-catalog.js';
-import { shortcuts, shortcutGroups, matchesShortcut, firesWhileTyping } from '../app/shortcuts.js';
+import {
+  shortcuts, shortcutGroups, matchesShortcut, firesWhileTyping, editsText,
+} from '../app/shortcuts.js';
 import { Document } from '../doc/document.js';
 import { createSetup, createOperation, createTool, OP_TYPES } from '../doc/schema.js';
 import { pickToolFor, noSideToCutWith } from '../engine/tool-match.js';
@@ -163,6 +165,23 @@ test('only modified keys fire while the caret is in a text field', () => {
     }
   }
   assert.ok(firesWhileTyping({ keys: 'Ctrl+G' }));
+});
+
+test('in a text box, Ctrl+Z is the box\'s undo and not the project\'s', () => {
+  // Typing a name and pressing Ctrl+Z to take it back undid the last change to
+  // the project instead — measured: "Undid choose machine", with the typing
+  // still in the box.
+  const table = shortcuts(stubCtx());
+  for (const keys of ['Ctrl+Z', 'Ctrl+Y', 'Ctrl+Shift+Z']) {
+    const s = table.find((t) => t.keys === keys);
+    assert.ok(s && !firesWhileTyping(s), `${keys} is left to the text box`);
+  }
+  assert.ok(editsText({ tagName: 'INPUT', type: 'text' }), 'a name box edits text');
+  assert.ok(editsText({ tagName: 'INPUT', type: 'number' }), 'so does a number box');
+  assert.ok(editsText({ tagName: 'TEXTAREA' }), 'and a G-code box');
+  // …but a switch or a list has no undo of its own, so there it is the project's
+  assert.ok(!editsText({ tagName: 'INPUT', type: 'checkbox' }), 'a switch does not');
+  assert.ok(!editsText({ tagName: 'SELECT' }), 'nor does a list');
 });
 
 // --- path visibility is a view filter, not an edit ---

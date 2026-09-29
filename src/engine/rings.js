@@ -21,7 +21,9 @@
 // more than the stepover asked for and the two families meet in the middle
 // instead of overlapping by whatever was left over.
 
-import { offsetNormalized } from '../geom/clipper.js';
+import { offsetNormalized, loopArea } from '../geom/clipper.js';
+import { pointInLoops, distanceToLoops } from '../geom/inside.js';
+import { rampSlopeFor } from './linking.js';
 
 /** Never more than this many passes over one piece, whatever the arithmetic. */
 const MAX_RINGS = 500;
@@ -82,3 +84,98 @@ export function concentricRings(loops, step, tolerance, radius = 0) {
   }
   return rings;
 }
+
+/**
+ * What to enter a pocket's core on, when the core is too small to ramp round.
+ *
+ * The innermost ring of a round or a square region is its medial axis, and
+ * there that is a *point*: the offsetter hands back a loop a few hundredths
+ * across. A pass that ramps in along it goes round and round the point until
+ * the lap cap in engine/linking.js steepens it — eight laps of a 0.05mm square
+ * is a 62° plunge written as thirty-two blocks, on an operation set to 3°. The
+ * angle on the Entry tab did nothing, and nothing said so. Pocketing met it on
+ * every square and round pocket, Z-level roughing on every enclosed one.
+ *
+ * A ring that short cuts nothing the ring outside it does not, when that one
+ * sweeps the whole of its inside: a cutter walking a loop clears everything
+ * within its radius of the loop. So where the next ring out encloses it and
+ * does that, the core is not a pass of its own (`'drop'`), and the ramp goes
+ * down the next ring instead — a helix of a real radius. Where the next ring is
+ * too far out to reach the middle (a stepover over half the cutter), the middle
+ * is cut by a circle round it — half the cutter's radius, the usual helical
+ * entry, or as much of that as the region has room for — which clears all the
+ * point would have, because the cutter is wider than the circle (`'replace'`).
+ *
+ * @param loop the ring the pass would ramp in on
+ * @param next the ring cut after it, if any — the candidate to enter on instead
+ * @param options.depth how far the ramp descends
+ * @param options.area the loops the tool centre must stay inside
+ * @returns { action: 'keep' } | { action: 'drop' } | { action: 'replace', loop }
+ */
+export function coreEntry(loop, next, {
+  depth, rampAngle, radius, tolerance, area,
+}) {
+  const keep = { action: 'keep' };
+  if (!(rampAngle > 0) || !(depth > 1e-9) || !loop || loop.length < 6) return keep;
+  if (!rampSlopeFor(depth, perimeterOf(loop), rampAngle).steepened) return keep;
+  if (next && encloses(next, loop)
+    && offsetNormalized([next], -(radius - tolerance), tolerance).length === 0) {
+    return { action: 'drop' };
+  }
+  const [x0, y0, x1, y1] = boxOf(loop);
+  const cx = (x0 + x1) / 2;
+  const cy = (y0 + y1) / 2;
+  let reach = 0;              // how far the ring strays from its own middle
+  for (let i = 0; i < loop.length; i += 2) {
+    reach = Math.max(reach, Math.hypot(loop[i] - cx, loop[i + 1] - cy));
+  }
+  // the centre must stay where a tool centre may go, and the circle inside the
+  // cutter's own radius, or the middle of it is left standing
+  const room = Math.min(distanceToLoops(area ?? [], cx, cy), radius) - tolerance;
+  const helix = Math.min(radius / 2, room);
+  if (!(helix > reach + tolerance)) return keep;
+  return { action: 'replace', loop: circleLoop(cx, cy, helix, tolerance) };
+}
+
+/** How far the tool travels round a closed loop. */
+function perimeterOf(loop) {
+  const n = loop.length / 2;
+  let sum = 0;
+  for (let i = 0, k = n - 1; i < n; k = i++) {
+    sum += Math.hypot(loop[i * 2] - loop[k * 2], loop[i * 2 + 1] - loop[k * 2 + 1]);
+  }
+  return sum;
+}
+
+/** [minX, minY, maxX, maxY] of one flat loop. */
+function boxOf(loop) {
+  const b = [Infinity, Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < loop.length; i += 2) {
+    b[0] = Math.min(b[0], loop[i]); b[1] = Math.min(b[1], loop[i + 1]);
+    b[2] = Math.max(b[2], loop[i]); b[3] = Math.max(b[3], loop[i + 1]);
+  }
+  return b;
+}
+
+/** Does closed loop `outer` go round `inner`? A micron of slack for the grid. */
+function encloses(outer, inner) {
+  if (!(loopArea(outer) > 0)) return false;
+  const a = boxOf(inner);
+  const b = boxOf(outer);
+  if (a[0] < b[0] - 1e-3 || a[1] < b[1] - 1e-3 || a[2] > b[2] + 1e-3 || a[3] > b[3] + 1e-3) return false;
+  return pointInLoops([outer], (a[0] + a[2]) / 2, (a[1] + a[3]) / 2);
+}
+
+/** A counter-clockwise circle, chorded to `tolerance`. */
+function circleLoop(cx, cy, radius, tolerance) {
+  const step = 2 * Math.acos(Math.max(-1, Math.min(1, 1 - tolerance / radius)));
+  const n = Math.max(12, Math.min(720, Math.ceil((2 * Math.PI) / Math.max(step, 1e-6))));
+  const loop = new Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * 2 * Math.PI;
+    loop[i * 2] = cx + radius * Math.cos(a);
+    loop[i * 2 + 1] = cy + radius * Math.sin(a);
+  }
+  return loop;
+}
+

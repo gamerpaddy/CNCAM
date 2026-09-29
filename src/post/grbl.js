@@ -2,10 +2,13 @@
 // expands drills long-hand), no G43 tool length compensation.
 
 import { num, spindleWord, customBlock } from './format.js';
+import { changesByHand } from './core.js';
 
 export const grbl = {
   name: 'GRBL',
   arcs: true,      // grbl takes G2/G3 I/J and expands them itself
+  // what a change is when the machine does not say: GRBL 1.1 has no M6
+  toolChanger: 'manual',
 
   header(w, { programName = 'CNCAM' } = {}) {
     w.comment(programName);
@@ -28,12 +31,15 @@ export const grbl = {
    * this writes the change instead of asking for it.
    */
   toolChange(w, modal, { tool }, options = {}) {
-    if (options.toolChanger === 'auto') {
+    if (!changesByHand(this, options)) {
       w.line(`T${tool} M6`);
       modal.reset();   // controller state after a change is not ours to assume
       return;
     }
-    w.comment(`fit tool T${tool} — press cycle start to go on`);
+    // GRBL has no tool table and no G43, so a cutter of another length is only
+    // right once Z has been touched off on it — the stop is where that happens,
+    // and the comment is the only place the operator is told.
+    w.comment(`fit tool T${tool} and set its Z zero - press cycle start to go on`);
     w.line('M0');
   },
 

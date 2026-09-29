@@ -9,7 +9,7 @@
 
 import { CLBuilder, FEED, lastXY } from '../cl.js';
 import { pluralEs } from '../text.js';
-import { concentricRings } from '../rings.js';
+import { concentricRings, coreEntry } from '../rings.js';
 import { cutSpanWithRamp } from '../linking.js';
 import { mergeTolerance } from '../simplify.js';
 import {
@@ -18,7 +18,7 @@ import {
 import { SilhouetteStack } from '../../geom/silhouette.js';
 import { depthLevelsFor, depthRefusal, stockOutline } from '../stock.js';
 import { applyRegionsToArea, regionRefusal } from '../regions.js';
-import { loopBorderedBy } from '../../geom/inside.js';
+import { loopBorderedBy, pointInLoops, distanceToLoops } from '../../geom/inside.js';
 import { cutLoopPass } from './contour.js';
 import { applyCutting } from '../cutting.js';
 import { crossingPlane, goHome, entryPlane } from '../heights.js';
@@ -29,7 +29,18 @@ export function generateClear({
   mesh, tool, params, stock, regions, fixtures,
 }) {
   const r = tool.diameter / 2;
-  const step = Math.max(0.1, (params.stepover ?? 0.5) * tool.diameter);
+  // At most the cutter's radius between rings, whatever was asked.
+  //
+  // Concentric rings further apart than that do not meet where one bends away
+  // from the next — round the part where it comes close to the billet edge, in
+  // the corner the two make — and a spine of stock is left standing there at
+  // every level. The level below then enters over it the way it enters over
+  // ground the level above has cleared: rapid to a gap above the floor, which
+  // on the spine is a rapid through metal. Measured over eight parts at three
+  // rotations, a 0.7×D stepover put 121 rapids through stock, the deepest
+  // 11.5mm; at 0.6×D there were still some; at half the cutter, none.
+  const asked = Math.max(0.1, (params.stepover ?? 0.5) * tool.diameter);
+  const step = Math.min(asked, Math.max(0.1, r));
   const clearance = params.clearanceHeight;
   const tolerance = params.tolerance ?? 0.01;
   const direction = params.direction ?? 'climb';
@@ -149,16 +160,25 @@ export function generateClear({
       // only while the part sits wholly inside the billet. Where it runs out to
       // an edge, the piece has no holes at all, so every ring came back "all
       // air" and the march had nothing to turn round at.
-      const passes = orderRings(rings, touchesStockEdge(piece.outer, outer),
-        { air: outer, part: keepout }, step);
-      // Everything cut so far at this level, as the rings it was cut along.
-      // A span may drop straight to depth anywhere in here, because the pass
-      // that cleared it has already run.
+      const passes = entryPasses(orderRings(rings, touchesStockEdge(piece.outer, outer),
+        { air: outer, part: keepout }, step), {
+        depth: zEntry - z, rampAngle: params.rampAngle ?? 0, radius: r, tolerance, area: loops,
+      });
+      // Everything cut so far at this level, as the paths it was cut along.
+      // A span may drop straight to depth onto one of them, because the pass
+      // that cut it has already run — see `entryBeside`.
       const done = [];
       const clearedBeside = (x, y) => {
-        for (const ring of done) if (distanceToLoops(x, y, ring) <= step * 0.75) return true;
-        return false;
+        let best = null;
+        for (const pass of done) {
+          const near = nearestOnPath(x, y, pass.loop, pass.closed);
+          if (!best || near.d < best.d) best = near;
+        }
+        return best;
       };
+      // where a tool centre may go on this piece, a hair wide so that a point on
+      // its own edge — which every ring's points are — reads as inside it
+      const room = offsetLoops(loops, 1e-3, tolerance);
       for (const { loop, k, closed } of passes) {
         // only the last ring is a finished wall, so leads are wasted motion on
         // the interior passes — ramp those in along the path instead
@@ -172,8 +192,9 @@ export function generateClear({
             // Where the pass before this one cleared, so this one can drop into
             // the space rather than ramp its way in — see `cutSpanPass`.
             cleared: clearedBeside,
+            room,
           });
-        if (cut) { cutHere = true; done.push([loop]); }
+        if (cut) { cutHere = true; done.push({ loop, closed }); }
       }
     }
     if (cutHere) { cutAnything = true; zEntry = z; }
@@ -221,6 +242,12 @@ export function generateClear({
       ? `Z-level clearing removed nothing — ${why}`
       : 'Z-level clearing removed nothing — the stock may already match the part, '
         + 'or Top Z is below the stock top');
+  }
+  if (cutAnything && asked > step + 1e-9) {
+    cl.info(`stepped ${(step / tool.diameter).toFixed(2)}×D rather than the `
+      + `${(asked / tool.diameter).toFixed(2)}×D asked for: concentric rings further apart `
+      + 'than the cutter\'s radius leave a spine of stock where they bend apart, and the '
+      + 'next level would drop onto it at rapid. Adaptive clearing takes wide, light bites safely.');
   }
   goHome(cl, clearance);
   return cl.finish();
@@ -317,6 +344,28 @@ function orderRings(rings, airOutside, sides, step) {
 }
 
 /**
+ * The passes, with every closed ring that is too small to ramp into either
+ * left to the ring after it or cut by a helix — see engine/rings.js coreEntry.
+ *
+ * Every closed pass here is entered on its own, ramping down from the level
+ * above, so a ring round a point anywhere in the order is a plunge at an angle
+ * nobody set: the enclosed pocket on the hole plate went in at 63° on a
+ * Z-level pass set to 3°, round a loop six hundredths across.
+ */
+function entryPasses(passes, options) {
+  const out = [];
+  for (let i = 0; i < passes.length; i++) {
+    const pass = passes[i];
+    if (!pass.closed) { out.push(pass); continue; }
+    const next = passes.slice(i + 1).find((p) => p.closed)?.loop ?? null;
+    const plan = coreEntry(pass.loop, next, options);
+    if (plan.action === 'drop') continue;
+    out.push(plan.action === 'replace' ? { ...pass, loop: plan.loop } : pass);
+  }
+  return out;
+}
+
+/**
  * How little of a ring may belong to the other side before it is worth cutting
  * the ring in two.
  *
@@ -370,7 +419,7 @@ function splitBySide(rawLoop, { air, part }, step) {
     share[i] = (Math.hypot(x - loop[prev * 2], y - loop[prev * 2 + 1])
       + Math.hypot(loop[next * 2] - x, loop[next * 2 + 1] - y)) / 2;
     total += share[i];
-    airward[i] = distanceToLoops(x, y, air) <= distanceToLoops(x, y, part);
+    airward[i] = distanceToLoops(air, x, y) <= distanceToLoops(part, x, y);
     if (airward[i]) airLength += share[i];
   }
   if (total <= 0) return [{ path: loop, closed: true, air: true }];
@@ -423,7 +472,9 @@ function splitBySide(rawLoop, { air, part }, step) {
  * plunge through air. Only where nothing has been cleared beside the start
  * (the first pass of a level) does it fall back to ramping.
  */
-function cutSpanPass(cl, span, zEntry, z, { clearance, params, crossAt, step, cleared }) {
+function cutSpanPass(cl, span, zEntry, z, {
+  clearance, params, crossAt, step, cleared, room,
+}) {
   const n = span.length / 2;
   if (n < 2) return false;
   const home = crossAt != null && crossAt > z + 1e-9 ? Math.min(crossAt, clearance) : clearance;
@@ -441,7 +492,7 @@ function cutSpanPass(cl, span, zEntry, z, { clearance, params, crossAt, step, cl
   const rawFeedPlane = entryPlane(params, zEntry, z);
   const feedPlane = rawFeedPlane == null ? null : Math.min(rawFeedPlane, home);
 
-  const drop = entryBeside(pts, step, cleared);
+  const drop = entryBeside(pts, step, cleared, room);
   if (drop) {
     cl.rapid(drop[0], drop[1], home);
     if (feedPlane != null && feedPlane > z + 1e-9) cl.rapid(drop[0], drop[1], feedPlane);
@@ -483,29 +534,61 @@ function resampleLoop(loop, at) {
 }
 
 /**
- * A point one stepover to the side of where this span starts, in ground an
- * earlier pass has already taken away — or null if there is no such place.
+ * Where to drop to depth for a span: *on* the path of a pass already cut at
+ * this level, beside where the span starts — or null if there is none near.
  *
- * Both sides are offered to `cleared` because which one is open depends on
- * which way the march is going, and the span does not know: an air-side span
- * has the cleared band on its outward side and a part-side span on its inward
- * one. Asking is cheaper than working it out, and it cannot be fooled — the
- * caller answers from the passes it has actually emitted.
+ * The drop is a rapid down to a gap above the floor, and it is only safe where
+ * the whole of the cutter's footprint has already been taken down to it — which
+ * is the path a pass at this depth ran along, and nowhere else. It used to be
+ * "a stepover to one side of the start, and within three quarters of a
+ * stepover of something cut", which is a footprint that can overhang the cut
+ * by most of a radius; and the "something cut" was measured round each span as
+ * though it were a ring, so the chord joining the two ends of an open span —
+ * never cut, often across standing stock — counted as cleared ground. On the
+ * clamp at a 0.7 stepover that put three rapids through metal, the deepest
+ * 5mm of it, at the start of spans the simulation then showed crashing.
+ *
+ * The move from the drop point sideways to the start of the span is a cut, at
+ * depth, and it must not cross the part: it is kept inside `room`, the ground
+ * a tool centre may stand on here.
  */
-function entryBeside(pts, step, cleared) {
+function entryBeside(pts, step, cleared, room) {
   if (!cleared || !(step > 0)) return null;
   const [x0, y0] = pts[0];
-  const [x1, y1] = pts[1];
-  const dx = x1 - x0;
-  const dy = y1 - y0;
-  const len = Math.hypot(dx, dy);
-  if (!(len > 1e-9)) return null;
-  for (const side of [1, -1]) {
-    const px = x0 - (dy / len) * step * side;
-    const py = y0 + (dx / len) * step * side;
-    if (cleared(px, py)) return [px, py];
+  const near = cleared(x0, y0);
+  if (!near || !(near.d <= step * 1.5)) return null;
+  if (room?.length) {
+    const pieces = Math.max(1, Math.ceil(near.d / (step / 4)));
+    for (let i = 0; i <= pieces; i++) {
+      const t = i / pieces;
+      if (!pointInLoops(room, near.x + (x0 - near.x) * t, near.y + (y0 - near.y) * t)) return null;
+    }
   }
-  return null;
+  return [near.x, near.y];
+}
+
+/**
+ * The nearest point of a cut path to (x, y), and how far away it is. An open
+ * path is its segments and nothing else — no closing chord from its end back
+ * to its start.
+ */
+function nearestOnPath(x, y, path, closed) {
+  const n = path.length / 2;
+  let best = { x: path[0], y: path[1], d: Math.hypot(x - path[0], y - path[1]) };
+  for (let i = closed ? 0 : 1, k = closed ? n - 1 : 0; i < n; k = i++) {
+    const ax = path[k * 2];
+    const ay = path[k * 2 + 1];
+    const dx = path[i * 2] - ax;
+    const dy = path[i * 2 + 1] - ay;
+    const lenSq = dx * dx + dy * dy;
+    let t = lenSq > 0 ? ((x - ax) * dx + (y - ay) * dy) / lenSq : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const px = ax + dx * t;
+    const py = ay + dy * t;
+    const d = Math.hypot(x - px, y - py);
+    if (d < best.d) best = { x: px, y: py, d };
+  }
+  return best;
 }
 
 /**
@@ -525,7 +608,7 @@ function entryBeside(pts, step, cleared) {
  */
 function touchesStockEdge(loop, outer, eps = 1e-4) {
   for (let i = 0; i < loop.length; i += 2) {
-    if (distanceToLoops(loop[i], loop[i + 1], outer) <= eps) return true;
+    if (distanceToLoops(outer, loop[i], loop[i + 1]) <= eps) return true;
   }
   return false;
 }
@@ -540,29 +623,9 @@ function touchesStockEdge(loop, outer, eps = 1e-4) {
  */
 function onStockEdge(loop, outer, eps = 1e-4) {
   for (let i = 0; i < loop.length; i += 2) {
-    if (distanceToLoops(loop[i], loop[i + 1], outer) > eps) return false;
+    if (distanceToLoops(outer, loop[i], loop[i + 1]) > eps) return false;
   }
   return true;
-}
-
-/** Distance from a point to the nearest edge of a set of flat loops. */
-function distanceToLoops(x, y, loops) {
-  let best = Infinity;
-  for (const loop of loops) {
-    const n = loop.length / 2;
-    for (let i = 0, k = n - 1; i < n; k = i++) {
-      const ax = loop[k * 2];
-      const ay = loop[k * 2 + 1];
-      const dx = loop[i * 2] - ax;
-      const dy = loop[i * 2 + 1] - ay;
-      const lenSq = dx * dx + dy * dy;
-      let t = lenSq > 0 ? ((x - ax) * dx + (y - ay) * dy) / lenSq : 0;
-      t = t < 0 ? 0 : t > 1 ? 1 : t;
-      const d = Math.hypot(x - (ax + dx * t), y - (ay + dy * t));
-      if (d < best) best = d;
-    }
-  }
-  return best;
 }
 
 /** [minX, minY, maxX, maxY] of a set of flat loops. */

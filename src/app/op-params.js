@@ -386,7 +386,11 @@ export const OP_PARAM_GROUPS = [
           + 'otherwise become a program of shavings.',
       },
       {
-        key: 'stepover', label: 'Stepover (×D)', step: 0.05, min: 0.01, max: 2,
+        // At most the cutter's own width. Past it the swaths no longer meet and
+        // every pass leaves a strip standing beside it: a face at 1.6×D, which
+        // the field took, left 28% of the top at the height it started, with
+        // nothing anywhere to say so.
+        key: 'stepover', label: 'Stepover (×D)', step: 0.05, min: 0.01, max: 1,
         ops: ['face', 'pocket', 'clear2d', 'parallel3d', 'bore', 'slot'],
         labelFor: (op) => (op.type === 'bore' ? 'Radial step (×D)'
           : op.type === 'slot' ? 'Step between lanes (×D)' : null),

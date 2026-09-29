@@ -16,11 +16,67 @@
 // Headless on purpose — no DOM, no three.js. `app/tool-shape.js` draws it and
 // `view/simulation.js` revolves it.
 
-import { isLatheTool, insertIcOf } from './insert.js';
+import { isLatheTool, insertIcOf, threadIncludedAngle } from './insert.js';
 
 const DEFAULT_ARC_SEGMENTS = 20;
 
 /** Point angle for a cutter that has not been given one. */
+/**
+ * Half the axial width of a blade — a parting or grooving blade, or a threading
+ * insert: how far along the bar it reaches either side of its own centre.
+ *
+ * Said once. The turning simulator worked it out as `bladeWidth || diameter`
+ * and this file as `bladeWidth ?? diameter`, which part company exactly when a
+ * blade has no width typed in; and the threading strategy never asked at all,
+ * so its run-out stopped the insert's *centre* short of a shoulder and let its
+ * flank run on into it.
+ */
+export function bladeHalfWidth(tool) {
+  return Math.max(0.05, (tool?.bladeWidth || tool?.diameter || 1) / 2);
+}
+
+/**
+ * Where a lathe control's programmed point is, from the point CL data names —
+ * as `[radius, Z]` to add on the way out, and to take off on the way back in.
+ *
+ * The CL names the centre of the insert's nose (see strategies/turning.js),
+ * because that is the geometry. A lathe control drives the point the tool was
+ * touched off at — in LinuxCNC's words, "the intersection of a line parallel to
+ * the X and Z axis and tangent to the tool tip diameter" — and a tool is touched
+ * off with X on a diameter it has cut and Z on the end face of the bar. So:
+ *
+ *   * a turning insert, a nose radius toward the axis and a nose radius toward
+ *     the chuck;
+ *   * a boring bar touches its diameter from inside, so a nose radius *out*;
+ *   * a parting or grooving blade meets the end face with its chuck-side face,
+ *     half a blade from the centre the CL gives;
+ *   * a threading insert is touched off by its point, and a drill by its tip on
+ *     the axis, which is where the CL already is.
+ *
+ * Written as the nose centre, a program cut every diameter two nose radii
+ * oversize and every face a nose radius long on a machine touched off the way
+ * its manual says — 1.6mm on the diameter with an 0.8mm insert — while the
+ * simulation, which reads the CL, showed a part on size.
+ */
+export function latheControlPoint(tool) {
+  const nose = Math.max(0, tool?.noseRadius ?? 0);
+  switch (tool?.type) {
+    case 'turning': return [-nose, -nose];
+    case 'boring': return [nose, -nose];
+    case 'parting': return [0, -bladeHalfWidth(tool)];
+    default: return [0, 0];
+  }
+}
+
+/**
+ * How steeply a threading insert's flank rises from its point: radius per
+ * millimetre along the bar, √3 for a 60° form. The insert is that V on every
+ * move it makes, not only on the synchronised ones — see simulate.js turnCut.
+ */
+export function threadFlankRise(tool) {
+  return 1 / Math.tan((threadIncludedAngle(tool) * Math.PI) / 360);
+}
+
 export function tipAngleOf(tool) {
   if (tool?.tipAngle > 0 && tool.tipAngle < 180) return tool.tipAngle;
   if (tool?.type === 'drill') return 118;
@@ -62,7 +118,7 @@ export function cuttingPoints(tool, segments = DEFAULT_ARC_SEGMENTS) {
     // of a lathe tool comes from engine/insert.js, which knows it is a shape in
     // a plane rather than a shape spun about an axis.
     const half = type === 'parting' || type === 'threading'
-      ? Math.max(0.05, (tool.bladeWidth ?? tool.diameter ?? 3) / 2)
+      ? bladeHalfWidth(tool)
       : Math.max(0.05, insertIcOf(tool) / 2);
     const nose = Math.min(Math.max(0, tool.noseRadius ?? 0), half);
     points.push([0, 0]);

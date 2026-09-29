@@ -57,10 +57,15 @@ const STOCK_FIELDS = [
     path: 'stock.kind', label: 'Stock', type: 'select',
     options: STOCK_KINDS, labels: STOCK_KIND_LABELS,
   },
-  { path: 'stock.margin.0', label: 'Margin X (mm)', type: 'number', when: isMargin },
-  { path: 'stock.margin.1', label: 'Margin Y (mm)', type: 'number', when: isMargin },
-  { path: 'stock.margin.2', label: 'Margin top (mm)', type: 'number', when: isMargin },
-  { path: 'stock.marginBottom', label: 'Margin under (mm)', type: 'number', when: isMargin },
+  // A margin is metal round the part, so there is no such thing as a negative
+  // one: the billet has to hold the part it is cut from. The fields took any
+  // number, and -200 on a 90mm part turned the box inside out — every strategy
+  // then planned against a billet whose far side was nearer than its near side,
+  // and the plate came out as a 25-hour program 340mm across.
+  { path: 'stock.margin.0', label: 'Margin X (mm)', type: 'number', min: 0, when: isMargin },
+  { path: 'stock.margin.1', label: 'Margin Y (mm)', type: 'number', min: 0, when: isMargin },
+  { path: 'stock.margin.2', label: 'Margin top (mm)', type: 'number', min: 0, when: isMargin },
+  { path: 'stock.marginBottom', label: 'Margin under (mm)', type: 'number', min: 0, when: isMargin },
 
   // A billet is a size you can measure with a rule, not a pair of absolute
   // corners in whatever frame the CAD happened to author the part in.

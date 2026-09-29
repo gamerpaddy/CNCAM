@@ -270,6 +270,30 @@ export const OP_TYPES = [
   'turnDrill', 'turnBore', 'turnPart',
 ];
 
+/**
+ * Which models a setup actually machines.
+ *
+ * An empty `modelIds` means "everything in the project", which is the normal
+ * state; the setup panel's Part list fills it in when a project holds more than
+ * one model and the setup is told to machine only some. Either way the models a
+ * setup machines are not simply the field, and anything that has to notice
+ * when they change has to ask *this* question rather than read it. That is why
+ * it is a function on its own: `opFingerprint` was comparing `modelIds`, which
+ * stays `[]` however many models are imported, so importing a second part
+ * silently changed the stock and every toolpath in the project while every
+ * operation went on reporting itself up to date. The model panel's "Machined
+ * in" and the delete dialog's count were two more copies of the rule, and both
+ * disagreed with it about a setup whose listed models had all been removed.
+ *
+ * A model named in the list and since removed is not machined — and a list
+ * whose every model has gone means the setup is back to machining the part in
+ * front of you, which is what replacing a part with its next revision is.
+ */
+export function setupModelIds(setup, project) {
+  const listed = (setup.modelIds ?? []).filter((id) => project.models.some((m) => m.id === id));
+  return listed.length ? listed : project.models.map((m) => m.id);
+}
+
 /** A setup is milled or turned; the two never share an operation. */
 export const SETUP_MODES = ['mill', 'turn'];
 

@@ -306,7 +306,11 @@ export function makeFileActions(ctx, program) {
     openToolPicker({
       machine: doc.machine,
       onAdd: (presets) => {
-        for (const preset of presets) doc.addTool(toolFromPreset(preset, nextToolNumber()));
+        // One gesture, one undo: five cutters ticked and added together took
+        // five presses of Ctrl+Z to take back, one cutter at a time.
+        doc.group(`add ${plural(presets.length, 'tool')}`, () => {
+          for (const preset of presets) doc.addTool(toolFromPreset(preset, nextToolNumber()));
+        });
         ctx.ui.setStatus(`Added ${plural(presets.length, 'tool')} from the library`);
       },
       onNew: newTool,
@@ -442,7 +446,10 @@ export function makeFileActions(ctx, program) {
     if (!file) return;
     try {
       const tools = deserializeLibrary(new TextDecoder().decode(file.buffer));
-      for (const tool of tools) doc.addTool(tool);
+      // a whole library is one import, and one undo — not one per cutter in it
+      doc.group(`import ${plural(tools.length, 'tool')}`, () => {
+        for (const tool of tools) doc.addTool(tool);
+      });
       // A library carries the numbers the shop gave it, and those are worth
       // keeping — but the project already had some, and two cutters on one T
       // number is a wrong-tool crash the file cannot express. Renumbering

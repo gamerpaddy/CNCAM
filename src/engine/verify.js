@@ -35,7 +35,7 @@
 // check whose whole value is that it does not cry wolf.
 
 import { inheritedColumns } from './workpiece.js';
-import { buildHeightmap } from '../geom/heightmap.js';
+import { buildHeightmap, surfaceProbe } from '../geom/heightmap.js';
 
 /** Default tolerance, in mm — a twentieth, which is a finishing pass's world. */
 export const DEFAULT_TOLERANCE = 0.05;
@@ -133,11 +133,13 @@ export function lastTouch(sim, cell) {
  * @param cuts every setup's cut record, this one included — see workpiece.js
  * @param frame the active setup's { matrix, offset }
  * @param tolerance how far off the model is still the model, in mm
+ * @param probe optional () => (x, y) => the model's height at any point — see
+ *   `besideAnEdge`; built only if a cell needs it
  * @returns { gouge, excess, worstGouge, worstExcess, counts, tolerance }
  *   gouge/excess: mm per cell, zero where there is nothing to report
  */
 export function verifyProgram({
-  sim, map, cuts = null, frame = null, tolerance = DEFAULT_TOLERANCE,
+  sim, map, cuts = null, frame = null, tolerance = DEFAULT_TOLERANCE, probe = null,
 }) {
   const { width, height, cellSize, origin, mask, stockTop, stockBottom } = sim;
   const cells = width * height;
@@ -163,6 +165,14 @@ export function verifyProgram({
     : sim.final;
 
   const { low, high } = modelRange(model, width, height);
+  // The model at any point, for the few cells that need a point between cells.
+  let heightAt = null;
+  const onEdge = (cell, cut) => {
+    if (!probe) return false;
+    heightAt ??= probe();
+    const { x, y } = cellPlace(grid, cell);
+    return besideAnEdge(heightAt, x, y, cut, tolerance);
+  };
   // Which cells this check has an opinion about at all. Written here rather
   // than re-derived by the viewport, because "is there part over this cell"
   // decides both what gets counted and what gets coloured, and two answers to
@@ -191,7 +201,10 @@ export function verifyProgram({
     const cut = sim.final[cell];
     if (cut > stockBottom + 1e-6) {
       const under = lo - cut;
-      if (under > tolerance) {
+      // Beside air, the range above cannot settle a cell a wall runs through:
+      // the air has no height to widen it with. So there the question is asked
+      // in plan instead, to the same tolerance — see besideAnEdge.
+      if (under > tolerance && !(besideAir(model, width, height, cell) && onEdge(cell, cut))) {
         gouge[cell] = under;
         gougeCells++;
         if (under > worstGouge.mm) worstGouge = { cell, mm: under };
@@ -228,6 +241,43 @@ export function verifyProgram({
   };
 }
 
+/** Does any cell next to this one have no part over it? */
+function besideAir(model, width, height, cell) {
+  const i = cell % width;
+  const j = (cell - i) / width;
+  for (let dj = -1; dj <= 1; dj++) {
+    const y = j + dj;
+    if (y < 0 || y >= height) continue;
+    for (let di = -1; di <= 1; di++) {
+      const x = i + di;
+      if (x < 0 || x >= width) continue;
+      if (!Number.isFinite(model[y * width + x])) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Is the part's edge, or ground no higher than the cut, within `tolerance` of
+ * this point in plan?
+ *
+ * A column of the simulation is cut or it is not, so a cutter running along
+ * the part's outline at zero allowance takes every cell whose centre it passes
+ * within a hair of — and a cell whose centre lies a micron inside the outline
+ * then reads as a gouge the whole height of the wall. On clamp1 three such
+ * cells, 0.1 to 1.2µm inside, were reported 2.2 to 2.9mm deep. Out by less than
+ * the tolerance sideways is on size, the same as out by less than it
+ * vertically, so the neighbourhood of the point is read at that radius.
+ */
+function besideAnEdge(heightAt, x, y, cut, tolerance) {
+  for (let k = 0; k < 8; k++) {
+    const a = (k * Math.PI) / 4;
+    const h = heightAt(x + tolerance * Math.cos(a), y + tolerance * Math.sin(a));
+    if (!(h > cut + tolerance)) return true;
+  }
+  return false;
+}
+
 /** Where a cell is, in the setup's own coordinates — what a message can name. */
 function cellPlace({ width, cellSize, origin }, cell) {
   const i = cell % width;
@@ -245,6 +295,13 @@ function cellPlace({ width, cellSize, origin }, cell) {
  * is a gouge report on a program that has not gouged. The neighbourhood window
  * above is this file's own answer to the same edge problem, and it is the
  * honest one for a measurement.
+ *
+ * And without the walls. A wall a few hundredths of a degree off vertical —
+ * which is what a CAD export makes of a vertical one — covers a sliver of plan
+ * too thin for the grid, and a cell centre landing in it read a height from
+ * part-way up the wall. On the part's outline, where the air beside it has no
+ * height to widen the range, the floor cut legitimately beside the wall was
+ * then reported as 3 to 10mm into the part. See WALL_NZ in geom/heightmap.js.
  */
 export function verifyRun({
   sim, mesh, stock, cuts = null, frame = null, tolerance = DEFAULT_TOLERANCE,
@@ -255,6 +312,9 @@ export function verifyRun({
     bounds: { min: stock.min, max: stock.max },
     floor: -Infinity,
     dilate: false,
+    walls: false,
   });
-  return verifyProgram({ sim, map, cuts, frame, tolerance });
+  // the same surface, at any point, for the cells on the part's outline
+  const probe = () => surfaceProbe(mesh, { walls: false });
+  return verifyProgram({ sim, map, cuts, frame, tolerance, probe });
 }

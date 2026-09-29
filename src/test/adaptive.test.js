@@ -24,7 +24,9 @@ import { stockOutline } from '../engine/stock.js';
 import { CollinearFilter, distanceToSegment } from '../engine/simplify.js';
 import { cutSpanWithRamp, rampSlopeFor } from '../engine/linking.js';
 import { buildGcode } from '../post/index.js';
-import { makeBox, makeMushroom, makePocketBlock, makeTube } from './fixtures.js';
+import {
+  makeBox, makeMushroom, makePocketBlock, makeTube, makeBoss,
+} from './fixtures.js';
 
 const TOOL = {
   number: 1, diameter: 6, spindleRpm: 10000, feedCut: 800, feedPlunge: 300,
@@ -576,6 +578,42 @@ test('a link at depth is allowed to start where the last pass ended', () => {
   assert.ok(!map.allowedAt(0, 20), 'the eroded mask keeps the cutter off the edge');
   assert.ok(map.insideAt(0, 20), 'but the edge is still somewhere a move may pass through');
   assert.ok(!map.insideAt(-4, 20), 'and outside is still outside');
+});
+
+test('a link at depth does not cut across the corner of a boss', () => {
+  // The link test read the region a raster cell generous so that a link could
+  // set off from the boundary it starts on — and a straight link between two
+  // points on the arc round a boss is a chord of that arc, inside it by up to a
+  // cell. The region has the finishing allowance built in to absorb that; with
+  // the allowance at zero it absorbs nothing, and the links took 0.13–0.30mm
+  // off every boss wall they passed, at full depth (0.3mm on clamp1).
+  for (const diameter of [12, 20, 34]) {
+    const boss = makeBoss({ plate: diameter + 40, plateHeight: 10, diameter, height: 12 });
+    const half = diameter / 2 + 20;
+    const stock = { min: [-half - 3, -half - 3, 0], max: [half + 3, half + 3, 23] };
+    const cl = generateToolpath({
+      type: 'adaptive', name: 'a', tool: TOOL, mesh: boss.mesh, stock,
+      params: paramsFor({ topZ: 23, bottomZ: 10, stepdown: 12, stockToLeave: 0 }),
+    });
+    // measured against the flats of the 64-sided boss, which sit inside its
+    // circle by the sagitta of a side
+    const wall = (diameter / 2) * Math.cos(Math.PI / 64);
+    let closest = Infinity;
+    let prev = null;
+    eachMove(cl, (op, x, y, z) => {
+      const here = [x, y, z];
+      if (prev && op === OP.LINE && z < boss.top - 0.01 && Math.abs(z - prev[2]) < 1e-9) {
+        const steps = Math.max(1, Math.ceil(Math.hypot(x - prev[0], y - prev[1]) / 0.02));
+        for (let s = 0; s <= steps; s++) {
+          const px = prev[0] + ((x - prev[0]) * s) / steps;
+          const py = prev[1] + ((y - prev[1]) * s) / steps;
+          closest = Math.min(closest, Math.hypot(px - boss.cx, py - boss.cy) - wall - TOOL.diameter / 2);
+        }
+      }
+      prev = here;
+    });
+    assert.ok(closest > -0.01, `⌀${diameter} boss: a move came ${(-closest).toFixed(3)}mm into its wall`);
+  }
 });
 
 test('adaptive lifts out of the cut far less than it used to', () => {

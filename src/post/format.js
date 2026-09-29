@@ -60,6 +60,50 @@ export function customBlock(w, text, label) {
   return true;
 }
 
+/**
+ * The characters a comment may not carry to the machine, and what stands in.
+ *
+ * A comment is not inert on its way to a control. GRBL 1.1 picks its realtime
+ * commands out of the serial stream the moment each byte arrives — before any
+ * parsing, and so inside a comment as much as outside one — and every one of
+ * them is a byte from 0x80 up. UTF-8 is made of such bytes: the em dash in
+ * `(fit tool T2 — press cycle start)` is E2 80 94, and 0x94 is *feed override
+ * −1%*. A GRBL program from this post turned the feed down a percent at every
+ * dash in it, and the `×` in a slot's summary (C3 97) is *rapid override 25%*.
+ * An `à` toggles the flood coolant, and an `Ä` in an operation's name is the
+ * safety door. Older controls simply alarm on a byte they do not know.
+ *
+ * So a comment is written in ASCII, whatever it was written in: the symbols
+ * this app uses in its own sentences get their shop-floor spelling, accented
+ * letters lose the accent (German's pairs are written out, the way German is
+ * written without them), and anything left is a `?` — seen, and harmless.
+ */
+const ASCII = {
+  '—': '-', '–': '-', '‒': '-', '−': '-', '‐': '-', '‑': '-',
+  '⌀': 'D', 'Ø': 'D', 'ø': 'D',
+  '×': 'x', '°': 'deg', 'µ': 'u', 'μ': 'u', '±': '+/-',
+  '≤': '<=', '≥': '>=', '≈': '~', '→': '->', '←': '<-', '…': '...',
+  '·': '.', '•': '*', '‘': "'", '’': "'", '‚': "'", '“': '"', '”': '"', '„': '"',
+  '′': "'", '″': '"', '½': '1/2', '¼': '1/4', '¾': '3/4', '²': '2', '³': '3',
+  'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'Ä': 'Ae', 'Ö': 'Oe', 'Ü': 'Ue', 'ß': 'ss',
+  'æ': 'ae', 'Æ': 'AE', 'œ': 'oe', 'Œ': 'OE', 'ł': 'l', 'Ł': 'L', 'đ': 'd', 'Đ': 'D',
+};
+
+export function asciiComment(text) {
+  return String(text ?? '')
+    // composed first, so an ä typed as a + ¨ still finds its spelling below
+    .normalize('NFC')
+    .replace(/[^\x20-\x7e]/g, (c) => ASCII[c] ?? c)
+    // what is left is either an accented letter, which decomposes into its
+    // letter and an accent that can be dropped, or something with no ASCII
+    // spelling at all
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    // a line break would end the comment and run the rest of it as G-code
+    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .replace(/[^\x20-\x7e]/g, '?');
+}
+
 export class LineWriter {
   constructor() { this.lines = []; }
 
@@ -69,7 +113,7 @@ export class LineWriter {
     if (text) this.lines.push(text);
   }
 
-  comment(text) { this.lines.push(`(${text.replace(/[()]/g, '')})`); }
+  comment(text) { this.lines.push(`(${asciiComment(text).replace(/[()]/g, '')})`); }
   raw(text) { this.lines.push(text); }
   toString() { return this.lines.join('\n') + '\n'; }
 }

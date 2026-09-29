@@ -543,6 +543,16 @@ function partingOutline(tool, holderLength, bladeDepth, nose) {
 }
 
 /**
+ * The included angle of a threading insert's point, in degrees — the form it
+ * cuts: 60 for ISO metric and unified, what the tool says for anything else.
+ * One answer for the drawing and the simulation (see tool-geometry.js
+ * threadFlankRise).
+ */
+export function threadIncludedAngle(tool) {
+  return tool?.tipAngle > 0 && tool.tipAngle < 150 ? tool.tipAngle : 60;
+}
+
+/**
  * A threading insert: a point of the thread's own included angle, on a stub of
  * body.
  *
@@ -553,8 +563,7 @@ function partingOutline(tool, holderLength, bladeDepth, nose) {
  * drawing one as a rhombus with a corner radius says nothing about it.
  */
 function threadingInsert(tool, ic) {
-  const included = tool?.tipAngle > 0 && tool.tipAngle < 150 ? tool.tipAngle : 60;
-  const half = (included * Math.PI) / 360;
+  const half = (threadIncludedAngle(tool) * Math.PI) / 360;
   const flank = Math.max(1.2, ic * 0.42);
   const t = Math.tan(half) * flank;
   const w = Math.max(t * 1.25, ic * 0.45);

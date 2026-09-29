@@ -14,7 +14,7 @@
 
 import { MOVE_STRIDE, OP, FEED, syncFeed, rapidSeconds, feedRate, descentOf } from './cl.js';
 import { inheritedColumns, settleThrough, cutFromSimulation } from './workpiece.js';
-import { profileTable } from './tool-geometry.js';
+import { profileTable, bladeHalfWidth, threadFlankRise } from './tool-geometry.js';
 import { isRoundStock } from './stock.js';
 
 const DEFAULT_MAX_CELLS = 40_000;   // ~200x200; keeps re-shading interactive
@@ -110,6 +110,53 @@ class EventLog {
       evPrev: this.prev.slice(0, this.count),
       eventCount: this.count,
     };
+  }
+}
+
+/**
+ * What one rapid move took, measured across the whole of it.
+ *
+ * A move is swept in pieces, and each piece only takes what the piece before
+ * it left — so a rapid driven straight into the work takes a sliver per piece,
+ * and judged piece by piece it was a sliver deep. On the lathe, where a piece
+ * is a fraction of a sample, a rapid 2mm into solid bar was reported as 0.03mm
+ * at 600 samples, 0.012mm at the default 1600 and *not at all* at 3000: every
+ * sliver was under the threshold. Watching the move instead — the height each
+ * cell had when the move reached it, against the height the move left — gives
+ * the 2mm, once, for the one move it is.
+ *
+ * Stands in for the event log for the duration of the move and passes every
+ * change straight on to it.
+ */
+function watchMove(log) {
+  const first = new Map();
+  const last = new Map();
+  let firstStep = -1;
+  return {
+    get count() { return log.count; },
+    push(step, cell, height, prev) {
+      if (!first.has(cell)) first.set(cell, prev);
+      last.set(cell, height);
+      if (firstStep < 0) firstStep = step;
+      log.push(step, cell, height, prev);
+    },
+    /** The deepest any one cell was cut, and the step the move first touched metal. */
+    took() {
+      let depth = 0;
+      for (const [cell, before] of first) depth = Math.max(depth, Math.abs(before - last.get(cell)));
+      return { depth, step: firstStep };
+    },
+  };
+}
+
+/** Add one watched rapid to the tally, if it took anything worth the name. */
+function countRapid(rapidCut, watch) {
+  const { depth, step } = watch.took();
+  if (!(depth > RAPID_CUT_EPS)) return;
+  rapidCut.count++;
+  if (depth > rapidCut.depth) {
+    rapidCut.depth = depth;
+    rapidCut.step = step;
   }
 }
 
@@ -259,17 +306,12 @@ export function simulateRemoval({
         if (prev) {
           const to = [x, y, retractZ];
           const subs = subStepsFor(prev, to, subStepLength);
+          const watch = watchMove(log);
           for (let s = 1; s <= subs; s++) {
-            const came = cut(heights, mask, log, step, grid,
+            cut(heights, mask, watch, step, grid,
               lerp(prev, to, (s - 1) / subs), lerp(prev, to, s / subs), cutter, stockTop, columns);
-            if (came.depth > RAPID_CUT_EPS) {
-              rapidCut.count++;
-              if (came.depth > rapidCut.depth) {
-                rapidCut.depth = came.depth;
-                rapidCut.step = step;
-              }
-            }
           }
+          countRapid(rapidCut, watch);
           seconds += moveSeconds(prev, to, FEED.RAPID, feeds, rapidFeed);
         }
         const took = cut(heights, mask, log, step, grid,
@@ -300,15 +342,17 @@ export function simulateRemoval({
           // bare stock. The picture said the cut was already made everywhere the
           // tool had not been yet, which is the one thing a simulation is for.
           const subs = subStepsFor(prev, p, subStepLength);
+          const feedClass = d[o + 7];
+          const rapid = feedClass === FEED.RAPID;
+          // a rapid is judged over the whole move — see watchMove
+          const watch = rapid ? watchMove(log) : null;
           for (let s = 1; s <= subs; s++) {
             const a = lerp(prev, p, (s - 1) / subs);
             const b = lerp(prev, p, s / subs);
-            const took = cut(heights, mask, log, step, grid, a, b, cutter, stockTop, columns);
+            const took = cut(heights, mask, watch ?? log, step, grid, a, b, cutter, stockTop, columns);
             const travel = Math.hypot(b[0] - a[0], b[1] - a[1]);
             // A rapid that removes anything is a crash, not a cut, and dividing
             // its swath by its length would report it as a gentle one.
-            const feedClass = d[o + 7];
-            const rapid = feedClass === FEED.RAPID;
             // A move descending faster than a fiftieth of its own length is
             // boring its way in rather than cutting across, whatever the feed
             // class calls it — the same test the engagement suite uses.
@@ -319,18 +363,12 @@ export function simulateRemoval({
                 : Math.min(took.swath / travel, 2 * radius),
               took.depth, radius, !entry, travel,
             );
-            if (rapid && took.depth > RAPID_CUT_EPS) {
-              rapidCut.count++;
-              if (took.depth > rapidCut.depth) {
-                rapidCut.depth = took.depth;
-                rapidCut.step = step;
-              }
-            }
             seconds += moveSeconds(a, b, d[o + 7], feeds, rapidFeed);
             step++;
             times.push(seconds);
             tip.push(b[0], b[1], b[2]);
           }
+          if (watch) countRapid(rapidCut, watch);
           prev = p;
         }
       }
@@ -602,6 +640,38 @@ function isInternalTool(tool) {
 }
 
 /**
+ * Whether an operation works inside the part.
+ *
+ * A boring bar or a drill can work nowhere else, so the tool says. A threading
+ * insert or a blade can be either — "16IR" and "16ER" are the same type ground
+ * the other way round, and a grooving blade goes down a bore as readily as it
+ * goes on the outside — so for those the program says, the way a machinist
+ * reading it would: a tool that comes *out* from a smaller radius to make its
+ * first cut is working in a hole. Asked of the tool type alone, an internal
+ * thread in a ⌀40 tube was simulated on the outside: the tube turned down to
+ * ⌀20 for the length of the thread, the bore untouched, and 831 rapids "through
+ * metal". Read from the moves, it holds for a G-code file read back too, which
+ * has no operation to ask.
+ */
+function worksInside(cl, tool) {
+  if (isInternalTool(tool)) return true;
+  if (tool?.type !== 'threading' && tool?.type !== 'parting') return false;
+  const d = cl.moves;
+  for (let n = 1; n < cl.count; n++) {
+    if (d[n * MOVE_STRIDE] !== OP.LINE) continue;
+    // the first cut, and the nearest place before it the tool stood at a
+    // different radius: which side of the cut that was is which side it is on
+    const x = d[n * MOVE_STRIDE + 1];
+    for (let k = n - 1; k >= 0; k--) {
+      const before = d[k * MOVE_STRIDE + 1];
+      if (Math.abs(before - x) > 1e-6) return before < x;
+    }
+    return false;
+  }
+  return false;
+}
+
+/**
  * @param bar { radius, innerRadius, zMin, zMax } — the stock, from engine/lathe.js
  * @param ops [{ cl, tool }] in program order
  * @returns a simulation record; feed it to SimulationPlayback
@@ -659,15 +729,30 @@ export function simulateTurning({
   // whether the cut is heavy is the depth of cut, which is how far the bar's
   // radius drops under the tool. See LoadLog.
   const load = new LoadLog();
+  // A rapid that took metal, as the milling simulator counts them. A lathe
+  // program was simulated without the count at all, so a G0 that ran the
+  // insert through the bar was drawn as a cut and reported as nothing — the
+  // one finding that could stop somebody pressing cycle start was the one a
+  // turning job could never produce. See backplot.js rapidCutFinding.
+  const rapidCut = { count: 0, depth: 0, step: -1 };
   ops.forEach(({ cl, tool }, opIndex) => {
     // The insert's nose is what actually touches the work, and it is why a
     // sharp internal corner comes out with a radius in it. Modelled as a circle
     // rolled along the path, which is the same drop-cutter idea as milling.
     const nose = Math.max(0, tool?.noseRadius ?? 0);
     const half = tool?.type === 'parting' || tool?.type === 'threading'
-      ? Math.max(0.05, (tool.bladeWidth || tool.diameter || 1) / 2)
+      ? bladeHalfWidth(tool)
       : 0;
-    const internal = isInternalTool(tool);
+    // A threading insert is a point, not a blade: its V on every move, and the
+    // V repeated once a pitch along a synchronised one. Drawn as a flat the
+    // width of the insert off the pass, the radial retract out of its own
+    // groove at the end of every pass "cut" the flanks the pass had just left,
+    // and a thread that simply ran out into the bar reported fourteen rapids
+    // through metal.
+    const form = tool?.type === 'threading'
+      ? { vee: true, rise: threadFlankRise(tool), phase: 0 }
+      : { vee: false, rise: THREAD_FLANK, phase: 0 };
+    const internal = worksInside(cl, tool);
     // The radius a drill *cycle* opens, read from the tool's diameter whatever
     // the tool is: a DRILL opcode means a hole on the centreline, and that is
     // not a move different tooling performs differently. See the `isDrill`
@@ -727,6 +812,15 @@ export function simulateTurning({
         feeds, rapidFeed, syncFeed(pitch, rpm));
       const length = Math.hypot(target[0] - prev[0], target[1] - prev[1]);
       const pieces = Math.max(1, Math.min(MAX_SUB_STEPS, Math.ceil(length / pieceLength)));
+      // A helix seen in one plane is its groove once a pitch, and which pitch it
+      // lines up with is where the insert is standing. Phased on the end of the
+      // pass, which is where every pass of a thread stops and where the tool
+      // leaves its groove; phased on Z0 it was a pitch-dependent accident
+      // whether the groove drawn and the insert withdrawing from it coincided.
+      if (pitch > 0) form.phase = target[1];
+      // a rapid is judged over the whole move, not piece by piece — see watchMove
+      const watch = !isDrill && d[o] === OP.RAPID ? watchMove(log) : null;
+      const into = watch ?? log;
 
       for (let s = 1; s <= pieces; s++) {
         const t0 = (s - 1) / pieces;
@@ -741,11 +835,11 @@ export function simulateTurning({
         // with a turning insert fall through to `turnCut` along X0 — an
         // external pass at radius zero, which takes the whole bar with it.
         const took = isDrill
-          ? boreCut(surface, mask, log, step, grid, a, b, cycleR, cycleR, true, 0)
+          ? boreCut(surface, mask, into, step, grid, a, b, cycleR, cycleR, true, 0)
           : internal
-            ? boreCut(surface, mask, log, step, grid, a, b,
-              drillR > 0 ? drillR : nose, drillR > 0 ? drillR : half, drillR > 0, pitch)
-            : turnCut(surface, mask, log, step, grid, a, b, nose, half, bar.radius, pitch);
+            ? boreCut(surface, mask, into, step, grid, a, b,
+              drillR > 0 ? drillR : nose, drillR > 0 ? drillR : half, drillR > 0, pitch, form)
+            : turnCut(surface, mask, into, step, grid, a, b, nose, half, bar.radius, pitch, form);
         // A plunge — a groove, a parting cut, a drill — is full depth by nature
         // and is governed by the peck, not by the depth of cut. What the depth
         // of cut governs is a pass running *along* the bar.
@@ -760,6 +854,7 @@ export function simulateTurning({
         trackTool.push(opIndex);
         if (log.count > maxEvents || step > maxSteps) { truncated = true; break; }
       }
+      if (watch) countRapid(rapidCut, watch);
 
       // a drill cycle ends back at its retract height, so the tool is not left
       // sitting at the bottom of the hole it just made
@@ -782,6 +877,7 @@ export function simulateTurning({
     trackX: new Float32Array(trackX),
     trackZ: new Float32Array(trackZ),
     trackTool: new Int32Array(trackTool),
+    rapidCut,
     totalSeconds: seconds,
     truncated,
   };
@@ -871,9 +967,13 @@ export function turnPositionAt(sim, ops, step, seconds = null) {
  * its edge (see strategies/turning.js). So the nose is a circle centred on the
  * path, and at a distance `e` along the bar from it the smallest radius it can
  * reach is `r - sqrt(nose² - e²)`. A parting blade has no nose radius; it is a
- * flat of `half` either side, because that is what a blade is.
+ * flat of `half` either side, because that is what a blade is. A threading
+ * insert is its point: `form.vee`, rising `form.rise` per millimetre either
+ * side, and repeated once a pitch — phased on `form.phase` — along a
+ * synchronised pass.
  */
-function turnCut(surface, mask, log, step, grid, p0, p1, nose, half, barRadius, pitch = 0) {
+function turnCut(surface, mask, log, step, grid, p0, p1, nose, half, barRadius, pitch = 0,
+  form = NO_FORM) {
   const { zMin, dz, count } = grid;
   // The move is walked rather than solved: a segment that changes both Z and
   // radius has no closed form for "the lowest radius at this sample", and the
@@ -904,8 +1004,11 @@ function turnCut(surface, mask, log, step, grid, p0, p1, nose, half, barRadius, 
       const zi = zMin + i * dz;
       const e = Math.abs(zi - z);
       let cutTo;
-      if (pitch > 0) cutTo = threadFloor(zi, r, pitch, 1);
-      else if (e <= half) cutTo = r;           // inside the blade's own width
+      if (pitch > 0) cutTo = threadFloor(zi, r, pitch, 1, form);
+      else if (form.vee) {
+        if (e > half) continue;
+        cutTo = r + e * form.rise;             // the insert's own point
+      } else if (e <= half) cutTo = r;         // inside the blade's own width
       else if (nose > 0 && e < nose) cutTo = r - Math.sqrt(nose * nose - e * e);
       else if (nose === 0 && half === 0 && e <= dz / 2) cutTo = r;
       else continue;
@@ -929,7 +1032,8 @@ function turnCut(surface, mask, log, step, grid, p0, p1, nose, half, barRadius, 
  * already bored bigger than this pass can reach is the one to skip. A drill is
  * the degenerate case — a flat of its own radius, which is what a hole is.
  */
-function boreCut(surface, mask, log, step, grid, p0, p1, nose, half, isDrill, pitch = 0) {
+function boreCut(surface, mask, log, step, grid, p0, p1, nose, half, isDrill, pitch = 0,
+  form = NO_FORM) {
   const { zMin, dz, count } = grid;
   const dr = p1[0] - p0[0];
   const dZ = p1[1] - p0[1];
@@ -954,7 +1058,10 @@ function boreCut(surface, mask, log, step, grid, p0, p1, nose, half, isDrill, pi
       const e = Math.abs(zi - z);
       let cutTo;
       if (pitch > 0 && !isDrill) {
-        cutTo = threadFloor(zi, r, pitch, -1);
+        cutTo = threadFloor(zi, r, pitch, -1, form);
+      } else if (form.vee && !isDrill) {
+        if (e > half) continue;
+        cutTo = r - e * form.rise;
       } else if (isDrill) {
         // a drill cuts its own diameter for the whole length it has reached
         if (e > dz) continue;
@@ -996,11 +1103,17 @@ const THREAD_FLANK = 1 / Math.tan(Math.PI / 6);
  *
  * @param at the radius the pass is cutting at — the deepest point of the groove
  * @param side +1 on the outside of the bar, −1 in a bore
+ * @param form { phase, rise } — a Z the groove is centred on, and the flank's
+ *   rise per millimetre along the bar
  */
-function threadFloor(z, at, pitch, side) {
-  const e = Math.abs(z - Math.round(z / pitch) * pitch);
-  return at + side * e * THREAD_FLANK;
+function threadFloor(z, at, pitch, side, form = NO_FORM) {
+  const u = z - form.phase;
+  const e = Math.abs(u - Math.round(u / pitch) * pitch);
+  return at + side * e * form.rise;
 }
+
+/** What a tool that is not a threading insert passes for its form. */
+const NO_FORM = Object.freeze({ vee: false, rise: THREAD_FLANK, phase: 0 });
 
 /**
  * How long a turning move takes, in seconds.
@@ -1035,7 +1148,23 @@ function turnSeconds(p0, p1, feedClass, feeds, rapidFeed, synced = 0) {
  */
 function buildMask(stock, width, height, cellSize) {
   const mask = new Uint8Array(width * height).fill(1);
-  if (!isRoundStock(stock) || !stock.cylinder) return mask;
+  if (!isRoundStock(stock) || !stock.cylinder) {
+    // The grid is laid from the billet's near corner and rounded *up* to whole
+    // cells, so its far row and column can sit most of a cell past the far
+    // edge — outside the billet, and simulated as full-height metal all the
+    // same. Nothing ever cuts it, because every pass stays inside the billet:
+    // it stood a whole program there as a rim of stock that does not exist,
+    // and a rapid dropping beside the edge read as a crash through it — "1
+    // rapid cuts metal … 1.82mm at traverse speed" on a program that is fine.
+    const eps = cellSize * 1e-3;
+    for (let j = 0; j < height; j++) {
+      const outY = stock.min[1] + j * cellSize > stock.max[1] + eps;
+      for (let i = 0; i < width; i++) {
+        if (outY || stock.min[0] + i * cellSize > stock.max[0] + eps) mask[j * width + i] = 0;
+      }
+    }
+    return mask;
+  }
   const { center, diameter, innerDiameter = 0 } = stock.cylinder;
   const r = diameter / 2;
   const bore = innerDiameter / 2;

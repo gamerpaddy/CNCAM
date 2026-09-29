@@ -11,6 +11,8 @@ import { eachMove, OP, FEED } from '../engine/cl.js';
 import { turningProfile, radiusAtZ, offsetProfile, barFromStock } from '../engine/lathe.js';
 import { buildGcode } from '../post/index.js';
 import { simulateTurning, SimulationPlayback } from '../engine/simulate.js';
+import { readGcode, aboutNoseCentre, checkPost } from '../engine/backplot.js';
+import { latheControlPoint, bladeHalfWidth } from '../engine/tool-geometry.js';
 import { makeShaft, makeBox } from './fixtures.js';
 
 const INSERT = {
@@ -233,7 +235,9 @@ test('parting off pecks its way to the centre', () => {
   });
   const pts = cutPoints(cl);
   assert.ok(pts.length >= 5, `expected several pecks, got ${pts.length}`);
-  assert.ok(pts.every((p) => Math.abs(p[1] - 5) < 1e-6), 'all at the parting Z');
+  // the CL names the middle of the blade, and the blade is behind the part
+  const middle = 5 - BLADE.bladeWidth / 2;
+  assert.ok(pts.every((p) => Math.abs(p[1] - middle) < 1e-6), 'all in one slot');
   assert.close(Math.min(...pts.map((p) => p[0])), 0, 1e-6, 'right through the middle');
   // each peck goes deeper than the last
   const depths = pts.map((p) => p[0]);
@@ -260,15 +264,97 @@ test('the lathe post writes diameters, and nothing else does', () => {
   assert.ok(/^G21 G90 G9[45] G18 G7 /m.test(text), `no diameter-mode header:\n${text.slice(0, 200)}`);
   assert.ok(!/^\s*[^(]*\bY-?[\d.]/m.test(text), 'a lathe has no Y axis');
 
-  // Every X word in the file must be exactly twice a radius in the CL data —
-  // the widest included, which is the clearance the tool rapids at.
-  const radii = allRadii(cl);
+  // Every X word in the file must be exactly twice a radius the tool's
+  // touch-off point visits — the CL's nose centre moved by the insert's
+  // control point — the widest included, which is the clearance it rapids at.
+  const [dx] = latheControlPoint(INSERT);
+  const radii = allRadii(cl).map((r) => r + dx);
   const widest = Math.max(...radii);
   const xWords = [...text.matchAll(/X(-?[\d.]+)/g)].map((m) => Number(m[1]));
   assert.close(Math.max(...xWords), widest * 2, 0.01, 'X is a diameter');
   for (const x of xWords) {
     assert.ok(radii.some((r) => Math.abs(r * 2 - x) < 0.01),
       `X${x} is not twice any radius the toolpath visits`);
+  }
+});
+
+test('a finished lathe program reads the drawing: ⌀16 is X16, the shoulder is its own Z', () => {
+  // The CL is the nose centre and a control drives the tip it was touched off
+  // at, so the post has to move one to the other. It did not: this finish of
+  // a ⌀30/⌀16 shaft with a 0.4mm nose posted X16.8 along the ⌀16 and X30.8
+  // along the ⌀30, which a lathe touched off in the ordinary way turns 0.8mm
+  // oversize — and a face 0.4mm long — with nothing anywhere to say so.
+  const cl = generateToolpath({
+    type: 'turnFinish', name: 'finish', tool: INSERT, mesh: shaft.mesh, stock: BAR,
+    params: { ...base, topZ: 58, bottomZ: 2 },
+  });
+  const { text } = buildGcode('lathe', [{ name: 'finish', cl }]);
+  // the file as written — every feed move's diameter and Z, read by the same
+  // reader that checks anybody's program
+  const xs = [];
+  const face = [];
+  let at = null;
+  eachMove(readGcode(text).cl, (op, x, y, z) => {
+    if (op === OP.LINE) {
+      xs.push(x * 2);
+      // the move that climbs the shoulder from one diameter toward the other
+      if (at && Math.abs(x - at[0]) > 2) face.push(at[1], z);
+    }
+    at = [x, z];
+  });
+  const near = (list, v) => list.some((u) => Math.abs(u - v) < 0.02);
+  assert.ok(near(xs, 16), `the ⌀16 journal is cut at X16: ${[...new Set(xs)].slice(0, 12)}`);
+  assert.ok(near(xs, 30), `and the ⌀30 at X30: ${[...new Set(xs)].slice(0, 12)}`);
+  assert.ok(Math.min(...xs) > 16 - 0.02, `nothing is cut under ⌀16: X${Math.min(...xs)}`);
+  // The shoulder stands at Z35 on the model. The profile is dilated by a
+  // sample (0.1mm here) so the face may be left that much proud; posted as the
+  // nose centre it read a whole nose radius out, at Z35.4 and beyond.
+  assert.ok(face.length > 0, 'the pass climbs the shoulder');
+  for (const z of face) {
+    assert.ok(z > 35 - 0.02 && z < 35 + 0.2, `the shoulder face is cut at Z${z.toFixed(3)}`);
+  }
+});
+
+test('a LinuxCNC lathe tool change is T1 M6 G43, and reads back as tool 1', () => {
+  // T0101 is the Fanuc station-and-offset pairing. LinuxCNC reads it as tool
+  // 101, and without G43 it applies no offset whatever the number is.
+  const cl = generateToolpath({
+    type: 'turnFinish', name: 'finish', tool: INSERT, mesh: shaft.mesh, stock: BAR,
+    params: { ...base, topZ: 58, bottomZ: 2 },
+  });
+  const { text } = buildGcode('lathe', [{ name: 'finish', cl }]);
+  assert.ok(/^T1 M6 G43$/m.test(text), `expected "T1 M6 G43":\n${text.slice(0, 400)}`);
+  assert.ok(!/T0101/.test(text), 'no Fanuc pairing');
+  const back = readGcode(text);
+  assert.eq(back.cl.events.find((e) => e.type === 'tool')?.tool, 1, 'the file names tool 1');
+});
+
+test('a lathe file read back lands on the path it was posted from', () => {
+  // The post moves the nose centre to the touch-off point; reading the file
+  // back has to move it home again, or the simulation of a correct program
+  // cuts a nose radius into every diameter — and the round-trip check calls
+  // every turning operation out by one.
+  for (const tool of [INSERT, BLADE]) {
+    const type = tool === BLADE ? 'turnPart' : 'turnFinish';
+    const cl = generateToolpath({
+      type, name: type, tool, mesh: shaft.mesh, stock: BAR,
+      params: { ...base, topZ: 58, bottomZ: 2 },
+    });
+    const ops = [{ name: type, cl }];
+    const { text, lineMap } = buildGcode('lathe', ops);
+    const back = aboutNoseCentre(readGcode(text).cl, tool);
+    let worst = 0;
+    const posted = [];
+    eachMove(cl, (op, x, y, z) => posted.push([x, z]));
+    const read = [];
+    eachMove(back, (op, x, y, z) => read.push([x, z]));
+    for (const [x, z] of read) {
+      const d = Math.min(...posted.map(([px, pz]) => Math.hypot(px - x, pz - z)));
+      if (d > worst) worst = d;
+    }
+    assert.ok(worst < 0.01, `${type}: the file read back is ${worst.toFixed(3)}mm off its CL`);
+    const check = checkPost({ ops, text, lineMap });
+    assert.ok(!(check.over > 0), `${type}: the round trip calls it out by ${check.worst}`);
   }
 });
 
@@ -437,14 +523,18 @@ test('a facing pass takes the end off the bar, right to the centre', () => {
   assert.close(cut.radiusAt(55), 20, 0.01, 'and the bar behind it is not touched');
 });
 
-test('parting off cuts a groove as wide as the blade, and no wider', () => {
+test('parting off cuts a slot as wide as the blade, behind the part', () => {
+  // Bottom Z is the finished end of the part. The blade was centred on it, so
+  // the part came off a half-blade short — 1.5mm with a 3mm blade.
   const cut = machine([{
     type: 'turnPart', tool: BLADE, params: { bottomZ: 30, peck: 0 },
   }]);
-  assert.close(cut.radiusAt(30), 0, 1e-6, 'right through the middle');
-  const half = BLADE.bladeWidth / 2;
-  assert.close(cut.radiusAt(30 - half + 0.2), 0, 0.1, 'the groove is the blade width');
-  assert.close(cut.radiusAt(30 + half + 0.5), 20, 0.01, 'and the bar either side is untouched');
+  const blade = BLADE.bladeWidth;
+  assert.close(cut.radiusAt(30 - blade / 2), 0, 1e-6, 'right through the middle');
+  assert.close(cut.radiusAt(30 - 0.2), 0, 0.1, 'the slot comes up to Bottom Z');
+  assert.close(cut.radiusAt(30 - blade + 0.2), 0, 0.1, 'and is the blade wide');
+  assert.close(cut.radiusAt(30 + 0.2), 20, 0.01, 'the part keeps all of its length');
+  assert.close(cut.radiusAt(30 - blade - 0.5), 20, 0.01, 'and the bar behind is untouched');
 });
 
 // --- threading: the pitch has to be visible along the bar ---
@@ -515,8 +605,12 @@ test('a thread run-out does not carry the tool into the chuck', () => {
   eachMove(cl, (op, x, y, z) => {
     if (op !== OP.DRILL) deepest = Math.min(deepest, z);
   });
-  // the jaws end at Z10; nothing, run-out included, may go behind them
-  assert.ok(deepest >= 10 - 1e-6, `a move reaches Z${deepest.toFixed(2)}, behind the jaws at Z10`);
+  // The jaws end at Z10; nothing, run-out included, may go behind them — and
+  // that is the insert's flank, which stands out past the centre the CL names.
+  const flank = deepest - bladeHalfWidth(THREADER);
+  assert.ok(flank >= 10 - 1e-6, `the insert reaches Z${flank.toFixed(2)}, behind the jaws at Z10`);
+  assert.ok(cl.notes.some((n) => n.level === 'warn' && /no run-out space: the jaws/.test(n.text)),
+    'and the pass says the jaws took its run-out');
 });
 
 test('doubling the pitch halves the number of grooves', () => {

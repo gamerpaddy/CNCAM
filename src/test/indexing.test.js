@@ -256,7 +256,7 @@ test('a tilted face is posted as a tilted work plane', () => {
   const { text } = buildGcode('linuxcnc', [contourOp('front', indexedSetup('Front', [90, 0, 0]), TRUNNION)]);
   assert.ok(/G68\.2 X0 Y0 Z0 I-90 J0 K0/.test(text), `plane declared, got:\n${text}`);
   assert.ok(/G53\.1/.test(text), 'and the tool is oriented to it');
-  assert.ok(/index 3\+2: tool axis 0 1 0 — A90 C0/.test(text), 'with a human-readable note');
+  assert.ok(/index 3\+2: tool axis 0 1 0 - A90 C0/.test(text), 'with a human-readable note');
   assert.ok(/G69/.test(text), 'and the plane is cancelled before the program ends');
   // the plane comes before any cutting move
   assert.ok(text.indexOf('G68.2') < text.indexOf('G1 '), 'declared before the first cut');

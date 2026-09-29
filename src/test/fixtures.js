@@ -345,6 +345,40 @@ export function makeSteppedBore({
   return meshFromSoup(new Float32Array(soup));
 }
 
+/**
+ * A solid of revolution about Z, from its outline in the (radius, Z) plane.
+ *
+ * The outline is walked from the axis at one end, round the outside and back
+ * to the axis at the other; a through bore is an outline that closes on itself
+ * without ever reaching the axis. Walked that way every face comes out wound
+ * outward (see boxSoup) — the bore's faces point at the axis, which is out of
+ * the metal.
+ *
+ * For the turned features makeShaft cannot draw: a relief groove at the end of
+ * a thread, a shoulder beyond it, a bore that steps down to a pilot.
+ */
+export function makeRevolved(outline, segments = 64) {
+  const soup = [];
+  const at = (r, i, z) => {
+    const a = (i / segments) * Math.PI * 2;
+    return [r * Math.cos(a), r * Math.sin(a), z];
+  };
+  for (let k = 0; k + 1 < outline.length; k++) {
+    const [r0, z0] = outline[k];
+    const [r1, z1] = outline[k + 1];
+    for (let i = 0; i < segments; i++) {
+      const a = at(r0, i, z0);
+      const b = at(r0, i + 1, z0);
+      const c = at(r1, i + 1, z1);
+      const e = at(r1, i, z1);
+      // a corner on the axis makes the quad a triangle
+      if (r0 > 0) soup.push(...a, ...b, ...c);
+      if (r1 > 0) soup.push(...a, ...c, ...e);
+    }
+  }
+  return meshFromSoup(new Float32Array(soup));
+}
+
 export function makeShaft({
   bigDiameter = 30, smallDiameter = 16, length = 60, stepAt = 25, segments = 48,
   groove = null,

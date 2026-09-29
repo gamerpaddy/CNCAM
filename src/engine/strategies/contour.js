@@ -25,7 +25,7 @@
 //   level — the profile as it stands at each depth. Right for a stepped
 //           prismatic part, where each level really is a different outline.
 
-import { CLBuilder, FEED, lastXY } from '../cl.js';
+import { CLBuilder, FEED, lastXY, lastZ } from '../cl.js';
 import { plural, pluralEs } from '../text.js';
 import { mergeTolerance } from '../simplify.js';
 import { offsetLoops, loopArea, unionWithHoles } from '../../geom/clipper.js';
@@ -366,7 +366,7 @@ export function cutLoopPass(cl, rawLoop, zEntry, z, {
     cl.cut(loop[0], loop[1], z);
     walk(loop, z);
   } else if (inPts.length === 0) {
-    cl.rapid(loop[0], loop[1], home);
+    arrive(cl, loop[0], loop[1], home);
     // ramp-in then walk with tabs applied only at final depth
     cutLoopWithRamp(cl, loop, zEntry, z, params.rampAngle ?? 0,
       { walkPerimeter: walk, feedPlane });
@@ -388,7 +388,8 @@ export function cutLoopPass(cl, rawLoop, zEntry, z, {
     const ramping = rampAngle > 0 && zEntry > z + 1e-9;
     const entryZ = ramping ? zEntry : z;
     const [sx, sy] = inPts[0];
-    approach(cl, sx, sy, entryZ, { clearance: home, feedPlane });
+    arrive(cl, sx, sy, home);
+    approach(cl, sx, sy, entryZ, { clearance: home, feedPlane, positioned: true });
     for (let i = 1; i < inPts.length; i++) cl.cut(inPts[i][0], inPts[i][1], entryZ, FEED.LEAD);
     cl.cut(loop[0], loop[1], entryZ, FEED.LEAD);
     // The lead-out is taken from the loop the ramp actually finished on: when
@@ -404,6 +405,32 @@ export function cutLoopPass(cl, rawLoop, zEntry, z, {
 
   if (exit != null) cl.rapid(...lastXY(cl), exit);
   return true;
+}
+
+/**
+ * Get over (x, y) at `home`, ready to start a pass — and never go *down* to it
+ * at rapid.
+ *
+ * `home` is a link height, planned from the part: clear of everything the part
+ * puts between here and there, by an entry gap. What it cannot see is what the
+ * passes themselves leave, and a pass arriving *lower* than the one before it
+ * left is coming down beside the wall the last pass cut — through the cusp
+ * between the two, which is exactly the metal the part does not know about.
+ * Waterline does this at every level: the tool stood at one level, the link to
+ * the next came back a hair below it, and the step down was a rapid 0.2mm into
+ * the scallop the last level left.
+ *
+ * So a descending arrival travels at the height it is already at, which clears
+ * everything the link does and more, and feeds the rest of the way down.
+ */
+function arrive(cl, x, y, home) {
+  const here = lastZ(cl);
+  if (here == null || !(here > home + 1e-9)) {
+    cl.rapid(x, y, home);
+    return;
+  }
+  cl.rapid(x, y, here);
+  cl.cut(x, y, home, FEED.PLUNGE);
 }
 
 /**

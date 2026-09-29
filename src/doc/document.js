@@ -4,7 +4,7 @@
 
 import { UndoStack } from './undo.js';
 import {
-  createProject, serializeProject, deserializeProject, extractMeshes,
+  createProject, serializeProject, deserializeProject, extractMeshes, setupModelIds,
 } from './schema.js';
 import { computeNormals } from '../geom/mesh.js';
 import { activeMachine } from './machines.js';
@@ -282,7 +282,7 @@ export class Document extends EventTarget {
     } else if (kind === 'model') {
       // a model is machined by every setup that does not name a subset
       for (const setup of this.project.setups) {
-        if (setup.modelIds.length === 0 || setup.modelIds.includes(id)) {
+        if (setupModelIds(setup, this.project).includes(id)) {
           operations += setup.operations.length;
         }
       }

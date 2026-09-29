@@ -94,9 +94,19 @@ export function shortcuts(ctx) {
       run: () => ctx.actions.deleteSelected(),
     },
 
-    { id: 'undo', group: 'Editing', keys: 'Ctrl+Z', label: 'Undo', run: () => ctx.actions.undo() },
-    { id: 'redo', group: 'Editing', keys: 'Ctrl+Y', label: 'Redo', run: () => ctx.actions.redo() },
-    { group: 'Editing', keys: 'Ctrl+Shift+Z', label: 'Redo', run: () => ctx.actions.redo(), alias: true },
+    // Not while text is being typed: there Ctrl+Z belongs to the box. Typing a
+    // name and pressing it to take the typing back undid the last change to
+    // the *project* instead — a machine choice, a deleted operation — with the
+    // typing still in the box and nothing on screen near the caret to say so.
+    {
+      id: 'undo', group: 'Editing', keys: 'Ctrl+Z', label: 'Undo', run: () => ctx.actions.undo(), textOwns: true,
+    },
+    {
+      id: 'redo', group: 'Editing', keys: 'Ctrl+Y', label: 'Redo', run: () => ctx.actions.redo(), textOwns: true,
+    },
+    {
+      group: 'Editing', keys: 'Ctrl+Shift+Z', label: 'Redo', run: () => ctx.actions.redo(), alias: true, textOwns: true,
+    },
 
     {
       id: 'rename',
@@ -213,7 +223,21 @@ export function matchesShortcut(spec, event) {
 
 /** Is this shortcut safe to fire while the caret is in a text field? */
 export function firesWhileTyping(shortcut) {
-  return shortcut.whileTyping || shortcut.keys.startsWith('Ctrl+');
+  return shortcut.whileTyping || (shortcut.keys.startsWith('Ctrl+') && !shortcut.textOwns);
+}
+
+/**
+ * Is this element one that edits text — and so has its own undo?
+ *
+ * Narrower than "a form control": a checkbox or a select has no undo of its
+ * own, so Ctrl+Z pressed on one just after using it means the project's undo,
+ * and nothing else could answer it.
+ */
+export function editsText(target) {
+  if (!target) return false;
+  if (target.isContentEditable || target.tagName === 'TEXTAREA') return true;
+  return target.tagName === 'INPUT'
+    && !/^(checkbox|radio|button|submit|reset|range|color|file|image)$/i.test(target.type ?? '');
 }
 
 /**
@@ -235,7 +259,8 @@ export function bindShortcuts(target, ctx) {
       || event.target.isContentEditable;
     for (const shortcut of table) {
       if (!matchesShortcut(shortcut.keys, event)) continue;
-      if (typing && !firesWhileTyping(shortcut)) continue;
+      if (typing && !firesWhileTyping(shortcut)
+        && !(shortcut.textOwns && !editsText(event.target))) continue;
       if (shortcut.enabled && !shortcut.enabled()) continue;
       event.preventDefault();
       shortcut.run();

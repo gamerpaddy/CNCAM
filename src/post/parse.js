@@ -43,9 +43,10 @@ const DIAMETER_MODE = 7;
 const RADIUS_MODE = 8;
 
 /**
- * A lathe's T word is two numbers written as one: `T0909` is turret station 9
- * carrying offset 9, which is what post/lathe.js writes and what every turning
- * control expects. Read as a single number it is tool 909, and the read-back
+ * A Fanuc-style lathe's T word is two numbers written as one: `T0909` is turret
+ * station 9 carrying offset 9, which is what post/lathe.js wrote before it
+ * wrote LinuxCNC's `T9 M6 G43`, and what files from Fanuc-style controls still
+ * carry. Read as a single number it is tool 909, and the read-back
  * then reports "the file asks for T909 and there is no T909 here" about a file
  * that asked for station 9 — and simulates it with whatever the widest cutter
  * in the library happens to be.
@@ -211,9 +212,16 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
     };
 
     let endsCycle = false;
+    // G4 is a pause, and the only thing on its block is how long: P seconds
+    // here and on GRBL, X seconds on a Fanuc — where `G04 X1.5` read as motion
+    // was a move to X1.5 in the middle of somebody's part. This app's own posts
+    // write it at the bottom of every long-hand hole with a dwell, and the check
+    // then said the file had a code it could not read.
+    let dwell = false;
     for (const [letter, n] of words) {
       if (letter === 'G') {
-        if (n === 0 || n === 1 || n === 2 || n === 3) { move = n; cycle = null; }
+        if (n === 4) dwell = true;
+        else if (n === 0 || n === 1 || n === 2 || n === 3) { move = n; cycle = null; }
         // Spindle-synchronised motion. G33 is a feed move whose rate comes from
         // the spindle rather than from F — read as a cut, which is what it is —
         // and G33.1 is a whole tapped hole in one block: down to Z at K per
@@ -294,7 +302,7 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
         }
       }
     }
-    if (endsCycle) return;
+    if (endsCycle || dwell) return;
 
     // Coordinates, in millimetres and absolute, whatever the program said —
     // and in radii, whatever the lathe said. `per` is 1 on every axis but X,

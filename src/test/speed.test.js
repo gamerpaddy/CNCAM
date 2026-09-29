@@ -96,3 +96,44 @@ test('replacing a toolpath is a change the viewport and the G-code panel can see
   doc.toolpaths.delete('nothing by this name');
   assert.eq(doc.toolpathSignature(false), after, 'and looking, or deleting nothing, is not');
 });
+
+test('Clipper keeps its sweep lists in the order its linked lists would have', async () => {
+  // The port kept local minima and scanbeams in lists sorted by walking from
+  // the head on every insert: N² steps for a union of N triangles, which is
+  // what a silhouette is. They are a sort and a heap now (geom/clipper.js), and
+  // the order they hold decides where every output path starts — so it has to
+  // be exactly the order the lists built, ties included.
+  await import('../geom/clipper.js');
+  const ClipperLib = globalThis.ClipperLib;
+  const clipper = new ClipperLib.Clipper();
+  // many triangles on few distinct heights, so the ties are most of the list
+  let seed = 7;
+  const rand = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const paths = [];
+  for (let k = 0; k < 400; k++) {
+    const x = Math.round(rand() * 1000);
+    const y = Math.round(rand() * 20) * 50;
+    paths.push([{ X: x, Y: y }, { X: x + 40, Y: y + 30 }, { X: x - 25, Y: y + 60 }]);
+  }
+  clipper.AddPaths(paths, ClipperLib.PolyType.ptSubject, true);
+  // the lists as the original inserts built them: every minimum, highest Y
+  // first, and among equal Ys the one added last first
+  const added = clipper.pendingMinima.slice();
+  const expected = [];
+  for (const lm of added) {
+    let at = 0;
+    while (at < expected.length && lm.Y < expected[at].Y) at++;
+    expected.splice(at, 0, lm);
+  }
+  clipper.Reset();
+  const got = [];
+  for (let lm = clipper.m_MinimaList; lm; lm = lm.Next) got.push(lm);
+  assert.eq(got.length, expected.length, 'every minimum is in the list');
+  assert.ok(got.every((lm, i) => lm === expected[i]), 'in the order the linked list kept them');
+  // and the scanbeams come off highest first, each Y once
+  const ys = [];
+  const y = {};
+  while (clipper.PopScanbeam(y)) ys.push(y.v);
+  const distinct = [...new Set(expected.map((lm) => lm.Y))].sort((a, b) => b - a);
+  assert.eq(JSON.stringify(ys), JSON.stringify(distinct), 'one scanbeam per height, top down');
+});

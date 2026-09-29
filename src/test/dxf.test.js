@@ -45,6 +45,17 @@ test('a drawing in inches arrives 25.4 times bigger', () => {
   assert.close(paths[0].points[2], 254, 1e-9, 'ten inches is 254mm');
 });
 
+test('and every other unit a drawing can be in arrives at its size', () => {
+  // $INSUNITS as the DXF reference numbers them. 8 (microinches) and 14
+  // (decimetres) were missing and fell back to millimetres, and 9 carried the
+  // microinch label on the mil's number.
+  const tenUnits = { 2: 3048, 5: 100, 6: 10000, 8: 10 * 2.54e-5, 9: 0.254, 13: 0.01, 14: 1000 };
+  for (const [units, mm] of Object.entries(tenUnits)) {
+    const { paths } = parseDXF(dxf(LINE, { units: Number(units) }));
+    assert.close(paths[0].points[2], mm, mm * 1e-9, `ten of unit ${units} is ${mm}mm`);
+  }
+});
+
 test('a closed polyline is closed, and its corners are where they were drawn', () => {
   const { paths } = parseDXF(dxf(SQUARE));
   assert.eq(paths.length, 1);
@@ -286,4 +297,15 @@ test('an engrave op with a drawing that has no lines says which is wrong', () =>
   });
   assert.ok(cl.notes.some((n) => n.level === 'warn' && /drawing/.test(n.text)),
     'an empty drawing must not read as an empty part');
+});
+
+test('a spline given only by the points it passes through still comes in', () => {
+  // no control polygon (10/20), only fit points (11/21): it used to arrive as
+  // nothing at all, and nothing said an entity had been dropped
+  const FIT = ['0', 'SPLINE', '8', 'curve', '70', '8', '71', '3', '74', '4',
+    '11', '0', '21', '0', '11', '10', '21', '5', '11', '20', '21', '0', '11', '30', '21', '5'];
+  const { paths, skipped } = parseDXF(dxf(FIT));
+  assert.eq(paths.length, 1, `the curve is there, skipped: ${JSON.stringify(skipped)}`);
+  const b = boundsOf(paths);
+  assert.eq(`${b.min.join()} ${b.max.join()}`, '0,0 30,5', 'through the points it was given');
 });

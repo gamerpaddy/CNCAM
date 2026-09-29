@@ -25,6 +25,7 @@ import { fixtureLoops, fixtureTop } from './fixtures.js';
 import { pointInLoops } from '../geom/inside.js';
 import { machineWarnings } from '../doc/machines.js';
 import { plural } from './text.js';
+import { latheControlPoint } from './tool-geometry.js';
 
 /**
  * A move that descends more steeply than this is boring its way in rather than
@@ -134,6 +135,30 @@ export function clFromGcode(parsed) {
     },
     stats: { tools, blocks: parsed.blocks, units: parsed.units },
   };
+}
+
+/**
+ * A lathe file's moves, brought back to the point CL data names.
+ *
+ * A lathe program drives each tool by its touch-off point and everything here —
+ * the simulation, the backplot, the verification — reads a path as the centre
+ * of the insert's nose. The file cannot say which tool geometry it assumed, so
+ * this takes it from the tool the file's T word was matched to: the same
+ * `latheControlPoint` the post moved the path by, taken off again. Read as the
+ * nose centre, a correct program would cut a nose radius into every diameter
+ * it finished.
+ */
+export function aboutNoseCentre(cl, tool) {
+  const [dx, dz] = latheControlPoint(tool);
+  if (dx === 0 && dz === 0) return cl;
+  const moves = cl.moves.slice();
+  for (let n = 0; n < cl.count; n++) {
+    const o = n * MOVE_STRIDE;
+    if (moves[o] === OP.DRILL) continue;   // a cycle on the axis is the tip already
+    moves[o + 1] -= dx;
+    moves[o + 3] -= dz;
+  }
+  return { ...cl, moves };
 }
 
 /** Parse and convert in one step, which is how every caller wants it. */
@@ -565,12 +590,20 @@ export function checkPost({
     .map(([line, ref]) => [line, ref.op])
     .sort((a, b) => a[0] - b[0]);
   const buckets = ops.map(() => []);
+  // A lathe tool's moves are posted for its touch-off point and planned about
+  // its nose centre, and the post moved them by what the operation said — so
+  // the same amount comes off again before the two are compared. Compared as
+  // printed, every turning operation was "out" by a nose radius.
+  const shifts = ops.map((op) => {
+    const said = op.cl?.events?.find((e) => e.type === 'controlPoint');
+    return said ? [said.x ?? 0, said.z ?? 0] : [0, 0];
+  });
   for (const m of parsed.motion) {
     const op = opAtLine(marks, m.line);
     if (op < 0 || op >= buckets.length) continue;
     // the R plane and the bottom, matching what a CL cycle states — see pathPoints
     if (m.kind === 'cycle') buckets[op].push([m.x, m.y, m.r, true], [m.x, m.y, m.z, false]);
-    else buckets[op].push([m.x, m.y, m.z, !!m.rapid]);
+    else buckets[op].push([m.x - shifts[op][0], m.y, m.z - shifts[op][1], !!m.rapid]);
   }
 
   const each = ops.map((op, i) => {

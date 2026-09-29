@@ -18,7 +18,9 @@
 // on a file they did not write.
 
 import { openFile, ACCEPT } from '../../io/files.js';
-import { readGcode, reviewProgram, rapidCutFinding } from '../../engine/backplot.js';
+import {
+  readGcode, reviewProgram, rapidCutFinding, aboutNoseCentre,
+} from '../../engine/backplot.js';
 import { renderGcodePanel } from '../gcode-panel.js';
 import { SimulationPlayback } from '../../engine/simulate.js';
 import { turningProfile, barFromStock } from '../../engine/lathe.js';
@@ -167,7 +169,19 @@ export function makeCheckActions(ctx, space) {
     const setup = doc.activeSetup();
     const space_ = setup ? resolveSetupSpace(setup) : {};
     const { stock = null, meshes = [] } = space_;
+    // A turning program is not a milling program with different numbers in it:
+    // the part spins, X is a radius off the centreline, and there is no Y. Run
+    // through the milling simulator it is drawn against a stationary billet and
+    // every pass back to the start of the next cut reads as a rapid through
+    // metal — which is what reading back this app's own lathe file reported.
+    // The generated-program path has always branched here; this one did not.
+    const turning = (setup?.mode ?? 'mill') === 'turn';
     const { pieces, lineMap } = piecesByTool(file.name, cl, lineOf, doc.project.tools ?? []);
+    // and a lathe file drives each tool by its touch-off point, where the rest
+    // of the app reads a path as the nose centre — see aboutNoseCentre
+    if (turning) {
+      for (const p of pieces) if (p.tool) p.cl = aboutNoseCentre(p.cl, p.tool);
+    }
 
     // The program in the panel, so its text can be read and clicked through
     // beside the path — the same panel a generated program uses, and the same
@@ -195,13 +209,6 @@ export function makeCheckActions(ctx, space) {
     // One cutter per piece; the sentence names each, and says which were guessed.
     const tool = pieces.every((p) => p.tool) ? pieces[0].tool : null;
     const why = describeTools(pieces);
-    // A turning program is not a milling program with different numbers in it:
-    // the part spins, X is a radius off the centreline, and there is no Y. Run
-    // through the milling simulator it is drawn against a stationary billet and
-    // every pass back to the start of the next cut reads as a rapid through
-    // metal — which is what reading back this app's own lathe file reported.
-    // The generated-program path has always branched here; this one did not.
-    const turning = (setup?.mode ?? 'mill') === 'turn';
     let simulated = false;
     if (stock && tool) {
       try {

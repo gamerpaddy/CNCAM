@@ -659,3 +659,24 @@ test('a canned cycle whose R is inside the metal is a rapid that takes metal', (
   const ok = simulateRemoval({ stock: STOCK, ops: [{ cl: clear.cl, tool: TOOL }] });
   assert.eq(ok.rapidCut.count, 0, 'an R clear of the top is clear');
 });
+
+test('a dwell is a pause, not a code the reader could not read, and not a move', () => {
+  // GRBL and the lathe write their holes long-hand, and a hole with a dwell
+  // ends in `G4 P…` — so checking this app's own file said a code in it went
+  // unread. And a Fanuc spells the time with X: `G04 X1.5` was read as a move
+  // to X1.5 in the middle of the part.
+  const cl = new CLBuilder();
+  cl.toolChange(1);
+  cl.spindle(2000);
+  cl.event('feeds', { cut: 500, plunge: 150 });
+  cl.rapid(10, 10, 5);
+  cl.drill(10, 10, -6, { retractZ: 2, peck: 0, dwell: 0.5 });
+  const { text } = buildGcode('grbl', [{ name: 'holes', cl: cl.finish() }]);
+  assert.ok(/^G4 P0\.5$/m.test(text), `the dwell is written, got:\n${text}`);
+  const r = readGcode(text);
+  assert.eq(r.parsed.unsupported.length, 0,
+    `nothing went unread: ${JSON.stringify(r.parsed.unsupported)}`);
+  const fanuc = readGcode(program('G21 G90', 'G0 X10 Y10 Z5', 'G1 Z-2 F100', 'G04 X1.5', 'G0 Z5'));
+  assert.ok(fanuc.parsed.points.every((p) => p.x === 10),
+    `the dwell's X is a time, got ${JSON.stringify(fanuc.parsed.points)}`);
+});

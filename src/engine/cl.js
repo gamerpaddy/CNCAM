@@ -356,6 +356,12 @@ export function lastXY(cl) {
   return [cl.data[o + 1], cl.data[o + 2]];
 }
 
+/** The height of the most recent move, or null before the first. */
+export function lastZ(cl) {
+  cl.merger?.flush();
+  return cl.count > 0 ? cl.data[(cl.count - 1) * MOVE_STRIDE + 3] : null;
+}
+
 /** Iterate a finished CL program: cb(opcode, x, y, z, i, j, k, feedClass, index). */
 export function eachMove(cl, cb) {
   const d = cl.moves;

@@ -25,6 +25,44 @@ const NO_STEPDOWN = new Set([
   'turnGroove', 'turnThread', 'turnDrill', 'turnPart', 'turnFinish',
 ]);
 
+/** Passes that take the part's surface as all there is — see `roughingLeftover`. */
+const FINISHING = new Set(['parallel3d', 'waterline']);
+
+/** Passes that clear an area level by level, leaving a staircase on a slope. */
+const ROUGHING = new Set(['clear2d', 'adaptive', 'pocket']);
+
+/**
+ * How far above the finished surface the passes before this one in its setup
+ * may have left metal standing.
+ *
+ * A roughing pass takes an area down a level at a time, so on a slope it
+ * leaves a step between each pair of levels — as tall as its stepdown, with its
+ * allowance on top. That is the most there can be, and a finishing pass whose
+ * entries and links come closer to the surface than that meets the steps at
+ * rapid. Works for an operation not yet in the setup: then every enabled pass
+ * in it is before it.
+ */
+export function roughingLeftover(setup, op) {
+  let most = 0;
+  for (const previous of setup?.operations ?? []) {
+    if (previous.id === op.id) break;
+    if (!previous.enabled || !ROUGHING.has(previous.type)) continue;
+    const q = previous.params ?? {};
+    most = Math.max(most, (q.stepdown ?? 0) + Math.max(0, q.stockToLeave ?? 0));
+  }
+  return most;
+}
+
+/** An entry gap that clears `leftover`, with half a millimetre to spare. */
+export function suggestedEntryGap(leftover) {
+  return Math.ceil((leftover + 0.5) * 2) / 2;
+}
+
+export function isFinishingPass(type) { return FINISHING.has(type); }
+
+/** Strategies that step across by a share of the cutter — see op-params.js `stepover`. */
+const STEPPED = new Set(['face', 'pocket', 'clear2d', 'parallel3d', 'bore', 'slot']);
+
 /** Strategies with one height rather than two — see op-params.js `topZ`. */
 const NO_TOP_Z = new Set(['turnPart']);
 
@@ -334,6 +372,12 @@ export function opPreflight(doc, op) {
         + `cutter from ${maxDepth.toFixed(1)}mm up — it would rub the wall.`);
     }
   }
+  // A project from before the field stopped at 1×D, or a hand edit.
+  if (STEPPED.has(op.type) && p.stepover > 1 + 1e-9
+    && !(op.type === 'slot' && !(p.slotWidth > 0))) {
+    notes.push(`A stepover of ${p.stepover}×D is wider than the cutter, so the passes do `
+      + 'not meet — each one leaves a strip of stock standing beside it.');
+  }
   if (op.type === 'contour2d' && p.tabCount > 0) {
     if (!(p.tabHeight > 0)) notes.push('Tab height is zero, so the tabs hold nothing.');
     if (!(p.tabWidth > 0)) notes.push('Tab width is zero, so the tabs hold nothing.');
@@ -441,6 +485,21 @@ export function opPreflight(doc, op) {
   if ((op.type === 'parallel3d' || op.type === 'waterline') && tool?.type === 'flat') {
     notes.push('A flat cutter leaves steps on curved surfaces — a ball or bull nose '
       + 'follows the form.');
+  }
+  // A finishing pass takes the part's own surface as the thing in the way: it
+  // rapids down to the entry gap above it, and links across at the same height.
+  // A roughing pass before it leaves a staircase on every slope, each step as
+  // tall as its stepdown, and a 1mm gap is inside every one of them — measured
+  // after an ordinary Z-level rough, waterline rapided 1.1mm into the steps on
+  // the slope part and parallel finishing 1.9mm into them on the clamp.
+  if (FINISHING.has(op.type) && setup) {
+    const leftover = roughingLeftover(setup, op);
+    const gap = p.entryGap ?? 1;
+    if (leftover > 0 && gap <= leftover + 1e-9) {
+      notes.push(`The roughing before this leaves steps up to ${round3(leftover)}mm above the `
+        + `finished surface, and this pass enters and links ${round3(gap)}mm above it — its `
+        + `rapids will run into them. Set Entry gap to ${suggestedEntryGap(leftover)}mm or more.`);
+    }
   }
   if (setup) {
     const stock = setup.stock;
@@ -589,10 +648,15 @@ export function opBlockedReason(doc, op) {
     return 'the drawing it follows is no longer in the project — choose another, '
       + 'or the part\'s own outline';
   }
-  const stale = stalePicks(doc, op);
-  if (stale) {
-    return `${stale === 1 ? 'a face or edge it was picked on is' : `${stale} faces or edges it was picked on are`} `
-      + 'on a model no longer in the project — re-pick, or clear the picks';
+  const { gone, elsewhere } = pickProblems(doc, op);
+  const picks = (n) => (n === 1 ? 'a face or edge it was picked on is'
+    : `${n} faces or edges it was picked on are`);
+  if (gone) {
+    return `${picks(gone)} on a model no longer in the project — re-pick, or clear the picks`;
+  }
+  if (elsewhere) {
+    return `${picks(elsewhere)} on a model this setup does not machine — tick it under `
+      + 'Part in the setup, re-pick, or clear the picks';
   }
   return null;
 }
@@ -607,15 +671,30 @@ export function opBlockedReason(doc, op) {
  * pocket came out byte-for-byte the program with no picks, the whole new part.
  * An avoided face going missing is the same failure the other way round. The
  * operation is refused instead, and says why.
+ *
+ * A model the setup has been told not to machine is the same failure arrived
+ * at from the Part list: the face is still in the project, but the part it
+ * belongs to is not in this setup's frame or its mesh. A pocket picked on one
+ * plate, left in a setup that now machines only the other, went on generating
+ * — the other plate, cut inside the first one's face — and said nothing.
  */
 export function stalePicks(doc, op) {
-  let n = 0;
+  const { gone, elsewhere } = pickProblems(doc, op);
+  return gone + elsewhere;
+}
+
+function pickProblems(doc, op) {
+  const setup = doc.findSetupOf?.(op.id) ?? null;
+  const machined = setup ? new Set(setupModelIds(setup, doc.project)) : null;
+  let gone = 0;
+  let elsewhere = 0;
   for (const mode of ['include', 'avoid']) {
     for (const ref of op.regions?.[mode] ?? []) {
-      if (!doc.meshes.has(ref.modelId)) n++;
+      if (!doc.meshes.has(ref.modelId)) gone++;
+      else if (machined && !machined.has(ref.modelId)) elsewhere++;
     }
   }
-  return n;
+  return { gone, elsewhere };
 }
 
 export function formatTime(seconds) {

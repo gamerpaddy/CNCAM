@@ -165,6 +165,63 @@ test('a machine with no tool changer stops for the operator', () => {
   assert.ok(!/^M0$/m.test(auto), 'and then nothing stops');
 });
 
+/** Two passes under flood on two different cutters, so there is a change between. */
+function twoCutters() {
+  return [3, 7].map((number, i) => {
+    const cl = new CLBuilder();
+    cl.toolChange(number);
+    applyCutting(cl, { params: { coolant: 'flood' } }, { ...TOOL, number });
+    cl.rapid(0, 0, 10);
+    cl.cut(5, 0, 0);
+    cl.rapid(5, 0, 10);
+    return { name: `pass ${i + 1}`, cl: cl.finish() };
+  });
+}
+
+test('a change made by hand stops the spindle and the pump before the operator reaches in', () => {
+  // GRBL's M0 is a feed hold: the spindle and the coolant go on running. The
+  // second cutter was fitted by hand with the first still turning at speed
+  // under flood, and the only words before the stop were a comment.
+  const lines = buildGcode('grbl', twoCutters()).text.split('\n');
+  const stops = lines.flatMap((l, i) => (l === 'M0' ? [i] : []));
+  assert.eq(stops.length, 2, 'one stop per cutter');
+  const before = lines.slice(stops[0] + 1, stops[1]);
+  assert.ok(before.includes('M5'), `the spindle is stopped first, got:\n${before.join('\n')}`);
+  assert.ok(before.includes('M9'), 'and the pump');
+  const after = lines.slice(stops[1] + 1);
+  assert.ok(after.indexOf('M3 S9000') >= 0 && after.indexOf('M8') >= 0,
+    `and both are started again for the new cutter, got:\n${after.join('\n')}`);
+  assert.ok(/set its Z zero/.test(lines[stops[1] - 1]),
+    'GRBL has no length offsets, so the stop says the new cutter needs touching off');
+  // a manual change on a control with M6 is the same person at the same spindle
+  const lcnc = buildGcode('linuxcnc', twoCutters(), { toolChanger: 'manual' }).text.split('\n');
+  const between = lcnc.slice(lcnc.indexOf('(operation: pass 2)'), lcnc.indexOf('T7 M6'));
+  assert.ok(between.includes('M5') && between.includes('M9'),
+    `LinuxCNC by hand stops them too, got:\n${lcnc.join('\n')}`);
+  // a changer does it without anybody reaching in, and is left as it was
+  const auto = buildGcode('grbl', twoCutters(), { toolChanger: 'auto' }).text.split('\n');
+  assert.eq(auto.filter((l) => l === 'M5').length, 1, 'only the footer stops an auto-change job');
+});
+
+test('every comment reaches the control in ASCII', () => {
+  // GRBL takes any byte from 0x80 up as a realtime command, inside a comment or
+  // not: the em dash is E2 80 94 and 0x94 is feed override −1%, the × of a
+  // slot summary is C3 97 — rapid override 25% — and an Ä is the safety door.
+  const cl = new CLBuilder();
+  cl.toolChange(3);
+  cl.spindle(9000);
+  cl.comment('6.00mm slot with a ⌀6 cutter — 1 lane × 10 passes, 90° point');
+  cl.rapid(0, 0, 10);
+  cl.cut(5, 0, 0);
+  const { text } = buildGcode('grbl', [{ name: 'Ätzen\n G0 Z-50', cl: cl.finish() }],
+    { programName: 'Übung — Teil 2' });
+  assert.ok(!/[^\x00-\x7f]/.test(text), `nothing past 0x7F, got:\n${text}`);
+  assert.ok(text.includes('(6.00mm slot with a D6 cutter - 1 lane x 10 passes, 90deg point)'),
+    `the symbols keep their meaning, got:\n${text}`);
+  assert.ok(text.includes('(Uebung - Teil 2)'), 'the project name is spelled, not dropped');
+  assert.ok(!/^\s*G0 Z-50/m.test(text), 'and a line break in a name cannot end the comment');
+});
+
 test('a lathe drilled long-hand feeds in mm per revolution, like everything else in the file', () => {
   // G95 is stated in the header, so an F word is millimetres *per revolution*.
   // Long-hand drilling was the one motion the post wrote without the spindle

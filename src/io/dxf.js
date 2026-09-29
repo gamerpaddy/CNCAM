@@ -28,11 +28,15 @@ const UNIT_SCALE = {
   4: 1,          // millimetres
   5: 10,         // centimetres
   6: 1000,       // metres
-  9: 0.0254,     // microinches
+  // 8 and 9 are microinches and mils. The table had 9 labelled microinches and
+  // 8 missing, so a drawing in microinches came in 39,370 times too big.
+  8: 2.54e-5,    // microinches
+  9: 0.0254,     // mils — thousandths of an inch
   10: 914.4,     // yards
   11: 1e-7,      // ångströms — present for completeness, not for machining
-  12: 1e-6,
-  13: 1e-3,
+  12: 1e-6,      // nanometres
+  13: 1e-3,      // microns
+  14: 100,       // decimetres — missing, so a drawing in dm came in a hundred times small
 };
 
 /**
@@ -420,7 +424,18 @@ function splinePoints(entity, tol) {
   const weights = numbers(entity, 41);
   const degree = Math.max(1, Math.round(number(entity, 71, 3)));
   const n = Math.min(xs.length, ys.length);
-  if (n < 2) return [];
+  if (n < 2) {
+    // A spline given only by the points it passes through (11/21) and no
+    // control polygon. Those points are *on* the curve, so joined up they are
+    // the drawing to within the curve's sag between them — where returning
+    // nothing dropped the entity without a word, because a handled type that
+    // makes no path is not counted as skipped.
+    const fx = numbers(entity, 11);
+    const fy = numbers(entity, 21);
+    const out = [];
+    for (let i = 0; i < Math.min(fx.length, fy.length); i++) out.push(fx[i], fy[i]);
+    return out;
+  }
   if (n <= degree || knots.length !== n + degree + 1) {
     // not a spline this can evaluate — the control polygon is at least the
     // right shape, and saying so beats dropping the entity

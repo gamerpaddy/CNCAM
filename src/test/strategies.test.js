@@ -3,7 +3,7 @@ import { generateToolpath, estimateSeconds } from '../engine/toolpath.js';
 import { depthPasses, depthLevelsFor, withFlatLevels } from '../engine/stock.js';
 import { eachMove, OP, FEED } from '../engine/cl.js';
 import { buildGcode } from '../post/index.js';
-import { makeBox, makeStepped } from './fixtures.js';
+import { makeBox, makeStepped, makePocketBlock } from './fixtures.js';
 
 const TOOL = {
   number: 1, diameter: 6, spindleRpm: 10000, feedCut: 800, feedPlunge: 300,
@@ -458,5 +458,41 @@ test('clearing a part the size of its billet leaves no hairline to cut', async (
     });
     assert.close(worst, 0, 1e-6,
       `leadType ${leadType}: the pass put ${worst.toFixed(2)}mm of cutter into the part frame`);
+  }
+});
+
+test('a pocket ramps in at the angle it was set to, not round its own middle', () => {
+  // The innermost ring of a square pocket is its medial point — a loop 0.05mm
+  // across — and every level was entered by ramping round it: eight laps of a
+  // point, a 62° plunge written as thirty-two blocks, set to 3°.
+  const part = makePocketBlock();
+  const stock = { min: [-1, -1, 0], max: [41, 41, 10] };
+  for (const stepover of [0.4, 0.7]) {
+    const cl = generateToolpath({
+      type: 'pocket', tool: TOOL, mesh: part.mesh, stock,
+      params: {
+        topZ: 10, bottomZ: part.floorZ, stepdown: 3, stepover, rampAngle: 3, clearanceHeight: 20,
+        stockToLeave: 0, tolerance: 0.01, leadType: 'none', direction: 'climb',
+      },
+    });
+    let prev = null;
+    let horizontal = 0;
+    let drop = 0;
+    let across = 0;
+    const box = [Infinity, Infinity, -Infinity, -Infinity];
+    eachMove(cl, (opcode, x, y, z, _a, _b, _c, feed) => {
+      if (prev && opcode === OP.LINE && feed === FEED.RAMP) {
+        horizontal += Math.hypot(x - prev[0], y - prev[1]);
+        drop += prev[2] - z;
+        box[0] = Math.min(box[0], x); box[1] = Math.min(box[1], y);
+        box[2] = Math.max(box[2], x); box[3] = Math.max(box[3], y);
+      }
+      prev = [x, y, z];
+    });
+    across = Math.max(box[2] - box[0], box[3] - box[1]);
+    const angle = (Math.atan2(drop, horizontal) * 180) / Math.PI;
+    assert.ok(drop > 0, `stepover ${stepover}: the pocket ramps in`);
+    assert.close(angle, 3, 0.2, `stepover ${stepover}: at the 3° it was set to, got ${angle.toFixed(1)}°`);
+    assert.ok(across > 2, `on a circle of real size, got ${across.toFixed(2)}mm across`);
   }
 });

@@ -21,14 +21,111 @@ import { clearanceProfile, cuttingRadiusOf } from '../engine/tool-geometry.js';
 const MAX_CELLS = 4_000_000;
 
 /**
+ * How near vertical a triangle may be and still count as a wall rather than as
+ * top surface, when `walls` asks — the sine of about half a degree.
+ *
+ * A vertical wall exported from CAD is rarely vertical to the bit: clamp1's
+ * outside walls lean 0.02–0.07° either way, so each wall triangle covers a
+ * sliver a few thousandths of a millimetre wide in plan. A cell centre that
+ * lands in one reads a height from half-way up the wall. For the drop cutter
+ * that is harmless — the top edge is dilated over it anyway — but as the
+ * reference a finished part is measured against it is a gouge report: the
+ * floor cut beside the wall read as 3 to 10mm into the part. Half a degree is
+ * well past any tessellation noise and short of any draft angle a 3-axis
+ * cutter can do anything but step beside.
+ */
+const WALL_NZ = Math.sin((0.5 * Math.PI) / 180);
+
+/**
+ * Whether a triangle is top surface at all, as the doubled signed area of its
+ * plan — the divisor its barycentric weights want — or 0 when it is not.
+ *
+ * One rule for the raster and the probe below, so the two cannot disagree
+ * about what the part's top is.
+ */
+function topSurfaceArea(ax, ay, az, bx, by, bz, cx, cy, cz, walls) {
+  // signed area in XY; zero means the triangle is vertical and contributes
+  // no top surface (its edges are covered by the faces that meet it)
+  const area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+  if (Math.abs(area) < 1e-12) return 0;
+  if (!walls) {
+    // `area` is the normal's Z before normalising; the rest of it is here
+    const nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
+    const ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
+    if (Math.abs(area) < WALL_NZ * Math.hypot(nx, ny, area)) return 0;
+  }
+  return area;
+}
+
+/**
+ * The mesh's top surface at any point in plan: what `buildHeightmap` would give
+ * a cell centred there, without a raster — for the few questions that need a
+ * point between the cells rather than a grid of them.
+ *
+ * @returns (x, y) => height, or −∞ where no part stands over the point
+ */
+export function surfaceProbe(mesh, { walls = true } = {}) {
+  const { positions, indices } = mesh;
+  const b = meshBounds(positions);
+  const spanX = Math.max(1e-6, b.max[0] - b.min[0]);
+  const spanY = Math.max(1e-6, b.max[1] - b.min[1]);
+  // triangles filed by the plan cells they overlap, about as many cells as
+  // triangles, so a probe reads a handful rather than the whole mesh
+  const count = Math.max(1, indices.length / 3);
+  const side = Math.max(1, Math.min(512, Math.round(Math.sqrt(count))));
+  const cellX = spanX / side;
+  const cellY = spanY / side;
+  const buckets = Array.from({ length: side * side }, () => []);
+  const kept = [];
+  for (let t = 0; t < indices.length; t += 3) {
+    const a = indices[t] * 3, bi = indices[t + 1] * 3, c = indices[t + 2] * 3;
+    const area = topSurfaceArea(positions[a], positions[a + 1], positions[a + 2],
+      positions[bi], positions[bi + 1], positions[bi + 2],
+      positions[c], positions[c + 1], positions[c + 2], walls);
+    if (area === 0) continue;
+    const k = kept.length;
+    kept.push(t, area);
+    const i0 = clamp(Math.floor((Math.min(positions[a], positions[bi], positions[c]) - b.min[0]) / cellX), 0, side - 1);
+    const i1 = clamp(Math.floor((Math.max(positions[a], positions[bi], positions[c]) - b.min[0]) / cellX), 0, side - 1);
+    const j0 = clamp(Math.floor((Math.min(positions[a + 1], positions[bi + 1], positions[c + 1]) - b.min[1]) / cellY), 0, side - 1);
+    const j1 = clamp(Math.floor((Math.max(positions[a + 1], positions[bi + 1], positions[c + 1]) - b.min[1]) / cellY), 0, side - 1);
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) buckets[j * side + i].push(k);
+  }
+  return (px, py) => {
+    if (px < b.min[0] || px > b.max[0] || py < b.min[1] || py > b.max[1]) return -Infinity;
+    const i = clamp(Math.floor((px - b.min[0]) / cellX), 0, side - 1);
+    const j = clamp(Math.floor((py - b.min[1]) / cellY), 0, side - 1);
+    let top = -Infinity;
+    for (const k of buckets[j * side + i]) {
+      const t = kept[k];
+      const area = kept[k + 1];
+      const a = indices[t] * 3, bi = indices[t + 1] * 3, c = indices[t + 2] * 3;
+      const ax = positions[a], ay = positions[a + 1];
+      const bx = positions[bi], by = positions[bi + 1];
+      const cx = positions[c], cy = positions[c + 1];
+      // the same barycentric test the raster makes at a cell centre
+      const w0 = ((bx - px) * (cy - py) - (by - py) * (cx - px)) / area;
+      const w1 = ((cx - px) * (ay - py) - (cy - py) * (ax - px)) / area;
+      const w2 = 1 - w0 - w1;
+      if (w0 < -1e-9 || w1 < -1e-9 || w2 < -1e-9) continue;
+      const z = w0 * positions[a + 2] + w1 * positions[bi + 2] + w2 * positions[c + 2];
+      if (z > top) top = z;
+    }
+    return top;
+  };
+}
+
+/**
  * Rasterise the mesh's upward-facing surface into a height grid.
  * Cells with no geometry hold `floor`.
  *
  * @param mesh { positions, indices }
- * @param options { cellSize, bounds, floor }
+ * @param options { cellSize, bounds, floor, walls } — `walls: false` leaves out
+ *   triangles within WALL_NZ of vertical, as well as the exactly vertical ones
+ *   every raster leaves out
  */
 export function buildHeightmap(mesh, {
-  cellSize = 0.25, bounds, floor = -Infinity, dilate = true,
+  cellSize = 0.25, bounds, floor = -Infinity, dilate = true, walls = true,
 } = {}) {
   const b = bounds ?? meshBounds(mesh.positions);
   const width = Math.max(1, Math.ceil((b.max[0] - b.min[0]) / cellSize) + 1);
@@ -36,7 +133,7 @@ export function buildHeightmap(mesh, {
 
   if (width * height > MAX_CELLS) {
     const scale = Math.sqrt((width * height) / MAX_CELLS);
-    return buildHeightmap(mesh, { cellSize: cellSize * scale, bounds: b, floor, dilate });
+    return buildHeightmap(mesh, { cellSize: cellSize * scale, bounds: b, floor, dilate, walls });
   }
 
   const data = new Float32Array(width * height).fill(floor);
@@ -48,10 +145,8 @@ export function buildHeightmap(mesh, {
     const bx = positions[bi], by = positions[bi + 1], bz = positions[bi + 2];
     const cx = positions[c], cy = positions[c + 1], cz = positions[c + 2];
 
-    // signed area in XY; zero means the triangle is vertical and contributes
-    // no top surface (its edges are covered by the faces that meet it)
-    const area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-    if (Math.abs(area) < 1e-12) continue;
+    const area = topSurfaceArea(ax, ay, az, bx, by, bz, cx, cy, cz, walls);
+    if (area === 0) continue;
 
     const i0 = clamp(Math.floor((Math.min(ax, bx, cx) - b.min[0]) / cellSize), 0, width - 1);
     const i1 = clamp(Math.ceil((Math.max(ax, bx, cx) - b.min[0]) / cellSize), 0, width - 1);
