@@ -168,7 +168,9 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
 * **Reading a program back in.** *Export → Check a G-code file* opens any `.nc` —
   ours, another CAM system's, or one somebody typed — draws it, simulates it
   against the billet, measures what it leaves against the model, and checks it
-  for travels, clamps and rapids that take metal. Inch programs, incremental
+  for travels, clamps, rapids that take metal, a holder in the wall, a tap with
+  no hole under it and a thread cut in bar that was to be bored or turned away
+  first. Inch programs, incremental
   programs, R-format arcs and canned cycles all come in; anything it cannot read
   it names rather than skipping.
 * And it checks its own posts the same way. Every time a program is written the

@@ -732,8 +732,9 @@ export function tapCutFinding(sim, ops = []) {
     line: -1,
     step: hit.step,
     text: `The tap${where ? ` in ${where}` : ''} comes down on metal, not on a hole, at `
-      + `${plural(hit.count, 'hole')} — a tap follows a hole and does not cut one, so in solid metal `
-      + `it breaks. Drill the tapping drill first${size}, deep enough that the tap does not `
+      + `${plural(hit.count, 'hole')} — nothing in this program has drilled ${hit.count === 1 ? 'it' : 'them'}, `
+      + 'or not deep enough. A tap follows a hole and does not cut one; in solid metal it '
+      + `breaks. Drill the tapping drill first${size}, deep enough that the tap does not `
       + 'reach the bottom of it.',
   };
 }
