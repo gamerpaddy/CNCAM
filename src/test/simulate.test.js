@@ -623,3 +623,93 @@ test('and it is the cut it measures, not the entry', () => {
     + '0.5xD pass');
   assert.ok(boss.peakWidth < 0.8, `and no moment at ${boss.peakWidth.toFixed(2)}xD`);
 });
+
+// --- the holder in the metal ------------------------------------------------
+//
+// A cutter's flutes are the least of what it is made of. Above them stands the
+// shank, and above that the holder, and both are wider than the slot the cutter
+// makes: a 6mm end mill in a 25mm holder can only go as deep as the metal
+// around the slot is out of the holder's way. The simulation swept the flutes
+// through the stock and said nothing about the rest, so a program that drove the
+// collet into the wall of a deep pocket simulated clean.
+
+/** Cutter, 20mm of flute, then a 6mm shank for 15mm and a 30mm holder above it. */
+const LONG_REACH = {
+  ...FLAT,
+  shank: [{ diameter: 6, length: 15 }],
+  holder: [{ diameter: 30, length: 40 }],
+};
+
+/** A 60x60 block, 50 tall, and a pass of `tool` sweeping a `width` square of it at `depth`. */
+function sweepPass(tool, width, depth) {
+  const cl = new CLBuilder();
+  cl.event('feeds', { cut: 600, plunge: 200 });
+  const r = tool.diameter / 2;
+  const lo = 30 - width / 2 + r;
+  const hi = 30 + width / 2 - r;
+  cl.rapid(30, lo, 60);
+  cl.cut(30, lo, 50 - depth, FEED.PLUNGE);
+  for (let x = lo; x <= hi + 1e-9; x += Math.max(1, r)) {
+    cl.cut(x, lo, 50 - depth);
+    cl.cut(x, hi, 50 - depth);
+  }
+  cl.rapid(30, hi, 60);
+  return { cl: cl.finish(), tool };
+}
+
+/**
+ * The long-reach cutter working `width` across at `depth`, after whatever
+ * cleared the metal around it - nothing, or a wide cutter with nothing above it
+ * that is wider than itself.
+ */
+function pocketRun(width, depth, { tool = LONG_REACH, cleared = 0 } = {}) {
+  const stock = { kind: 'box', min: [0, 0, 0], max: [60, 60, 50] };
+  const ops = [];
+  if (cleared > 0) {
+    const wide = { ...FLAT, diameter: 20, fluteLength: 45, shank: [{ diameter: 20, length: 40 }], holder: [{ diameter: 20, length: 40 }] };
+    ops.push(sweepPass(wide, cleared, depth));
+  }
+  ops.push(sweepPass(tool, width, depth));
+  return simulateRemoval({ stock, ops, maxCells: 90_000 });
+}
+
+test('a holder that comes down into a narrow pocket is in the metal, and the simulation says so', () => {
+  // 20mm of flute and 15 of shank put the holder 35mm above the tip: a pocket
+  // 40mm deep has the holder 5mm below the top of a wall it is only 15mm from.
+  const sim = pocketRun(20, 40);
+  assert.ok(sim.bodyCut.count > 0, `the collet is in the wall (${sim.bodyCut.count} steps)`);
+  assert.close(sim.bodyCut.depth, 5, 0.3, 'by the five millimetres it went too deep');
+  assert.eq(sim.bodyCut.kind, 'holder', 'and it is the holder');
+});
+
+test('and the same pocket a hand shallower, or with the room for the holder, is clean', () => {
+  assert.eq(pocketRun(20, 30).bodyCut.count, 0, 'with the holder still above the stock');
+  // the metal round the slot taken away first, so that the holder comes down
+  // into a pocket it fits and not into the wall beside a slot
+  assert.eq(pocketRun(16, 40, { cleared: 56 }).bodyCut.count, 0, 'with the room for the holder');
+  assert.ok(pocketRun(40, 40, { cleared: 34 }).bodyCut.count > 0,
+    'and not where the pocket is narrower than the holder is wide');
+});
+
+test('a cutter that is as wide as everything above it cannot be in the metal by its body', () => {
+  // no shank and no holder wider than the flutes: nothing to catch on the wall
+  const slim = { ...FLAT, shank: [{ diameter: 6, length: 40 }], holder: [{ diameter: 6, length: 40 }] };
+  assert.eq(pocketRun(20, 45, { tool: slim }).bodyCut.count, 0);
+});
+
+test('a hole drilled deeper than the tool reaches leaves the holder on the top of the stock', () => {
+  // A cycle is walked as one move down its hole, and the holder is tested at the
+  // bottom of it like any other step.
+  const stock = { kind: 'box', min: [0, 0, 0], max: [60, 60, 50] };
+  const hole = (bottom) => {
+    const cl = new CLBuilder();
+    cl.event('feeds', { cut: 600, plunge: 100 });
+    cl.rapid(30, 30, 60);
+    cl.drill(30, 30, bottom, { retractZ: 55 });
+    return simulateRemoval({ stock, ops: [{ cl: cl.finish(), tool: LONG_REACH }], maxCells: 40_000 });
+  };
+  const deep = hole(0);
+  assert.ok(deep.bodyCut.count > 0, 'the holder is in the top of the block');
+  assert.close(deep.bodyCut.depth, 15, 0.3, 'by the fifteen millimetres it went too deep');
+  assert.eq(hole(20).bodyCut.count, 0, 'a shallower hole leaves it in the air');
+});

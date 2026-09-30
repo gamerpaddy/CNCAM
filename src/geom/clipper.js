@@ -218,6 +218,28 @@ export function bufferOpenPaths(paths, halfWidth, arcTolerance = 0.005) {
   return unionPaths(solution).map(fromPath);
 }
 
+/**
+ * Close hairline gaps in a set of loops: grown by `width` and shrunk back, which
+ * fuses anything nearer than twice that and leaves everything else where it was.
+ *
+ * For regions built out of many pieces that were meant to touch. Two pieces
+ * whose shared edge is written with different vertices — a T-junction — meet
+ * only as closely as their coordinates were rounded, and Clipper's integer
+ * grid is 10nm: rotate a mesh and its vertices are rounded independently, the
+ * gap between the pieces comes out a grid step wide, and the union keeps them
+ * apart. One loop that touches itself along a crack is the same thing.
+ *
+ * Growing and shrinking a polygon gives the same polygon to within a grid step
+ * but not the same vertices, so a caller that only wants the cracks closed
+ * should look at what changed before it takes the result — see
+ * SilhouetteStack.
+ */
+export function closeLoops(loops, width) {
+  if (!(width > 0) || loops.length < 1) return loops;
+  const grown = offsetNormalized(loops, width, width / 4);
+  return offsetNormalized(grown, -width, width / 4);
+}
+
 /** Boolean difference: subject minus clip (both sets of closed loops). */
 export function diffLoops(subjectLoops, clipLoops) {
   const clipper = new ClipperLib.Clipper();

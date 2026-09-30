@@ -57,7 +57,12 @@ export function generateContour({
   const clearance = params.clearanceHeight;
   const tolerance = params.tolerance ?? 0.01;
   const direction = params.direction ?? 'climb';
-  const lead = { type: params.leadType ?? 'none', radius: params.leadRadius ?? 0 };
+  const lead = {
+    type: params.leadType ?? 'none',
+    radius: params.leadRadius ?? 0,
+    // a tool working from inside the outline is cutting an opening — see resolveLead
+    cavity: (params.side ?? 'outside') === 'inside',
+  };
   // how high a pass has to go to reach the next one — see engine/heights.js
   const crossAt = crossingPlane(params, stock, fixtures);
 
@@ -375,9 +380,19 @@ export function orderLoopForEntry(rawLoop, direction, lead, from = null, runIn =
  * `orientLoop` the winding is whatever the cut direction wanted and no longer
  * says anything about the geometry, so a caller that orients first and asks
  * afterwards gets a different answer for the same pass.
+ *
+ * The winding means what it says for a part: an outline encloses metal and a
+ * hole encloses air. Tool side *inside* reads the same shape the other way
+ * round — the cutter works from inside the outline, opening it up, so the
+ * outline encloses the air the tool is in and the wall is outside it, and an
+ * island in it is metal. `lead.cavity` says so. Left to the winding, every
+ * pass round such an opening ran the wrong way for its direction (a "climb"
+ * cut was a conventional one) and its lead curled out into the wall, where the
+ * room check found it did not fit and quietly dropped it.
  */
 export function resolveLead(rawLoop, lead) {
-  return { ...lead, materialOutside: lead?.materialOutside ?? loopArea(rawLoop) < 0 };
+  const hole = loopArea(rawLoop) < 0;
+  return { ...lead, materialOutside: lead?.materialOutside ?? (lead?.cavity ? !hole : hole) };
 }
 
 /** Where the tool first arrives on a pass prepared by `orderLoopForEntry`. */

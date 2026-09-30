@@ -217,6 +217,48 @@ test('a cutter too big to orbit in the hole is refused, with the reason', () => 
   assert.ok(/too small for a ⌀12 cutter/.test(notes(cl)), notes(cl));
 });
 
+test('a thread deeper than the flutes rubs the shank on the wall, and says so', () => {
+  // The helix carries the whole cutter out to the thread radius. Above the
+  // flutes that is the shank, which cuts nothing: a ⌀4 shank on a 3.5mm orbit
+  // reaches 5.5mm from the axis, in a hole 5mm in radius that the thread has
+  // not been cut out of. It rubbed the wall the whole way up with no word said.
+  const short = { ...MILL, fluteLength: 6 };
+  const cl = run('threadMill', short, BORED, { bottomZ: 10 });
+  assert.ok(cutMoves(cl) > 0, 'the thread is still cut - it is a warning, not a refusal');
+  assert.ok(/deeper than the cutter's 6mm of flute/.test(notes(cl)), notes(cl));
+  assert.ok(/shank rubs the wall/.test(notes(cl)), notes(cl));
+  // and when the flutes reach the bottom of the hole there is nothing to say
+  const reaching = run('threadMill', { ...MILL, fluteLength: 10 }, BORED, { bottomZ: 10 });
+  assert.ok(!/flute/.test(notes(reaching)), `silent when they do: ${notes(reaching)}`);
+  // ...however deep the hole goes past a cutter that does not reach it
+  assert.ok(/deeper than the cutter's 6mm of flute/.test(notes(run('threadMill', short, BORED, { bottomZ: 0 }))),
+    'through the whole block');
+});
+
+test('a cutter with a neck goes down a deep thread without touching the wall', () => {
+  // orbit 3.5 + a neck of radius 1 = 4.5, inside the hole's 5mm - and a neck
+  // of radius 1.7 is 5.2, which is not
+  const necked = { ...MILL, fluteLength: 6, shank: [{ diameter: 2, length: 30 }] };
+  assert.ok(!/flute/.test(notes(run('threadMill', necked, BORED, { bottomZ: 10 }))),
+    'a slim neck has room');
+  const fat = { ...MILL, fluteLength: 6, shank: [{ diameter: 3.4, length: 30 }] };
+  assert.ok(/shank rubs the wall/.test(notes(run('threadMill', fat, BORED, { bottomZ: 10 }))),
+    'a neck that is too wide again does not');
+  // the widest part of the tool over the stretch counts, not either end of it
+  const stepped = { ...MILL, fluteLength: 6, shank: [{ diameter: 2, length: 2 }, { diameter: 3.4, length: 30 }] };
+  assert.ok(/shank rubs the wall/.test(notes(run('threadMill', stepped, BORED, { bottomZ: 10 }))),
+    'a shoulder in the middle of the hole is the widest point');
+});
+
+test('an external thread has no shank in the way above the flutes', () => {
+  // the cutter is outside the boss, and so is everything above it
+  const cl = run('threadMill', { ...MILL, fluteLength: 3 }, BOSS.mesh, {
+    threadInternal: false, topZ: BOSS.top, bottomZ: BOSS.base,
+  });
+  assert.ok(cutMoves(cl) > 0, 'it cuts');
+  assert.ok(!/flute/.test(notes(cl)), notes(cl));
+});
+
 test('the post refits the helix into arcs rather than a thousand lines', () => {
   const cl = run('threadMill', MILL, BORED, { bottomZ: 10 });
   const { text } = buildGcode('linuxcnc', [{ name: 'thread', cl }]);

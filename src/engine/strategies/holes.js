@@ -19,7 +19,7 @@ import { computeBounds } from '../../geom/mesh.js';
 import { applyCutting, effectiveCutting } from '../cutting.js';
 import { holeApproachZ } from '../heights.js';
 import { regionAllowsPoint } from '../regions.js';
-import { tipAngleOf } from '../tool-geometry.js';
+import { tipAngleOf, fluteLengthOf, shankWidthBetween } from '../tool-geometry.js';
 import { findHoles, findBosses } from './drill.js';
 
 /**
@@ -317,6 +317,7 @@ export function generateThreadMill({
   let cut = 0;
   let tooBig = 0;
   let tight = 0;
+  let rubbing = 0;
   // the threads actually cut, not the ones looked at: reporting a size that was
   // skipped two lines above reads as though it had been made
   const made = new Set();
@@ -352,6 +353,17 @@ export function generateThreadMill({
     const floor = Math.max(params.bottomZ, h.bottom > -Infinity ? h.bottom : params.bottomZ);
     const depth = topZ - floor;
     if (!(depth > 0)) continue;
+    // The flutes cut the thread; whatever is above them does not, and the helix
+    // carries all of the cutter out to the thread radius. Deeper than the
+    // flutes reach, the part of the shank that is in the hole is swung against
+    // the wall it has not been cut out of: `orbit` out from the axis, and its
+    // own radius on top of that, against a hole the thread has not reached.
+    // Nothing said so, and the cutter rubs the whole way up. A cutter with a
+    // neck has room; the default shank is as wide as the cutter and has none.
+    if (internal && depth > fluteLengthOf(tool) + 1e-6
+      && orbit + shankWidthBetween(tool, fluteLengthOf(tool), depth) > h.r + 1e-6) {
+      rubbing++;
+    }
 
     // Bottom up: the cutter goes down the middle of an existing hole in clear
     // air, and every turn of the helix after that is cutting into metal that
@@ -434,6 +446,14 @@ export function generateThreadMill({
     cl.warn(`⌀${cutter} is more than two thirds of the thread in `
       + `${plural(tight, 'hole')} — it will cut, but the chips have nowhere to go. `
       + 'A smaller cutter is the usual answer.');
+  }
+  if (rubbing > 0) {
+    const flute = fluteLengthOf(tool);
+    cl.warn(`${plural(rubbing, 'thread')} ${verb(rubbing, 'goes', 'go')} deeper than the `
+      + `cutter's ${+flute.toFixed(2)}mm of flute, and above the flutes the cutter is too wide `
+      + 'for the hole at the thread radius — its shank rubs the wall the whole way up. Thread '
+      + `only the top ${+flute.toFixed(2)}mm (raise Bottom Z), or use a cutter with more flute `
+      + 'or a neck.');
   }
   return cl.finish();
 }

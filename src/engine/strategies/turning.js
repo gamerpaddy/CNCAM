@@ -697,7 +697,9 @@ function cutOneRoughPass(cl, { profile, at, zHi, zLo, allowance, nose, clearX, s
  * touches the work on its nose and not at the point the drawing calls the tip.
  * See offsetProfile in engine/lathe.js.
  */
-export function generateTurnFinish({ mesh, tool, params, stock, fixtures }) {
+export function generateTurnFinish({
+  mesh, tool, params, stock, fixtures, earlier = null,
+}) {
   const cl = startProgram(tool, params);
   const ctx = turningContext({ mesh, params, stock, tool, fixtures });
   const { profile, clearX, allowance, nose } = ctx;
@@ -739,7 +741,23 @@ export function generateTurnFinish({ mesh, tool, params, stock, fixtures }) {
   }
 
   safeTo(cl, clearX, path[0][0]);
-  cl.rapid(path[0][1] + 1, 0, path[0][0]);
+  // The pass starts where the profile does, and the nose centre stands on the
+  // Z of it: a bar that reaches past that is in the way of the whole nose, and
+  // the rapid in to a millimetre off the profile went through it. A round
+  // insert's 5mm nose stood 6.2mm into a bar left 2mm proud, at traverse.
+  // Nothing can be done about a bar that is not faced from in here — the end
+  // has to come off — but the pass need not run into it at rapid: it comes in
+  // from clear air, at the feed, and says what is missing.
+  // (the innermost the nose reaches: a stub the facing left in the middle of
+  // the end is in its way if it is wider than that, not wider than its centre)
+  const proud = barEndAfter(ctx.bar, earlier, path[0][1] - nose) - path[0][0];
+  if (proud > 1e-6) {
+    cl.warn(`the bar still stands ${round(proud)}mm past where this pass starts, Z${round(path[0][0])} `
+      + `— nothing ahead of it faces the end, and the nose runs into it on the way in, so it is fed `
+      + `in from clear air. Face the bar back to Z${round(ctx.zStart)} first.`);
+  } else {
+    cl.rapid(path[0][1] + 1, 0, path[0][0]);
+  }
   cl.cut(path[0][1], 0, path[0][0], FEED.LEAD);
   for (let i = 1; i < path.length; i++) cl.cut(path[i][1], 0, path[i][0]);
   cl.rapid(path[path.length - 1][1] + 1, 0, end);
@@ -763,6 +781,31 @@ export function generateTurnFinish({ mesh, tool, params, stock, fixtures }) {
       + 'there, so this insert takes the whole depth in one cut; open it with a grooving tool first');
   }
   return finishTurn(cl, ctx, tool, 'external');
+}
+
+/**
+ * Where the end of the bar is once the facing ahead of an operation has been
+ * done: the end of the bar itself, brought back to the Z of each enabled facing
+ * pass that reaches in to `radius`.
+ *
+ * NaN when nothing says what came before, which is not the same as nothing
+ * having come before: an empty list is a bar nobody has faced, and null is a
+ * caller that did not ask.
+ *
+ * @param earlier [{ type, tool, params }] — the enabled operations ahead of this
+ *   one in its setup, in order; null when the caller did not say
+ */
+function barEndAfter(bar, earlier, radius) {
+  if (!Array.isArray(earlier) || !Number.isFinite(bar?.zMax)) return NaN;
+  let end = bar.zMax;
+  for (const op of earlier) {
+    if (op?.type !== 'turnFace') continue;
+    const { bottomZ, faceToRadius = 0 } = op.params ?? {};
+    // facing to a stub leaves the middle of the end standing
+    if (!Number.isFinite(bottomZ) || faceToRadius > radius + 1e-6) continue;
+    end = Math.min(end, bottomZ);
+  }
+  return end;
 }
 
 /**

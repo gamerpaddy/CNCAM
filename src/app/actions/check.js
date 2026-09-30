@@ -19,7 +19,7 @@
 
 import { openFile, ACCEPT } from '../../io/files.js';
 import {
-  readGcode, reviewProgram, rapidCutFinding, aboutNoseCentre,
+  readGcode, reviewProgram, rapidCutFinding, bodyCutFinding, aboutNoseCentre,
 } from '../../engine/backplot.js';
 import { renderGcodePanel } from '../gcode-panel.js';
 import { SimulationPlayback } from '../../engine/simulate.js';
@@ -251,6 +251,8 @@ export function makeCheckActions(ctx, space) {
         // The check that needs the billet rather than the file, and the one
         // most worth having on somebody else's program.
         const crash = rapidCutFinding(sim, ops);
+        const body = bodyCutFinding(sim, ops);
+        if (body) findings.unshift(body);
         if (crash) findings.unshift(crash);
       } catch (err) {
         console.error(err);

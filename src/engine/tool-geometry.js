@@ -405,6 +405,59 @@ export function radiusAt(tool, z) {
 }
 
 /**
+ * The parts of the tool above the flutes that are wider than the cutter, as the
+ * cylinders they are: `bottom` and `top` in height above the tip, `radius`, and
+ * which of the two they belong to.
+ *
+ * What the flutes cut is a slot as wide as they are; these are the parts that
+ * do not fit in it. Narrower shank sections are left out - they stand in the
+ * space the cutter has already cleared, and cut nothing of their own.
+ */
+export function bodyCylinders(tool) {
+  const cutterR = Math.max(0.05, (tool?.diameter ?? 6) / 2);
+  const out = [];
+  for (const { kind, points } of toolSections(tool)) {
+    if (kind === 'cutting') continue;
+    for (let i = 1; i < points.length; i++) {
+      const [r0, za] = points[i - 1];
+      const [r1, zb] = points[i];
+      // a step across to a new diameter, not a wall
+      if (Math.abs(r0 - r1) > 1e-9 || r0 <= cutterR + 1e-6) continue;
+      out.push({ kind, radius: r0, bottom: Math.min(za, zb), top: Math.max(za, zb) });
+    }
+  }
+  return out;
+}
+
+/**
+ * The widest the shank and the holder get anywhere between two heights above
+ * the tip — the part of the tool that does not cut.
+ *
+ * `radiusAt` answers for one height, and takes the flutes into it. A stretch of
+ * tool that has to stay in a hole is a range of heights, and the widest point of
+ * it can be a step in the middle that neither end sees. A step counts as the
+ * radius it steps to, so the flutes' own width at the height where they end is
+ * not the shank's.
+ */
+export function shankWidthBetween(tool, low, high) {
+  let widest = 0;
+  for (const { kind, points } of toolSections(tool)) {
+    if (kind === 'cutting') continue;
+    for (let i = 1; i < points.length; i++) {
+      const [r0, za] = points[i - 1];
+      const [r1, zb] = points[i];
+      const lo = Math.min(za, zb);
+      const hi = Math.max(za, zb);
+      if (hi < low - 1e-9 || lo > high + 1e-9) continue;
+      if (hi - lo < 1e-9) { widest = Math.max(widest, r1); continue; }
+      const at = (z) => r0 + ((r1 - r0) * (z - za)) / (zb - za);
+      widest = Math.max(widest, at(Math.max(lo, low)), at(Math.min(hi, high)));
+    }
+  }
+  return widest;
+}
+
+/**
  * Can this tool reach `depth` below the surface without the shank or the holder
  * fouling the wall of the cut?
  *

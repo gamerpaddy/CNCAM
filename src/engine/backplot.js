@@ -678,6 +678,35 @@ export function rapidCutFinding(sim, ops = []) {
   };
 }
 
+/**
+ * The shank or the holder in the metal, as the simulation counted it.
+ *
+ * The flutes cut a slot as wide as they are, and above them the tool gets wider:
+ * a shank thicker than the cutter, then a holder several times its diameter. Met
+ * by the wall of a pocket deeper than the cutter reaches, that is not a cut, it
+ * is the spindle nose going into the part - and the sweep of the flutes, which
+ * is what the simulation draws, shows a clean pocket all the same.
+ *
+ * @returns a finding, or null when nothing above the flutes touched anything
+ */
+export function bodyCutFinding(sim, ops = []) {
+  const hit = sim?.bodyCut;
+  if (!hit?.count) return null;
+  const op = sim.opEnds ? sim.opEnds.findIndex((end) => end > hit.step) : -1;
+  const where = ops[op]?.name;
+  const part = hit.kind ?? 'holder';
+  return {
+    level: 'warn',
+    line: -1,
+    step: hit.step,
+    text: `The ${part} is in the metal at ${plural(hit.count, 'point')} of the toolpath`
+      + `${where ? `, worst in ${where}` : ''} — up to ${hit.depth.toFixed(2)}mm. The `
+      + `cutter is not long enough for this depth: the ${part} is wider than the slot it `
+      + 'cuts and comes down on the wall beside it. Use a longer cutter, or take the '
+      + 'metal round it away first.',
+  };
+}
+
 /** Which operation a line of the file belongs to. */
 function opAtLine(marks, line) {
   let lo = 0;

@@ -8,7 +8,7 @@ import { generateToolpath } from '../engine/toolpath.js';
 import { eachMove, OP, FEED } from '../engine/cl.js';
 import { silhouetteAbove, projectTriangleBand, SilhouetteStack } from '../geom/silhouette.js';
 import { loopsBounds, loopArea } from '../geom/clipper.js';
-import { makeBox, makeMushroom } from './fixtures.js';
+import { makeBox, makeMushroom, makePocketBlock, makeTube } from './fixtures.js';
 
 const TOOL = {
   number: 1, diameter: 6, spindleRpm: 10000, feedCut: 800, feedPlunge: 300,
@@ -153,4 +153,91 @@ test('clear2d on a plain box still reaches the part wall', () => {
   // a straight-walled part: the tool should come right up to radius distance
   assert.ok(closest < r + 0.2, `expected a wall pass near the part, got ${closest.toFixed(3)}`);
   assert.ok(closest > r - 0.05, 'but never inside the part');
+});
+
+// --- a rim written with a T-junction ----------------------------------------
+//
+// The pocket block's top face is four strips round the mouth of the pocket, and
+// the long strips run past the ends of the short ones: the corner of the mouth
+// is a vertex on the edge of a strip that does not have it. Fine while the
+// coordinates are exact. Turn the mesh - which is what a setup's rotation does,
+// vertex by vertex, rounding each to float32 - and the corner lands a few
+// nanometres off the edge it was on, the strips no longer meet, and the union
+// keeps them apart: the rim is three pieces and the pocket is a notch in
+// the outline, not a hole in it. Nothing downstream finds a hole that is not
+// there.
+
+/** The mesh turned about Z, every vertex rounded on its own as a setup does. */
+function turnMesh(mesh, degrees) {
+  const a = (degrees * Math.PI) / 180;
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  const positions = new Float32Array(mesh.positions.length);
+  for (let i = 0; i < positions.length; i += 3) {
+    const x = mesh.positions[i];
+    const y = mesh.positions[i + 1];
+    positions[i] = x * c - y * s;
+    positions[i + 1] = x * s + y * c;
+    positions[i + 2] = mesh.positions[i + 2];
+  }
+  return { ...mesh, positions };
+}
+
+test('a pocket rim written with a T-junction is still a ring after the mesh is turned', () => {
+  const { mesh } = makePocketBlock({ size: 40, pocketSize: 20, height: 20, depth: 10 });
+  for (const degrees of [0, 17, 30, 45, 60, 82.5, 123, 200]) {
+    const loops = silhouetteAbove(turnMesh(mesh, degrees), 15);
+    const holes = loops.filter((loop) => loopArea(loop) < 0);
+    assert.eq(loops.length, 2, `${degrees}°: the outline and the pocket, got ${loops.length} loops`);
+    assert.eq(holes.length, 1, `${degrees}°: and the pocket is a hole`);
+    const filled = loops.reduce((sum, loop) => sum + loopArea(loop), 0);
+    assert.close(filled, 1200, 0.01, `${degrees}°: 40x40 less the 20x20 pocket`);
+  }
+});
+
+test('a pocket in a mesh with a T-junction is found however the part is turned', () => {
+  const block = makePocketBlock({ size: 40, pocketSize: 20, height: 20, depth: 10 });
+  const cutters = { ...TOOL, diameter: 4, fluteLength: 20 };
+  for (const degrees of [0, 30, 60, 82.5]) {
+    const mesh = turnMesh(block.mesh, degrees);
+    let lo = [Infinity, Infinity];
+    let hi = [-Infinity, -Infinity];
+    for (let i = 0; i < mesh.positions.length; i += 3) {
+      lo = [Math.min(lo[0], mesh.positions[i]), Math.min(lo[1], mesh.positions[i + 1])];
+      hi = [Math.max(hi[0], mesh.positions[i]), Math.max(hi[1], mesh.positions[i + 1])];
+    }
+    const cl = generateToolpath({
+      type: 'pocket', name: 'pocket', tool: cutters, mesh,
+      stock: { min: [lo[0], lo[1], 0], max: [hi[0], hi[1], 20] },
+      params: {
+        topZ: 20, bottomZ: block.floorZ, stepdown: 3, stepover: 0.5, clearanceHeight: 30,
+        stockToLeave: 0, tolerance: 0.01, leadType: 'none', direction: 'climb', rampAngle: 0,
+      },
+    });
+    assert.ok(cl.count > 100, `${degrees}°: the pocket is cut (${cl.count} moves) - ${JSON.stringify(cl.notes)}`);
+  }
+});
+
+test('only a mesh with an edge that is not shared by two triangles is healed', () => {
+  // A closed mesh whose triangles all meet edge to edge has nowhere for a crack
+  // to be, so its silhouette is left exactly as the union made it - and the
+  // healing, which grows and shrinks the loops, costs it nothing.
+  assert.eq(new SilhouetteStack(makeTube(0, 0, 20, 8, 15, 48), { tolerance: 0.01 }).crack, 0, 'a tube');
+  assert.eq(new SilhouetteStack(makeBox(30, 20, 10), { tolerance: 0.01 }).crack, 0, 'a box');
+  assert.ok(new SilhouetteStack(makePocketBlock().mesh, { tolerance: 0.01 }).crack > 0,
+    'a rim with T-junctions is not');
+});
+
+test('healing leaves a ring that was never cracked exactly as it was', () => {
+  // Growing a polygon and shrinking it back gives the same polygon to within a
+  // grid step, and not the same vertices: a toolpath that starts where its ring
+  // does would start somewhere else, and every pocket in a job would move by
+  // nanometres for nothing. Only a crack that was really closed takes the
+  // healed loops.
+  const { mesh } = makePocketBlock({ size: 40, pocketSize: 20, height: 20, depth: 10 });
+  const loops = silhouetteAbove(mesh, 15);
+  assert.eq(loops.length, 2, 'the outline and the pocket');
+  const on = (v) => [0, 10, 30, 40].some((edge) => Math.abs(v - edge) < 1e-9);
+  assert.ok(loops.every((loop) => loop.every(on)),
+    `every corner is where the model put it: ${JSON.stringify(loops)}`);
 });

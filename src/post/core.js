@@ -84,6 +84,17 @@ export function buildProgram(dialect, ops, options = {}) {
   // reaches is clear of the part in every frame, which is what a reorientation
   // needs — the table is about to move the work under a stationary tool.
   const reorientZ = safeZ(ops);
+  // Where the tool is, as [x, y, z] in the coordinates of the operation that
+  // put it there — or null when the program cannot say. It cannot at the start,
+  // after a tool change (a changer parks the head wherever it likes, and a
+  // person touching the new cutter off leaves it wherever they jogged it),
+  // after a block of hand-written G-code, and wherever the datum or the tilted
+  // plane changes under it. See `approach`.
+  let here = null;
+  // How high each setup's operations travel, in that setup's own frame: an
+  // approach lifts to this, not to the highest Z of a program whose other
+  // setups may have their datum somewhere else entirely.
+  const travelTops = setupTops(ops);
   // What is in the spindle. Every operation states the tool it wants, because
   // an operation cannot know what ran before it — but the *program* can, and a
   // second M6 for the tool already fitted is not a no-op: on a machine with a
@@ -132,6 +143,39 @@ export function buildProgram(dialect, ops, options = {}) {
     dialect.drill.cancel(w);
     cycle = null;
     modal.reset(); // cycle lines bypass modal tracking
+  };
+
+  /**
+   * Bring the tool to the start of an operation: up to the travel height,
+   * across, and only then down — the way a person moves a cutter they cannot
+   * see the end of.
+   *
+   * An operation's first move is written from the operation alone, as a single
+   * rapid from the last thing it knows about, and a program cannot know where
+   * the machine is when it starts, or after a tool change. The first move of
+   * the file was `G0 X32 Y-35 Z1`: from wherever the head stood, straight to a
+   * millimetre over the stock, all three axes at once. Left where it was
+   * touched off — on the top of the stock, or a probe plate — the tool skated
+   * across the surface at traverse with the spindle running, and left where a
+   * changer parks it the diagonal came down on the far side of the vice. The
+   * same move between two operations on one cutter is a descent across the
+   * whole part, and only the height of the clamps at the start point stood
+   * between it and a toe clamp on the way.
+   *
+   * So the tool is lifted to the height the operation itself travels at (its
+   * clearance, floored above the clamps: it is the highest Z the operation
+   * reaches), moved across at that height, and the operation's own first move
+   * then comes straight down. Nothing is written when the operation already
+   * starts over the tool, and a move that is level or rising anyway keeps to
+   * one line.
+   */
+  const approach = (motion, x, y, top) => {
+    if (here && Math.abs(here[0] - x) < 5e-4 && Math.abs(here[1] - y) < 5e-4) return;
+    const travel = here ? Math.max(here[2], top) : top;
+    if (!here || here[2] < travel - 1e-9) {
+      motion(w, modal, { rapid: true, x: null, y: null, z: travel });
+    }
+    motion(w, modal, { rapid: true, x, y, z: travel });
   };
 
   /** Everything a cycle line states that its short form does not restate. */
@@ -234,6 +278,7 @@ export function buildProgram(dialect, ops, options = {}) {
           modal.reset();
           activeSpindle = null;
           coolant = null;   // unknown, which is not the same as off — see the footer
+          here = null;
         }
       }
       if (silent) return;
@@ -254,6 +299,15 @@ export function buildProgram(dialect, ops, options = {}) {
         // tool is a fact about the machine, not about the dialect
         dialect.toolChange(w, modal, e, options);
         activeTool = e.tool;
+        // Wherever the head is now is not where the last block left it, and
+        // every word the program holds about it is stale: a changer parks the
+        // head, and a person fitting a cutter by hand jogs it to touch off.
+        // Whether the dialect said so is its own business — GRBL's change by
+        // hand was a comment and an M0 and forgot to, so an operation that
+        // began where the last one ended wrote no X or Y at all, and the next
+        // move came straight down wherever the cutter had been left.
+        modal.reset();
+        here = null;
         // The controller stops the spindle to change a tool, so whatever was
         // running is not running now — see `activeSpindle`.
         activeSpindle = null;
@@ -349,6 +403,7 @@ export function buildProgram(dialect, ops, options = {}) {
         // Nothing about where the tool is survives an operator standing at the
         // machine, and nothing about the controller's state survives M0 either.
         modal.reset();
+        here = null;
       }
       activeSetup = op.setup;
       activeIndexed = thisIndexed;
@@ -366,6 +421,7 @@ export function buildProgram(dialect, ops, options = {}) {
       // block plunges there. Restating every word is the only safe reading of a
       // datum change; a tool change already does exactly this (see the dialects).
       modal.reset();
+      here = null;
       // A tilted work plane is declared *relative to the active work offset* —
       // G68.2 X0 Y0 Z0 is the datum's own origin — so a plane set under G54 is
       // anchored to the wrong place once G55 is in force. Two indexed faces that
@@ -392,6 +448,7 @@ export function buildProgram(dialect, ops, options = {}) {
         if (planeActive || wantsPlane) {
           const z = modal.word('Z', reorientZ, 3);
           if (z) w.line('G0', z);          // clear the part before the swing
+          here = null;
         }
         if (planeActive) { dialect.tiltedPlane?.cancel(w, modal); planeActive = false; }
         if (wantsPlane) {
@@ -427,6 +484,11 @@ export function buildProgram(dialect, ops, options = {}) {
       const opcode = d[o];
       const before = w.lines.length;
       const arc = arcs?.get(n);
+      // A lathe frames its own approach (engine/strategies/turning.js homeFor),
+      // and a wrapped operation's Y is an angle.
+      if (n === 0 && !silent && !arc && !dialect.lathe && !wrap) {
+        approach(motion, d[o + 1], d[o + 2], travelTops.get(op.setup ?? null));
+      }
 
       if (arc) {
         endCycle();
@@ -532,6 +594,13 @@ export function buildProgram(dialect, ops, options = {}) {
     }
     while (events.length) flush(events.shift());
     endCycle();
+    if (!silent) {
+      // A wrapped move's Y is an angle, and a lathe's positions are its own
+      // (see `approach`); a hole leaves the tool at least at its retract plane
+      const last = (cl.count - 1) * MOVE_STRIDE;
+      here = wrap || dialect.lathe ? null
+        : [d[last + 1], d[last + 2], d[last] === OP.DRILL ? d[last + 4] : d[last + 3]];
+    }
     if (wrap && emit.started) { w.line('G94'); modal.force('F'); }
     // neither a synchronised run nor a tapping mode survives the end of the
     // operation that opened it
@@ -797,6 +866,26 @@ function expandTap(w, modal, move, motion, spindle = {}) {
   w.line('M5');
   w.line(rpm > 0 ? `${forward} S${Math.round(rpm)}` : forward);
   modal.force('F');
+}
+
+/**
+ * The highest Z the operations of each setup reach, by setup, in that setup's
+ * own coordinates — the height an approach travels at. Operations that name no
+ * setup are one group.
+ */
+function setupTops(ops) {
+  const tops = new Map();
+  for (const op of ops) {
+    const d = op.cl.moves;
+    let top = -Infinity;
+    for (let n = 0; n < op.cl.count; n++) {
+      const o = n * MOVE_STRIDE;
+      top = Math.max(top, d[o + 3], d[o] === OP.DRILL ? d[o + 4] : -Infinity);
+    }
+    const key = op.setup ?? null;
+    tops.set(key, Math.max(tops.get(key) ?? -Infinity, top));
+  }
+  return tops;
 }
 
 /** Highest Z seen across all programs — used for the final retract. */

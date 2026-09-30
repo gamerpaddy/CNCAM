@@ -1532,6 +1532,78 @@ test('a centre drill starts feeding in front of an unfaced bar, not inside it', 
   }
 });
 
+/** A finishing pass on the shaft, told what was done ahead of it - or nothing (`undefined`). */
+function finishAfter(earlier, toolName, stock = SHAFT_STOCK) {
+  const t = tool(toolName, 1);
+  const op = createOperation('turnFinish');
+  Object.assign(op.params, defaultParamsFor('turnFinish', {
+    stock, modelBounds: { min: [0, 0, shaft.zMin], max: [0, 0, shaft.zMax] }, tool: t,
+  }));
+  const cl = generateToolpath({
+    type: 'turnFinish', name: 'turnFinish', params: op.params, tool: t, stock,
+    mesh: shaft.mesh, fixtures: [], earlier,
+  });
+  return { cl, tool: t, params: op.params };
+}
+
+const sameMoves = (a, b) => a.count === b.count
+  && a.moves.every((v, i) => v === b.moves[i]);
+
+test('a finishing pass does not rapid into an end of the bar nothing has faced', () => {
+  // The pass starts on the Z of the profile, with the nose centre there, and a
+  // bar that stands past it is in the way of the whole nose. The rapid in to a
+  // millimetre off the profile went through it: a round insert's 5mm nose was
+  // 6.2mm into the bar left proud, at traverse. The end has to come off, and
+  // nothing in the pass can do that - but it can come in from clear air, at
+  // the feed, and say what is missing.
+  const bar = barFromStock(SHAFT_STOCK, turningProfile(shaft.mesh));
+  for (const name of ['DCMT 070204 finishing', 'RCMT 1003 copying']) {
+    const told = finishAfter([], name);
+    assert.ok(told.cl.notes.some((n) => n.level === 'warn' && /still stands .*mm past where this pass starts/.test(n.text)),
+      `${name}: says the end is not faced: ${JSON.stringify(told.cl.notes)}`);
+    assert.ok(/Face the bar back to Z60/.test(told.cl.notes.map((n) => n.text).join(' ')),
+      'and to where');
+    const { sim } = runJob(bar, [told]);
+    assert.eq(sim.rapidCut.count, 0,
+      `${name}: ${sim.rapidCut.count} rapids through metal, ${sim.rapidCut.depth.toFixed(2)}mm deep`);
+    // the way in is a feed all the way from outside the bar
+    let firstCut = null;
+    eachMove(told.cl, (op, x, y, z, i, j, k, feed, n) => {
+      if (firstCut == null && op === OP.LINE && feed !== FEED.RAPID) firstCut = { n, x };
+    });
+    const at = firstCut.n * 8;
+    assert.ok(told.cl.moves[(firstCut.n - 1) * 8 + 1] > bar.radius + 1,
+      `${name}: it starts feeding from outside the bar, at R${told.cl.moves[(firstCut.n - 1) * 8 + 1].toFixed(1)}`);
+    assert.ok(told.cl.moves[at] === OP.LINE, 'from there it is a cut');
+  }
+});
+
+test('with the end faced ahead of it a finishing pass comes in at rapid, as before', () => {
+  // Face, rough, finish is the ordinary job, and the finish in it must not
+  // acquire a slow approach or a warning it has no reason for.
+  const bar = barFromStock(SHAFT_STOCK, turningProfile(shaft.mesh));
+  const face = { type: 'turnFace', tool: tool('CNMG 120408 rougher', 2), params: { topZ: bar.zMax, bottomZ: shaft.zMax } };
+  for (const name of ['DCMT 070204 finishing', 'RCMT 1003 copying']) {
+    const faced = finishAfter([face], name);
+    assert.ok(!faced.cl.notes.some((n) => /still stands/.test(n.text)), `${name}: nothing to say`);
+    // the same program as one that was not told anything - the rapid approach
+    assert.ok(sameMoves(faced.cl, finishAfter(undefined, name).cl), `${name}: unchanged`);
+    // a face that stops short of the radius the pass starts at leaves the end standing
+    const stub = finishAfter([{ ...face, params: { ...face.params, faceToRadius: 12 } }], name);
+    assert.ok(stub.cl.notes.some((n) => /still stands/.test(n.text)), `${name}: a stub in the way`);
+    // and one that stops short of the profile's end in Z is not the end
+    const short = finishAfter([{ ...face, params: { ...face.params, bottomZ: shaft.zMax + 0.5 } }], name);
+    assert.ok(short.cl.notes.some((n) => /still stands 0\.5mm/.test(n.text)), `${name}: 0.5mm proud`);
+  }
+});
+
+test('a finishing pass that is not told what came before is left as it was', () => {
+  // A caller that does not say what was done ahead is not a caller with nothing
+  // done ahead. The operation is asked in isolation in a good many places.
+  const alone = finishAfter(undefined, 'RCMT 1003 copying');
+  assert.ok(!alone.cl.notes.some((n) => /still stands/.test(n.text)), 'no claim either way');
+});
+
 test('an internal thread is simulated in the bore, not on the outside', () => {
   // The simulator knew a boring bar worked inside and a threading insert did
   // not — "16IR" and "16ER" are the same type — so an internal thread in a ⌀40

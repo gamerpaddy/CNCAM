@@ -543,6 +543,24 @@ dialect still has the last word (`post/core.js`), and how tightly a fitted arc
 must hug the path it replaces stays a project option, because that is a
 tolerance and belongs to the job.
 
+**Where an operation starts.** An operation's first move is planned from the
+operation alone, as one rapid to a point a millimetre over the stock — and a
+program cannot know where the machine is when it starts, after a tool change, or
+after a block somebody else's G-code has run. `G0 X32 Y-35 Z1` from wherever the
+head stood is all three axes at once: the cutter skates across the stock where
+it was touched off, or comes down on the far side of the vice from the changer's
+park. Between two operations on one cutter it is the same diagonal across the
+whole part. So the post (`approach` in `post/core.js`) lifts to the height the
+operation itself travels at — its highest Z, which the app has already floored
+above the tallest clamp — crosses at that height, and lets the operation's own
+first move come down. It knows where the tool is after an operation, and forgets
+it at a tool change, a new fixturing, a new datum, a hand-written block and a
+tilted plane; the modal words go with it, because a hand change leaves the head
+wherever the operator jogged it and a program that then omitted an X it "already
+had" plunged there. The height is the operation's *setup's*, in that setup's
+own coordinates. A level or rising approach keeps to one line, and the read-back
+check ignores leading rapids by design (see *Reading G-code back*).
+
 Next: pencil finishing, thread milling, and 3+2.
 
 ### Simulation
@@ -914,6 +932,20 @@ planning from the slice alone puts cuts where the tool can never reach. See
 drop-cutter in `src/geom/heightmap.js`, whose heightmap is deliberately
 conservative (dilated by one cell) so rasterisation can never invite the cutter
 into the part.
+
+**Cracks between triangles that meet.** The silhouette is a union of projected
+triangles, and two triangles that share an edge only as a T-junction — a vertex
+on the edge of a neighbour that does not have it — meet exactly while the
+coordinates are exact and a few nanometres apart once the mesh has been turned
+(a setup's rotation rounds every vertex to float32 on its own). Clipper's grid
+is 10nm, the union keeps the two pieces apart, and a pocket's rim comes out as
+three pieces instead of a ring: the pocket is a notch in the outline and no
+longer a hole in it, so nothing finds it. `SilhouetteStack.healed` closes those
+cracks (`closeLoops`: grown by the rounding and shrunk back) and takes the
+closed loops only when they change how many features there are or how many of
+them are holes — growing and shrinking gives the same polygon with other
+vertices, and every toolpath starts where its loops do. A mesh whose every edge
+belongs to two triangles cannot have such a crack and is not touched at all.
 
 ## Tests
 

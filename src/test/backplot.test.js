@@ -1,7 +1,7 @@
 import { test, assert } from './runner.js';
 import { parseGcode } from '../post/parse.js';
 import {
-  readGcode, reviewProgram, comparePaths, checkPost, rapidCutFinding,
+  readGcode, reviewProgram, comparePaths, checkPost, rapidCutFinding, bodyCutFinding,
 } from '../engine/backplot.js';
 import { simulateRemoval } from '../engine/simulate.js';
 import { buildGcode } from '../post/index.js';
@@ -679,4 +679,26 @@ test('a dwell is a pause, not a code the reader could not read, and not a move',
   const fanuc = readGcode(program('G21 G90', 'G0 X10 Y10 Z5', 'G1 Z-2 F100', 'G04 X1.5', 'G0 Z5'));
   assert.ok(fanuc.parsed.points.every((p) => p.x === 10),
     `the dwell's X is a time, got ${JSON.stringify(fanuc.parsed.points)}`);
+});
+
+test('a program that drives the holder into the wall of a pocket is reported, from a file too', () => {
+  // Somebody else's program, read back: the flutes reach 25mm and the holder
+  // above them is thirty wide, and the file plunges 42mm down a slot in the
+  // stock. The sweep of the flutes shows a clean slot; the holder is in the wall.
+  const stock = { kind: 'box', min: [0, 0, 0], max: [60, 60, 50] };
+  const tall = { ...TOOL, shank: [{ diameter: 6, length: 10 }], holder: [{ diameter: 30, length: 40 }] };
+  const r = readGcode(program(
+    'G21 G90', 'G0 X30 Y20 Z60', 'G1 Z8 F200', 'G1 Y40 F600', 'G0 Z60', 'M30',
+  ));
+  const sim = simulateRemoval({ stock, ops: [{ cl: r.cl, tool: tall }] });
+  const found = bodyCutFinding(sim, [{ name: 'the file' }]);
+  assert.ok(found, 'reported');
+  assert.eq(found.level, 'warn', 'as a warning');
+  assert.ok(/holder is in the metal/.test(found.text), `about the holder: ${found?.text}`);
+  assert.ok(/the file/.test(found.text), 'and which operation');
+  // the same slot with the holder above the stock
+  const clean = simulateRemoval({
+    stock: { ...stock, max: [60, 60, 30] }, ops: [{ cl: r.cl, tool: tall }],
+  });
+  assert.eq(bodyCutFinding(clean), null, 'a shallower slot has nothing to report');
 });

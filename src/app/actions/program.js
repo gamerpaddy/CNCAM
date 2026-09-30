@@ -7,7 +7,7 @@
 
 import { mergeMeshes } from '../../geom/mesh.js';
 import { plural, verb, allOf } from '../../engine/text.js';
-import { rapidCutFinding } from '../../engine/backplot.js';
+import { rapidCutFinding, bodyCutFinding } from '../../engine/backplot.js';
 
 /**
  * And how big a program is too big to re-read while somebody is waiting.
@@ -661,8 +661,10 @@ export function makeProgramActions(ctx, space) {
       // of operations, because it is the only line in the message that could
       // stop somebody running the program.
       const crash = rapidCutFinding(sim, ops);
-      if (crash) {
-        ctx.ui.setStatus(`${crash.text} Simulated ${plural(ops.length, 'operation')} `
+      // …and the next most serious: the tool's body, not its flutes, in the work
+      const body = bodyCutFinding(sim, ops);
+      if (crash || body) {
+        ctx.ui.setStatus(`${(crash ?? body).text} Simulated ${plural(ops.length, 'operation')} `
           + `in ${setup.name} — scrub to the moment and look.`, true);
       } else if (sim.truncated) {
         ctx.ui.setStatus('Simulated, but the program outran the record — the last '

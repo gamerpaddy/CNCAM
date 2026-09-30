@@ -13,7 +13,44 @@
 // samples. SilhouetteStack sweeps top-down and accumulates, so each triangle is
 // touched only in the bands it actually spans.
 
-import { unionLoops, loopArea, cleanLoops, normalizedLoops } from './clipper.js';
+import {
+  unionLoops, loopArea, cleanLoops, normalizedLoops, closeLoops,
+} from './clipper.js';
+
+/** The relative step between one float32 and the next. */
+const FLOAT32_EPSILON = 2 ** -23;
+
+/**
+ * Whether any edge of the mesh belongs to other than two triangles.
+ *
+ * A triangle mesh in which every edge is shared by exactly two triangles has no
+ * T-junctions and no cracks - there is nowhere for two triangles to meet along
+ * an edge each of them writes differently - and its silhouette needs no
+ * healing. A mesh that fails this is one that might, and asking costs a pass
+ * over the edges once per mesh.
+ */
+function hasOpenEdges(mesh) {
+  if (openEdgesOf.has(mesh)) return openEdgesOf.get(mesh);
+  const { indices } = mesh;
+  const count = new Map();
+  const n = mesh.positions.length / 3;
+  const touch = (a, b) => {
+    const key = a < b ? a * n + b : b * n + a;
+    count.set(key, (count.get(key) ?? 0) + 1);
+  };
+  for (let t = 0; t < indices.length; t += 3) {
+    touch(indices[t], indices[t + 1]);
+    touch(indices[t + 1], indices[t + 2]);
+    touch(indices[t + 2], indices[t]);
+  }
+  let open = false;
+  for (const uses of count.values()) {
+    if (uses !== 2) { open = true; break; }
+  }
+  openEdgesOf.set(mesh, open);
+  return open;
+}
+const openEdgesOf = new WeakMap();
 
 /**
  * Clip a triangle to the slab zLow <= z <= zHigh and project it to XY.
@@ -129,6 +166,16 @@ export class SilhouetteStack {
     // build up across levels is what turns this from linear into unusable
     this.minArea = tolerance * tolerance;
     this.cleanDistance = tolerance / 5;
+    // How wide a crack between two triangles that meet may be and still be a
+    // seam: the rounding of the mesh's own float32 coordinates, at the largest
+    // of them, and the integer grid the union works on. Well under what the
+    // cleaner may move a point, so nothing that is a feature is closed.
+    let reach = 0;
+    for (let i = 0; i < mesh.positions.length; i += 3) {
+      reach = Math.max(reach, Math.abs(mesh.positions[i]), Math.abs(mesh.positions[i + 1]));
+    }
+    this.crack = hasOpenEdges(mesh)
+      ? Math.min(this.cleanDistance, 2e-5 + 4 * reach * FLOAT32_EPSILON) : 0;
     this.accumulated = [];
     this.top = Infinity;
 
@@ -154,6 +201,37 @@ export class SilhouetteStack {
     this.active = [];   // triangles overlapping the bands seen so far
   }
 
+  /**
+   * The union of a band, with the cracks between triangles that meet closed.
+   *
+   * Triangles that meet along an edge each side writes differently — a
+   * T-junction — leave a crack between them a few nanometres wide once the
+   * mesh has been rotated and every vertex rounded on its own, and a crack is
+   * all it takes to make a pocket's rim two pieces instead of a ring: the pocket
+   * is then a notch in the outline and not a hole in it, and nothing finds it.
+   * Closing them (closeLoops) is only worth taking when it changed the shape of
+   * the answer - the number of loops that are features, or how many of them are
+   * holes, once both are what the silhouette would hand on - because the closed
+   * loops are the same polygons with other vertices, and every toolpath built
+   * on them starts where they do. A keyhole whose slit is exactly closed is a
+   * ring already, and the normalizing below makes it one.
+   *
+   * Only a mesh with an edge that does not belong to two triangles can have
+   * such a crack (see hasOpenEdges); for any other this returns at once.
+   */
+  healed(loops) {
+    if (!(this.crack > 0)) return loops;
+    const shape = (set) => {
+      const features = normalizedLoops(cleanLoops(set, this.cleanDistance))
+        .filter((loop) => isFeature(loop, this));
+      return [features.length, features.filter((loop) => loopArea(loop) < 0).length];
+    };
+    const closed = closeLoops(loops, this.crack);
+    const [before, holesBefore] = shape(loops);
+    const [after, holesAfter] = shape(closed);
+    return before !== after || holesBefore !== holesAfter ? closed : loops;
+  }
+
   /** Silhouette of everything above a tool tip at `z`, as normalized loops. */
   down(z) {
     const zLow = z + this.epsilon;
@@ -177,9 +255,9 @@ export class SilhouetteStack {
     this.top = zLow;
 
     if (bandLoops.length > 0) {
-      const merged = unionLoops(
+      const merged = this.healed(unionLoops(
         this.accumulated.length > 0 ? [...this.accumulated, ...bandLoops] : bandLoops,
-      );
+      ));
       // Union of many touching triangles leaves slivers along the seams, and
       // can pinch a ring into a self-touching keyhole. Both have to go before
       // this becomes the next level's input — and before anything offsets it,

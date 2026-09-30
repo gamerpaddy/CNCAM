@@ -1361,6 +1361,33 @@ test('a bore goes out of date when the drill ahead of it changes', () => {
   assert.eq(opFingerprint(doc, drill, setup), drillBefore, 'the drill is not the bore');
 });
 
+test('a finishing turn goes out of date when the facing ahead of it changes', () => {
+  // It comes in from clear air, at the feed, unless the end of the bar has been
+  // faced back to where it starts (engine/strategies/turning.js barEndAfter),
+  // so moving the face is a different program with none of its own settings
+  // changed.
+  const doc = new Document();
+  const setup = createSetup('Lathe', 'turn');
+  doc.addSetup(setup);
+  const turning = { ...createTool('turning'), number: 1 };
+  doc.addTool(turning);
+  const face = createOperation('turnFace');
+  face.toolId = turning.id;
+  doc.addOperation(setup, face);
+  const finish = createOperation('turnFinish');
+  finish.toolId = turning.id;
+  doc.addOperation(setup, finish);
+  const before = opFingerprint(doc, finish, setup);
+  doc.updateItem(face.params, { bottomZ: face.params.bottomZ + 2 }, 'bottomZ');
+  assert.ok(opFingerprint(doc, finish, setup) !== before, 'a face 2mm further off is a change');
+  doc.undo();
+  assert.eq(opFingerprint(doc, finish, setup), before, 'and putting it back is not');
+  // and the face, which reads nothing ahead of it, does not acquire the finish
+  const faceBefore = opFingerprint(doc, face, setup);
+  doc.updateItem(finish.params, { stepdown: 0.5 }, 'stepdown');
+  assert.eq(opFingerprint(doc, face, setup), faceBefore, 'the face is not the finish');
+});
+
 test('a finishing pass is out of date when the roughing ahead of it changes', () => {
   // It enters and links clear of the steps the roughing leaves (heights.js
   // clearOfRoughing), so a deeper stepdown ahead of it is a different program

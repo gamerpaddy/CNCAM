@@ -3,7 +3,7 @@ import { generateToolpath, estimateSeconds } from '../engine/toolpath.js';
 import { depthPasses, depthLevelsFor, withFlatLevels } from '../engine/stock.js';
 import { eachMove, OP, FEED } from '../engine/cl.js';
 import { buildGcode } from '../post/index.js';
-import { makeBox, makeStepped, makePocketBlock } from './fixtures.js';
+import { makeBox, makeStepped, makePocketBlock, makeTube } from './fixtures.js';
 
 const TOOL = {
   number: 1, diameter: 6, spindleRpm: 10000, feedCut: 800, feedPlunge: 300,
@@ -494,5 +494,86 @@ test('a pocket ramps in at the angle it was set to, not round its own middle', (
     assert.ok(drop > 0, `stepover ${stepover}: the pocket ramps in`);
     assert.close(angle, 3, 0.2, `stepover ${stepover}: at the 3° it was set to, got ${angle.toFixed(1)}°`);
     assert.ok(across > 2, `on a circle of real size, got ${across.toFixed(2)}mm across`);
+  }
+});
+
+// --- a contour worked from inside its outline -------------------------------
+//
+// "Inside the profile (open it up)": the cutter runs inside the outline, so the
+// outline is the wall of an opening and the wall is outside it. The winding of
+// a loop says the opposite - an outline encloses metal, a hole encloses air -
+// which is right for a part and backwards here: a cut asked to climb was a
+// conventional one, and a lead curled out into the wall, where the room check
+// found it did not fit and dropped it without being asked.
+
+/** The loops the tool walks at `z`, as signed areas: positive is counter-clockwise. */
+function loopAreasAt(cl, z) {
+  const runs = [];
+  let run = null;
+  eachMove(cl, (op, x, y, zz, i, j, k, feed) => {
+    if (op !== OP.RAPID && feed !== FEED.LEAD && Math.abs(zz - z) < 1e-6) {
+      (run ??= []).push([x, y]);
+    } else if (run) { runs.push(run); run = null; }
+  });
+  if (run) runs.push(run);
+  return runs.filter((r) => r.length >= 4).map((pts) => {
+    let a = 0;
+    for (let n = 0; n < pts.length; n++) {
+      const [x0, y0] = pts[n];
+      const [x1, y1] = pts[(n + 1) % pts.length];
+      a += x0 * y1 - x1 * y0;
+    }
+    return a / 2;
+  });
+}
+
+function insideContour(side, direction, over = {}, mesh = makeBox(30, 20, 10)) {
+  return generateToolpath({
+    type: 'contour2d', name: 'c', tool: { ...TOOL, diameter: 4 }, mesh,
+    stock: { min: [-2, -2, 0], max: [32, 22, 10] },
+    params: {
+      topZ: 10, bottomZ: 0, stepdown: 20, clearanceHeight: 20, stockToLeave: 0, tolerance: 0.01,
+      rampAngle: 0, leadType: 'none', side, direction, ...over,
+    },
+  });
+}
+
+test('a contour worked from inside its outline climbs with the wall on its right', () => {
+  // Climb keeps the metal on the tool's right. Round the outside of a part the
+  // metal is inside the loop, so that is clockwise; inside an opening the wall
+  // is outside it, so it is counter-clockwise - the other way round.
+  const around = (cl) => Math.sign(loopAreasAt(cl, 0)[0]);
+  assert.eq(around(insideContour('outside', 'climb')), -1, 'round a part: clockwise');
+  assert.eq(around(insideContour('outside', 'conventional')), 1, 'and counter-clockwise the other way');
+  assert.eq(around(insideContour('inside', 'climb')), 1, 'inside an opening: counter-clockwise');
+  assert.eq(around(insideContour('inside', 'conventional')), -1, 'and clockwise the other way');
+});
+
+test('an island in an opening is climbed the other way from its wall', () => {
+  // The bore is an island as far as an opening goes: metal inside it, air
+  // between it and the wall. So it is walked the way a part is.
+  const tube = makeTube(15, 10, 14, 4, 10, 48);
+  const areas = loopAreasAt(insideContour('inside', 'climb', { profile: 'all' }, tube), 0);
+  assert.eq(areas.length, 2, 'the outline and the bore');
+  areas.sort((a, b) => Math.abs(b) - Math.abs(a));
+  assert.eq(Math.sign(areas[0]), 1, 'the wall: counter-clockwise');
+  assert.eq(Math.sign(areas[1]), -1, 'the island: clockwise');
+});
+
+test('a lead into an opening curls into the opening, and is not dropped', () => {
+  for (const leadType of ['arc', 'tangent']) {
+    const cl = insideContour('inside', 'climb', { leadType, leadRadius: 2 });
+    const ring = [];
+    const lead = [];
+    eachMove(cl, (op, x, y, z, i, j, k, feed) => {
+      if (op === OP.RAPID) return;
+      (feed === FEED.LEAD ? lead : ring).push([x, y, z]);
+    });
+    assert.ok(lead.length > 0, `${leadType}: there is a lead`);
+    assert.ok(!cl.notes.some((n) => /lead is left off/.test(n.text)), `${leadType}: none was dropped`);
+    // the tool-centre outline is the box 2mm in from the 30x20 part's edges
+    // the tool's own radius in, and a lead that stays in the opening is inside it
+    const inside = ([x, y]) => x > 2 - 1e-6 && x < 28 + 1e-6 && y > 2 - 1e-6 && y < 18 + 1e-6;
+    assert.ok(lead.every(inside), `${leadType}: the lead stays in the opening`);
   }
 });

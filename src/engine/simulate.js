@@ -14,7 +14,9 @@
 
 import { MOVE_STRIDE, OP, FEED, syncFeed, rapidSeconds, feedRate, descentOf } from './cl.js';
 import { inheritedColumns, settleThrough, cutFromSimulation } from './workpiece.js';
-import { profileTable, bladeHalfWidth, threadFlankRise } from './tool-geometry.js';
+import {
+  profileTable, bladeHalfWidth, threadFlankRise, bodyCylinders,
+} from './tool-geometry.js';
 import { isRoundStock } from './stock.js';
 
 const DEFAULT_MAX_CELLS = 40_000;   // ~200x200; keeps re-shading interactive
@@ -149,6 +151,64 @@ function watchMove(log) {
   };
 }
 
+/**
+ * How much metal has to stand in the shank's or the holder's way before it is
+ * a collision and not the rounding of the surface: a twentieth of a millimetre.
+ */
+const BODY_EPS = 0.05;
+
+/**
+ * Whether the part of the tool above its flutes is in the metal with the tip at
+ * `at`, and how far: the highest the stock stands inside each cylinder's radius
+ * above where the cylinder starts.
+ *
+ * The flutes have already cut what they reach, so a cell under them is down at
+ * their level and cannot be in the way; what this finds is the metal beside the
+ * slot, at the height the wider part of the tool has come down to.
+ */
+function bodyTouch(heights, mask, grid, at, body, stockTop) {
+  const { width, height, cellSize, origin } = grid;
+  let worst = 0;
+  let kind = null;
+  for (const cylinder of body) {
+    const floor = at[2] + cylinder.bottom;
+    // nothing stands that high, however wide the tool is up there
+    if (floor >= stockTop - BODY_EPS) continue;
+    const r = cylinder.radius;
+    const r2 = r * r;
+    const i0 = clampIndex(Math.floor((at[0] - r - origin[0]) / cellSize), width);
+    const i1 = clampIndex(Math.ceil((at[0] + r - origin[0]) / cellSize), width);
+    const j0 = clampIndex(Math.floor((at[1] - r - origin[1]) / cellSize), height);
+    const j1 = clampIndex(Math.ceil((at[1] + r - origin[1]) / cellSize), height);
+    for (let j = j0; j <= j1; j++) {
+      const ey = at[1] - (origin[1] + j * cellSize);
+      const row = j * width;
+      for (let i = i0; i <= i1; i++) {
+        const cell = row + i;
+        if (mask[cell] === 0) continue;
+        const over = heights[cell] - floor;
+        if (!(over > worst)) continue;
+        const ex = at[0] - (origin[0] + i * cellSize);
+        if (ex * ex + ey * ey > r2) continue;
+        worst = over;
+        kind = cylinder.kind;
+      }
+    }
+  }
+  return worst > BODY_EPS ? { depth: worst, kind } : null;
+}
+
+/** Add one step's collision, if it had one, to the tally. */
+function countBody(bodyCut, touch, step) {
+  if (!touch) return;
+  bodyCut.count++;
+  if (touch.depth > bodyCut.depth) {
+    bodyCut.depth = touch.depth;
+    bodyCut.step = step;
+    bodyCut.kind = touch.kind;
+  }
+}
+
 /** Add one watched rapid to the tally, if it took anything worth the name. */
 function countRapid(rapidCut, watch) {
   const { depth, step } = watch.took();
@@ -270,11 +330,16 @@ export function simulateRemoval({
   // on correct programs is a warning nobody reads. The simulation knows what
   // was actually in front of the tool.
   const rapidCut = { count: 0, depth: 0, step: -1 };
+  // The other way the tool meets metal it has no business with: not the flutes,
+  // which the sweep above is about, but the shank or the holder above them,
+  // wider than the slot, coming down on the wall beside it. See `bodyTouch`.
+  const bodyCut = { count: 0, depth: 0, step: -1, kind: null };
   for (const { cl, tool } of ops) {
     // the profile *and* the radius it covers, from one builder, so the sweep and
     // the shape it sweeps with can never disagree about how wide the cutter is
     const cutter = profileTable(tool);
     const radius = cutter.radius;
+    const body = bodyCylinders(tool);
     // this cutter's own width, or the budget's piece if that is coarser
     const subStepLength = Math.max(radius * 2, minSubStep);
     const d = cl.moves;
@@ -316,6 +381,7 @@ export function simulateRemoval({
         }
         const took = cut(heights, mask, log, step, grid,
           [x, y, retractZ], [x, y, zBottom], cutter, stockTop, columns);
+        if (body.length) countBody(bodyCut, bodyTouch(heights, mask, grid, [x, y, zBottom], body, stockTop), step);
         // a hole is full width by definition and travels no distance across the
         // floor, so there is no radial width to report — only how deep it went
         load.push(2 * radius, took.depth, radius, false);
@@ -350,6 +416,7 @@ export function simulateRemoval({
             const a = lerp(prev, p, (s - 1) / subs);
             const b = lerp(prev, p, s / subs);
             const took = cut(heights, mask, watch ?? log, step, grid, a, b, cutter, stockTop, columns);
+            if (body.length) countBody(bodyCut, bodyTouch(heights, mask, grid, b, body, stockTop), step);
             const travel = Math.hypot(b[0] - a[0], b[1] - a[1]);
             // A rapid that removes anything is a crash, not a cut, and dividing
             // its swath by its length would report it as a gentle one.
@@ -397,6 +464,7 @@ export function simulateRemoval({
     times: new Float32Array(times),
     ...load.trimmed(opEnds),
     rapidCut,
+    bodyCut,
     totalSeconds: seconds,
     truncated,
   };

@@ -191,10 +191,20 @@ function squarePass() {
   });
 }
 
-/** The first motion block after `from`, whatever letters survived modality. */
-function firstMoveAfter(text, from) {
+/**
+ * The axes the program states between `from` and its first cut, whatever
+ * letters survived modality. A tool is brought to a new start in more than one
+ * block (post/core.js `approach`: up, across, down), so it is the blocks
+ * together that have to leave no axis unsaid.
+ */
+function axesStatedAfter(text, from) {
   const lines = text.split('\n').map((l) => l.trim());
-  return lines.slice(lines.indexOf(from) + 1).find((l) => /^(G0|G1|[XYZ])/.test(l));
+  const axes = new Set();
+  for (const line of lines.slice(lines.indexOf(from) + 1)) {
+    if (/^G1\b/.test(line)) break;
+    if (/^(G0|[XYZ])/.test(line)) for (const [letter] of line.matchAll(/[XYZ]/g)) axes.add(letter);
+  }
+  return [...axes].sort().join('');
 }
 
 test('a work offset change restates every axis, because the numbers moved under them', () => {
@@ -209,9 +219,8 @@ test('a work offset change restates every axis, because the numbers moved under 
     { name: 'b', cl, wcs: 'G55' },
   ], { programName: 'restated' });
 
-  const move = firstMoveAfter(text, 'G55');
-  assert.ok(/X/.test(move) && /Y/.test(move) && /Z/.test(move),
-    `the first block in a new offset states X, Y and Z — got "${move}"`);
+  assert.eq(axesStatedAfter(text, 'G55'), 'XYZ',
+    'the first blocks in a new offset state X, Y and Z');
 });
 
 test('crossing into another setup stops the program so the part can be re-fixtured', () => {
@@ -232,9 +241,8 @@ test('crossing into another setup stops the program so the part can be re-fixtur
     'and it says what it is waiting for');
   assert.ok(lines.indexOf('M5') < lines.indexOf('M0'),
     'the spindle is stopped before the operator is asked to reach in');
-  const move = firstMoveAfter(text, 'M0');
-  assert.ok(/X/.test(move) && /Y/.test(move) && /Z/.test(move),
-    `nothing about where the tool is survives an operator — got "${move}"`);
+  assert.eq(axesStatedAfter(text, 'M0'), 'XYZ',
+    'nothing about where the tool is survives an operator');
 
   // and one setup's worth of operations is still one uninterrupted program
   const { text: single } = buildGcode('linuxcnc', [
