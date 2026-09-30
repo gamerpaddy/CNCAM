@@ -405,13 +405,31 @@ function snapBoreRow(doc, setup) {
   ]);
 }
 
-/** The largest diameter anywhere on the part, about the Z axis. */
-function partDiameter(meshes) {
+/**
+ * The largest diameter anywhere on the part, about the Z axis - or about the
+ * middle of the part when it is going to sit in a vise rather than a chuck.
+ */
+function partDiameter(meshes, aboutTheMiddle = false) {
+  let cx = 0;
+  let cy = 0;
+  if (aboutTheMiddle) {
+    const lo = [Infinity, Infinity];
+    const hi = [-Infinity, -Infinity];
+    for (const mesh of meshes) {
+      const b = computeBounds(mesh.positions);
+      for (let k = 0; k < 2; k++) {
+        lo[k] = Math.min(lo[k], b.min[k]);
+        hi[k] = Math.max(hi[k], b.max[k]);
+      }
+    }
+    cx = (lo[0] + hi[0]) / 2;
+    cy = (lo[1] + hi[1]) / 2;
+  }
   let max = 0;
   for (const mesh of meshes) {
     const p = mesh.positions;
     for (let i = 0; i < p.length; i += 3) {
-      const r = Math.hypot(p[i], p[i + 1]);
+      const r = Math.hypot(p[i] - cx, p[i + 1] - cy);
       if (r > max) max = r;
     }
   }
@@ -739,9 +757,13 @@ function ensureStockShape(doc, setup) {
     // first bar you are offered is the bar you would buy — and it is longer
     // than the part at both ends, so there is something to face and something
     // to hold. See engine/stock.js.
-    const swung = round2(partDiameter(meshes));
+    //
+    // On a mill the bar is held in a vise, centred on the part: its swing is
+    // about the middle of the part and there is nothing behind it to chuck.
+    const milling = (setup.mode ?? 'mill') !== 'turn';
+    const swung = round2(partDiameter(meshes, milling));
     const diameter = Math.max(swung || 0, size[0], size[1]);
-    const chucking = chuckingAllowanceFor(diameter);
+    const chucking = milling ? 0 : chuckingAllowanceFor(diameter);
     doc.updateItem(stock, {
       cylinder: {
         diameter,
@@ -750,7 +772,10 @@ function ensureStockShape(doc, setup) {
         innerDiameter: 0,
         height: round2(size[2] + chucking),
         align: 'center',
-        offset: [0, 0, 0],
+        // the millimetre over the top of the part that `size` carries stands
+        // proud of it, as a box billet's top margin does, rather than hanging
+        // out of the bottom of a bar registered flush with the top
+        offset: [0, 0, milling ? 1 : 0],
       },
     }, `init stock ${stock.kind}`);
   }

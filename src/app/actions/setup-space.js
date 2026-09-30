@@ -94,7 +94,7 @@ export function makeSetupSpace(doc) {
    */
   function sizeNewStock(setup) {
     if (isRoundStock(setup.stock)) {
-      const derived = deriveCylinder([...doc.meshes.values()]);
+      const derived = deriveCylinder([...doc.meshes.values()], setup.mode ?? 'mill');
       if (derived) setup.stock.cylinder = derived;
       return;
     }

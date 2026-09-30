@@ -107,6 +107,14 @@ that starts that way is five operations all warning that the chuck is in the
 way. **Fit to part** buttons under the diameter offer the exact size, a light
 skim, and the next standard bar size up.
 
+A *milling* setup that is given round stock gets the same treatment with two
+differences that follow from where the bar is held. The lathe measures the swing
+about the spindle, because a chuck puts the part on the axis; a mill centres the
+bar on the part and holds it in a vise, so the swing is about the part's own
+middle and there is nothing behind it to chuck. Measured about the origin, a
+40mm block authored in the corner of the model space came out in a ⌀114 bar and
+the clamp sample in one of ⌀1165 — a disc of air for every operation to rough.
+
 **Operations** — nineteen strategies, grouped by the stage of the job they
 belong to. Milling: facing; **Z-level** and **adaptive** roughing; 2D **contour** and
 **pocketing**; **drilling** with automatic circular-hole recognition and

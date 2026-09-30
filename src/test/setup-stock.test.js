@@ -382,3 +382,42 @@ test('a facing pass over round stock does not raster the corners of its bounding
     previous = p;
   }
 });
+
+// --- a round billet for a milling setup ----------------------------------------
+//
+// The first size a round setup is given is "the smallest bar the part fits in",
+// and it was worked out about the Z axis through the origin - the right answer
+// for a shaft on a lathe, whose axis is the spindle. A milling setup registers
+// the bar against the part instead, centred on it, so a part authored anywhere
+// but the origin got a bar sized for the distance to the origin: 114mm for a
+// 40mm block sitting in the corner of the model space, 1165mm for the clamp part.
+// Every operation then roughed a disc of air, and Simulate sized its cells for it.
+
+test('a round billet for a milling setup is sized about the part, not about the origin', async () => {
+  const { makeBox: box } = await import('./fixtures.js');
+  const near = box(40, 40, 20);                         // 0..40 in the corner of the model space
+  const far = { ...near, positions: near.positions.map((v, i) => (i % 3 === 0 ? v + 500 : v)) };
+  for (const [name, mesh] of [['in the corner', near], ['far from the origin', far]]) {
+    const stock = computeStock([mesh], { kind: 'cylinder', cylinder: null }, 'mill');
+    // a 40x40 block swings ⌀56.57, and a millimetre more
+    assert.close(stock.cylinder.diameter, Math.hypot(40, 40) + 1, 0.01,
+      `${name}: the bar is the part's own swing, ⌀${stock.cylinder.diameter}`);
+    // and it stands a millimetre proud of the part and no further behind it
+    assert.close(stock.max[2] - stock.min[2], 20 + 1, 0.01, `${name}: 21mm tall, not a chucking bar`);
+    const centre = stock.cylinder.center;
+    // the part is inside it
+    let worst = 0;
+    for (let i = 0; i < mesh.positions.length; i += 3) {
+      worst = Math.max(worst, Math.hypot(mesh.positions[i] - centre[0], mesh.positions[i + 1] - centre[1]));
+    }
+    assert.ok(worst <= stock.cylinder.diameter / 2 + 1e-6, `${name}: the corners are inside the bar`);
+  }
+});
+
+test('and a lathe bar is still sized about the axis it turns on', async () => {
+  const { makeShaft } = await import('./fixtures.js');
+  const { mesh } = makeShaft();
+  const stock = computeStock([mesh], { kind: 'cylinder', cylinder: null }, 'turn');
+  assert.close(stock.cylinder.diameter, 31, 0.01, 'a ⌀30 shaft is in a ⌀31 bar');
+  assert.ok(stock.max[2] - stock.min[2] > 60 + 15, 'with a chucking allowance behind it');
+});

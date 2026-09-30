@@ -125,27 +125,39 @@ export function chuckingAllowanceFor(diameter) {
  * Longer than the part at both ends, and for different reasons: a millimetre
  * proud of the free end so there is something to face, and a chucking allowance
  * behind it so there is something to hold.
+ *
+ * That is a bar for a lathe, and on a lathe the axis is the spindle: the part is
+ * concentric with it by construction, so its swing is measured about the origin.
+ * A milling setup registers the bar against the part instead, centred on it and
+ * held in a vise, so the swing is about the part's own centre and there is
+ * nothing behind it to chuck. Measured about the origin, a 40mm block authored
+ * in the corner of the model space got a bar of ⌀114, and the clamp part - which
+ * sits a good way from it - one of ⌀1165.
+ *
+ * @param mode 'turn' (the default) or 'mill'
  */
-export function deriveCylinder(meshes) {
-  return autoCylinder(meshes);
+export function deriveCylinder(meshes, mode = 'turn') {
+  return autoCylinder(meshes, mode);
 }
 
-function autoCylinder(meshes) {
+function autoCylinder(meshes, mode = 'turn') {
   // a project restored without its geometry has models and no meshes; sizing
   // stock off nothing is not an error, it is simply not yet possible
   const real = meshes.filter((m) => m?.positions?.length > 0);
   if (real.length === 0) return null;
+  const b = modelBounds(real);
+  const milling = mode !== 'turn';
+  const axis = milling ? [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2] : [0, 0];
   let maxR = 0;
   for (const mesh of real) {
     const p = mesh.positions;
     for (let i = 0; i < p.length; i += 3) {
-      const r = Math.hypot(p[i], p[i + 1]);
+      const r = Math.hypot(p[i] - axis[0], p[i + 1] - axis[1]);
       if (r > maxR) maxR = r;
     }
   }
-  const b = modelBounds(real);
   const diameter = Math.round((maxR * 2 + 1) * 1000) / 1000;
-  const chucking = chuckingAllowanceFor(diameter);
+  const chucking = milling ? 0 : chuckingAllowanceFor(diameter);
   return {
     diameter,
     innerDiameter: 0,
@@ -191,7 +203,7 @@ export function computeStock(meshes, stockDef, mode = 'mill') {
     // a rectangular billet, plan against a rectangular billet, and only become
     // round once the user happened to edit a field — the declared kind and the
     // resolved kind disagreed, and the viewport showed the wrong one.
-    const spec = stockDef.cylinder ?? autoCylinder(meshes);
+    const spec = stockDef.cylinder ?? autoCylinder(meshes, mode);
     if (!spec) return null;
     const { diameter, height } = spec;
     // a bore can never be as big as the bar it is in; a tube with no wall is a
