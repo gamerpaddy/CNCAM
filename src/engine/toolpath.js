@@ -154,6 +154,25 @@ function clampSafeArgs(args) {
 }
 
 /**
+ * How far the billet stands above the Top Z of a cut that starts from the top of
+ * whatever is there, in mm - 0 when it does not, or when the strategy has a
+ * Top Z of its own kind.
+ *
+ * Top Z is where the cut starts, and every one of these strategies comes down
+ * onto it: a rapid to an entry gap above the first pass. Nothing in the
+ * operation knows what was done before it, so it cannot tell whether the metal
+ * over Top Z was taken off already or is still there - and if it is, that
+ * rapid goes into it. The simulation sees which; the operation can say what it
+ * counted on.
+ */
+function standingAboveTopZ(args) {
+  const top = args.stock?.max?.[2];
+  const topZ = args.params?.topZ;
+  if (!CUT_FROM_TOP.has(args.type) || !Number.isFinite(top) || !Number.isFinite(topZ)) return 0;
+  return Math.max(0, top - topZ);
+}
+
+/**
  * Strategies whose path depends on the operations ahead of them in the setup,
  * whatever they themselves are set to — so they are handed those operations as
  * `earlier`, and their fingerprint takes them in (app/op-status.js).
@@ -213,6 +232,17 @@ export function generateToolpath(args) {
   }
   const { args: clamped, lowered } = clampTopToStock(clampSafeArgs(args));
   const cl = generate(clamped);
+  const below = standingAboveTopZ(clamped);
+  if (below > 0.05 && cl.count > 0) {
+    const mm = (v) => Math.round(v * 1000) / 1000;
+    cl.notes = [...(cl.notes ?? []), {
+      level: 'info',
+      text: `The billet stands ${mm(below)}mm above Top Z (Z${mm(clamped.params.topZ)}, `
+        + `against Z${mm(clamped.stock.max[2])}): this operation comes down onto its first `
+        + 'pass at rapid, so whatever stands over it has to have been taken off by an '
+        + 'operation before this one, or the tool rapids into it',
+    }];
+  }
   if (lowered > 0.001) {
     cl.notes = [...(cl.notes ?? []), {
       level: 'info',

@@ -295,6 +295,11 @@ export function buildProgram(dialect, ops, options = {}) {
           stopCoolant();
           if (spindleOn) { w.line('M5'); spindleOn = false; }
         }
+        // What this machine wants said before every change - a park in machine
+        // coordinates, an air blast - is the one thing a post cannot know: whether
+        // those coordinates are homed, and where the changer is. Written verbatim,
+        // ahead of the change however it is made. See doc/machines.js.
+        customBlock(w, options.toolChangeGcode, 'machine tool change');
         // the options go through because whether the machine can change its own
         // tool is a fact about the machine, not about the dialect
         dialect.toolChange(w, modal, e, options);
@@ -308,6 +313,16 @@ export function buildProgram(dialect, ops, options = {}) {
         // move came straight down wherever the cutter had been left.
         modal.reset();
         here = null;
+        // A cutter fitted by hand is touched off wherever somebody jogged it,
+        // often on the work itself, and the spindle is started right after
+        // this: an M3 with the tip resting on the part marks it. Lifted first.
+        if (changesByHand(dialect, options) && !dialect.lathe && !wrap) {
+          const lift = travelTops.get(op.setup ?? null);
+          if (Number.isFinite(lift)) {
+            motion(w, modal, { rapid: true, x: null, y: null, z: lift });
+            here = [NaN, NaN, lift];
+          }
+        }
         // The controller stops the spindle to change a tool, so whatever was
         // running is not running now — see `activeSpindle`.
         activeSpindle = null;

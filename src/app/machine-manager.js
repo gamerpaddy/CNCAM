@@ -117,6 +117,13 @@ const FIELDS = [
       + 'checked \u2014 it goes to the control exactly as typed.',
   },
   {
+    key: 'toolChangeGcode', label: 'Before each tool change', type: 'multiline',
+    hint: 'Written before every tool change, the first one too \u2014 where '
+      + '"G53 G0 Z0" goes on a machine that needs the head parked before the '
+      + 'changer swings. Machine coordinates are only right on a machine that '
+      + 'has been homed, which is why nothing is written unless you say so.',
+  },
+  {
     key: 'endGcode', label: 'End G-code', type: 'multiline',
     hint: 'Written after the tool has retracted and the spindle has stopped, '
       + 'before the end-of-program word. Where "G53 G0 Z0" to park the head '

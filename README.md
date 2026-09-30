@@ -190,8 +190,9 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
   finishes. Shift+click on Generate recomputes everything.
 * Each machine carries its own **start and end G-code** — the work offset it homes
   into, an air blast, the `G53 G0 Z0` that parks the head where the vice is
-  reachable. Written verbatim, after the safety header and before the end of
-  program, and never followed to another machine.
+  reachable — and what to write **before every tool change**. Written verbatim,
+  after the safety header and before the end of program, and never followed to
+  another machine.
 * A **Command** operation is nothing but G-code you type, placed in the running
   order between the cuts: a tool change that is not a T word, a pause to move a
   clamp, a probe macro. Blocks can be saved as presets — for one machine or for

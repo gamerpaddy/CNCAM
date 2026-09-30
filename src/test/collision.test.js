@@ -459,3 +459,37 @@ test('adaptive keeps its links out of an allowance taller than its flutes', asyn
   assert.eq(sim.rapidCut.count, 0, `${sim.rapidCut.count} rapids through stock`);
   assert.ok(overFlutes <= 0.05, `stock ${overFlutes.toFixed(2)}mm above the top of the flutes was cut`);
 });
+
+// --- a cut that starts under the top of the billet -----------------------------
+//
+// Top Z is where the cut starts, and it is not always the top of the billet: a
+// cut can begin four millimetres down, after something else has taken the top
+// off. Every one of these strategies comes down onto its first pass at rapid,
+// and an operation does not know what came before it - if the metal over Top Z
+// is still there, the rapid goes into it (three millimetres of it, here). What
+// it can do is say what it counted on, so that it is on the page next to the
+// simulation that shows whether it held.
+
+test('a cut that starts under the top of the billet says what it counts on', () => {
+  const { mesh } = makeStepped({ base: 40, top: 20, baseHeight: 10, topHeight: 10 });
+  const stock = { kind: 'box-margin', min: [-1, -1, 0], max: [41, 41, 23] };
+  const tool = { ...TOOLS.flat, fluteLength: 20 };
+  for (const type of ['pocket', 'clear2d', 'adaptive', 'contour2d', 'slot']) {
+    const params = { ...defaultParamsFor(type, { stock, tool }), tolerance: 0.05, topZ: 19 };
+    const cl = generateToolpath({ type, name: type, tool, mesh, stock, params, fixtures: [] });
+    if (!cl.count) continue;
+    assert.ok(cl.notes.some((n) => /billet stands 4mm above Top Z \(Z19, against Z23\)/.test(n.text)),
+      `${type}: ${JSON.stringify(cl.notes.map((n) => n.text.slice(0, 70)))}`);
+  }
+});
+
+test('and one that starts at the top of the billet has nothing to say about it', () => {
+  const { mesh } = makeStepped({ base: 40, top: 20, baseHeight: 10, topHeight: 10 });
+  const stock = { kind: 'box-margin', min: [-1, -1, 0], max: [41, 41, 23] };
+  const tool = { ...TOOLS.flat, fluteLength: 20 };
+  for (const type of ['pocket', 'clear2d', 'adaptive', 'contour2d', 'slot']) {
+    const params = { ...defaultParamsFor(type, { stock, tool }), tolerance: 0.05 };
+    const cl = generateToolpath({ type, name: type, tool, mesh, stock, params, fixtures: [] });
+    assert.ok(!cl.notes.some((n) => /billet stands/.test(n.text)), `${type}: nothing to say`);
+  }
+});

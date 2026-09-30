@@ -1087,6 +1087,7 @@ export function makeProgramActions(ctx, space) {
       // verbatim. See doc/machines.js and post/format.js customBlock.
       startGcode: machine?.startGcode ?? '',
       endGcode: machine?.endGcode ?? '',
+      toolChangeGcode: machine?.toolChangeGcode ?? '',
     };
   }
 

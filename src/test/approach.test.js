@@ -15,6 +15,7 @@ import { checkPost } from '../engine/backplot.js';
 import { CLBuilder, MOVE_STRIDE, OP } from '../engine/cl.js';
 import { generateToolpath } from '../engine/toolpath.js';
 import { generateCommand } from '../engine/strategies/command.js';
+import { createMachine } from '../doc/machines.js';
 import { defaultParamsFor } from '../engine/op-defaults.js';
 import { makeStepped, makePocketAndHole } from './fixtures.js';
 
@@ -47,6 +48,9 @@ function approachLines(text, marker) {
 
 const POSTS = ['linuxcnc', 'grbl'];
 
+/** The lines that move the machine, in order - a spindle word between two of them is not one. */
+const moves = (lines) => lines.filter((l) => /^(G0|G1|[XYZ])/.test(l));
+
 /** Two lists of lines are the same when they read the same. */
 const same = (actual, expected, msg) => assert.eq(JSON.stringify(actual), JSON.stringify(expected), msg);
 
@@ -57,11 +61,9 @@ test('a program does not begin with one move from wherever the tool happens to b
   for (const post of POSTS) {
     const { text } = buildGcode(post, [{ name: 'a', cl: pass(1, [20, 15]) }]);
     const lines = text.split('\n');
-    const start = lines.findIndex((l) => /^G0 Z10$/.test(l));
-    assert.ok(start >= 0, `${post} lifts before it does anything else, got:\n${text}`);
-    same(lines.slice(start, start + 3), ['G0 Z10', 'X20 Y15', 'Z1'],
-      `${post}: up, across at that height, then down`);
-    assert.ok(!lines.slice(0, start).some((l) => /^(G0 )?[XY]/.test(l)),
+    same(moves(lines).slice(0, 3), ['G0 Z10', 'X20 Y15', 'Z1'],
+      `${post}: up, across at that height, then down, got:\n${text}`);
+    assert.ok(!lines.slice(0, lines.indexOf('G0 Z10')).some((l) => /^(G0 )?[XY]/.test(l)),
       `${post} moves nothing sideways before it has lifted`);
   }
 });
@@ -110,11 +112,28 @@ test('after a change of cutter the tool goes up before it goes across, whatever 
     ['grbl', {}], ['grbl', { toolChanger: 'auto' }]]) {
     const { text } = buildGcode(post, [{ name: 'a', cl: first }, { name: 'b', cl: second }], options);
     const after = approachLines(text, '(operation: b)');
-    const at = after.findIndex((l) => /^G0 Z10$/.test(l));
-    assert.ok(at >= 0, `${post} ${JSON.stringify(options)} lifts after the change, got:\n${after.join('\n')}`);
-    same(after.slice(at, at + 3), ['G0 Z10', 'X30 Y15', 'Z1'],
-      `${post} ${JSON.stringify(options)} states where it is going after the change`);
+    same(moves(after).slice(0, 3), ['G0 Z10', 'X30 Y15', 'Z1'],
+      `${post} ${JSON.stringify(options)} lifts, then states where it is going, after the change: ${after.join(' | ')}`);
   }
+});
+
+test('a cutter fitted by hand is lifted off the work before the spindle starts', () => {
+  // Touched off wherever it was jogged, often on the part itself: an M3 with the
+  // tip resting on it marks it. A changer's tool is in the air already.
+  const ops = [{ name: 'a', cl: pass(1, [20, 15]) }, { name: 'b', cl: pass(2, [30, 15]) }];
+  for (const [post, options] of [['grbl', {}], ['linuxcnc', { toolChanger: 'manual' }]]) {
+    const lines = buildGcode(post, ops, options).text.split('\n');
+    const second = lines.indexOf('(operation: b)');
+    const stop = lines.findIndex((l, i) => i > second && l === 'M0' || /T2 M6/.test(l));
+    const after = lines.slice(stop);
+    assert.ok(after.indexOf('G0 Z10') >= 0 && after.indexOf('G0 Z10') < after.findIndex((l) => /^M3 /.test(l)),
+      `${post}: lifted before the spindle, got:\n${after.slice(0, 8).join('\n')}`);
+  }
+  // and a machine that changes its own tool starts the spindle where it always did
+  const auto = buildGcode('linuxcnc', ops, { toolChanger: 'auto' }).text.split('\n');
+  const from = auto.findIndex((l) => /T2 M6/.test(l));
+  assert.ok(auto.findIndex((l, i) => i > from && /^M3 /.test(l)) < auto.findIndex((l, i) => i > from && l === 'G0 Z10'),
+    'the spindle is started in the changer\'s own time');
 });
 
 test('each setup crosses at its own height', () => {
@@ -276,4 +295,35 @@ test('a new fixturing, a new datum or a hand-written block each forget where the
     assert.ok(at >= 0, `${what}: lifts first, got:\n${after.join('\n')}`);
     same(after.slice(at, at + 3), expected, `${what}: then across, then down`);
   }
+});
+
+test('a machine can say what it wants done before every tool change', () => {
+  // `G53 G0 Z0` before the changer swings: not CAM, and the one thing a post
+  // cannot know about a machine - whether its machine coordinates are homed and
+  // where its changer is. Written before the change, for the first tool and
+  // every one after, and never on the machine that has nothing to say.
+  const ops = [{ name: 'a', cl: pass(1, [20, 15]) }, { name: 'b', cl: pass(2, [30, 15]) }];
+  const block = 'G53 G0 Z0\nM9';
+  for (const [post, options] of [['linuxcnc', {}], ['grbl', {}], ['grbl', { toolChanger: 'auto' }]]) {
+    const lines = buildGcode(post, ops, { ...options, toolChangeGcode: block }).text.split('\n');
+    const label = `${post} ${JSON.stringify(options)}`;
+    assert.eq(lines.filter((l) => l === 'G53 G0 Z0').length, 2, `${label}: once per tool`);
+    assert.ok(lines.filter((l) => l === '(machine tool change)').length === 2, `${label}: and labelled`);
+    // ahead of the change itself, whichever way it is made
+    const changes = lines.flatMap((l, i) => (/^(T\d M6|M0)$/.test(l) ? [i] : []));
+    const blocks = lines.flatMap((l, i) => (l === 'G53 G0 Z0' ? [i] : []));
+    blocks.forEach((at, k) => assert.ok(at < changes[k], `${label}: block ${k + 1} comes before the change`));
+    // and what the post believed about the tool is gone after it
+    const afterSecond = moves(approachLines(lines.join('\n'), '(operation: b)'));
+    assert.ok(afterSecond.includes('G0 Z10') && afterSecond.some((l) => /^X30 Y15$/.test(l)),
+      `${label}: the tool is brought back the way it always is, got ${afterSecond.join(' | ')}`);
+  }
+  const plain = buildGcode('linuxcnc', ops, {}).text;
+  assert.ok(!/machine tool change/.test(plain), 'nothing is written for a machine that says nothing');
+});
+
+test('a machine record keeps its tool change block, and has none unless it was given one', () => {
+  assert.eq(createMachine({ kind: 'mill' }).toolChangeGcode, '', 'nothing by default');
+  assert.eq(createMachine({ kind: 'mill', toolChangeGcode: 'G53 G0 Z0' }).toolChangeGcode, 'G53 G0 Z0');
+  assert.eq(createMachine({ kind: 'mill', toolChangeGcode: 42 }).toolChangeGcode, '', 'and only text');
 });

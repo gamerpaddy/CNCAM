@@ -201,6 +201,11 @@ export function createMachine(preset = {}) {
     // what it is emitting, which is the point of it.
     startGcode: typeof merged.startGcode === 'string' ? merged.startGcode : '',
     endGcode: typeof merged.endGcode === 'string' ? merged.endGcode : '',
+    // And before every tool change, the first one included: the park the changer
+    // needs, in machine coordinates a post cannot know are homed. The program
+    // already lifts to its own travel height after a change (post/core.js
+    // `approach`); this is for the machine that wants more than that first.
+    toolChangeGcode: typeof merged.toolChangeGcode === 'string' ? merged.toolChangeGcode : '',
     // Rotary axes for indexed 3+1 / 3+2 work, base → part. A plain 3-axis
     // machine has none; a machine that lists them can hold a tilted face under
     // the spindle without the operator re-fixturing. See engine/indexing.js.

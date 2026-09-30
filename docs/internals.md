@@ -921,6 +921,19 @@ that removes a hundredth of a millimetre or more is reported with the depth and
 the moment. That check now runs on programs this app generates too, which is
 where it belongs.
 
+**And the rest of the tool.** The sweep that carves the stock is the cutter's
+flutes; above them stand the shank and then the holder, both wider than the slot
+the flutes cut, and a pocket deeper than the cutter reaches has the holder
+coming down on the wall beside it. The simulation tests every cylinder of the
+tool above the flutes that is wider than the cutter (`bodyCylinders` in
+`engine/tool-geometry.js`) against the stock at the end of each step and at the
+bottom of each hole (`bodyTouch` in `engine/simulate.js`), and reports how many
+steps and how deep as `sim.bodyCut`. Nothing is looked at while the tool is
+higher than its holder can reach, so a program that stays clear costs nothing.
+The panel's own reach warning is the conservative version of the same question —
+it assumes the slot is only as wide as the cutter — and this one is the
+answer for the metal that is actually there.
+
 ### Reachability
 
 Toolpaths are planned against the part's **downward silhouette** — the union of
