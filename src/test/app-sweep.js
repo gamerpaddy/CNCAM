@@ -1558,6 +1558,10 @@ export async function sweep({ only = null, log = console.log, keepJob = false } 
         c.viewport.frameAll();
         await tick(200);
         const canvas = c.viewport.renderer.domElement;
+        // A pointer that is not really down cannot be captured, and the orbit
+        // controls throw when a made-up event asks them to: no real click does.
+        canvas.setPointerCapture = () => {};
+        canvas.releasePointerCapture = () => {};
         const r = canvas.getBoundingClientRect();
         const at = { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, bubbles: true };
         canvas.dispatchEvent(new PointerEvent('pointerdown', at));
@@ -1576,6 +1580,8 @@ export async function sweep({ only = null, log = console.log, keepJob = false } 
         check('a drag is an orbit, not a pick', (op.regions?.include ?? []).length === 0);
         await key('Escape');
         check('Escape stops picking', !c.pickMode);
+        delete canvas.setPointerCapture;
+        delete canvas.releasePointerCapture;
       });
     }
 

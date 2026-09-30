@@ -13,13 +13,13 @@ import { chamferGeometry, maxWidthFor } from '../engine/strategies/chamfer.js';
 import { grooveGeometry } from '../engine/strategies/engrave.js';
 import { boreRadii, circleSegments } from '../engine/strategies/bore.js';
 import {
-  makeBox, makeTube, makeRamp, makePocketBlock, makePocketAndHole,
+  makeBox, makeTube, makeRamp, makePocketBlock, makePocketAndHole, makeStepped, makeBoss,
 } from './fixtures.js';
 import {
   buildFaces, buildEdges, edgeAtPoint, edgeFootprint,
 } from '../geom/faces.js';
 import { resolveRegions } from '../app/regions-ui.js';
-import { mergeMeshes } from '../geom/mesh.js';
+import { mergeMeshes, meshFromSoup } from '../geom/mesh.js';
 
 const CHAMFER90 = {
   number: 3, type: 'chamfer', name: '6mm chamfer', diameter: 6, tipAngle: 90,
@@ -694,4 +694,156 @@ test('a mark does not dive into what the cutter cannot reach', () => {
   // nothing on the wall between them
   const onWall = wide.filter((z) => z > 4.5 && z < 9.5);
   assert.eq(onWall.length, 0, `${onWall.length} points cut on the pocket wall`);
+});
+
+
+test('a mark that passes close to a wall does not carry the tool into it', () => {
+  // The drop cutter is held up where the ball would touch the wall it is
+  // running beside, and a stretch shorter than the cutter with no seat is
+  // bridged: the tool carries straight on at the height of the mark either side
+  // of it. Right along an edge, where the two sides are the same level and the
+  // only question is a coin flip. Wrong at a corner - a line 1mm outside the
+  // corner of a 10mm step, with a 3mm ball, is bridged at the foot of the wall
+  // and the flank of the ball is half a millimetre into it for two millimetres.
+  const { mesh } = makeStepped({ base: 40, top: 20, baseHeight: 10, topHeight: 10 });
+  const BALL3 = { ...FLAT, type: 'ball', diameter: 3, name: '3mm ball' };
+  // 1.0mm from the corner (30, 30) of the step, on the low level
+  const drawing = [{ points: [21.5, 35.4, 37.6, 27.3], closed: false }];
+  const cl = generateToolpath({
+    type: 'engrave', name: 'e', tool: BALL3, mesh, drawing,
+    stock: { min: [-1, -1, 0], max: [41, 41, 21] },
+    params: {
+      topZ: 10, bottomZ: 0, stepdown: 1, clearanceHeight: 25, entryGap: 1,
+      tolerance: 0.05, side: 'on', engraveMode: 'depth', engraveDepth: 0.3,
+    },
+  });
+  // every point of every cut move, not only its ends: a straight mark is two
+  const marks = [];
+  let prev = null;
+  eachMove(cl, (op, x, y, z, i, j, k, feed) => {
+    if (op === OP.RAPID || feed === FEED.RAPID) { prev = null; return; }
+    if (prev) {
+      const pieces = Math.max(1, Math.ceil(Math.hypot(x - prev[0], y - prev[1]) / 0.1));
+      for (let n = 1; n <= pieces; n++) {
+        marks.push([prev[0] + ((x - prev[0]) * n) / pieces, prev[1] + ((y - prev[1]) * n) / pieces,
+          prev[2] + ((z - prev[2]) * n) / pieces]);
+      }
+    }
+    prev = [x, y, z];
+  });
+  assert.ok(marks.length > 40, 'the line is still marked away from the corner');
+  // how far the ball's centre is from the plan of the step (10..30 square)
+  const clear = ([x, y]) => Math.hypot(Math.max(10 - x, 0, x - 30), Math.max(10 - y, 0, y - 30));
+  const nicked = marks.filter((p) => clear(p) < 1.5 - 0.05 && p[2] < 15);
+  assert.eq(nicked.length, 0,
+    `${nicked.length} points at the foot of the wall closer than the ball's radius, e.g. `
+    + JSON.stringify(nicked[0]?.map((v) => +v.toFixed(2))));
+});
+
+test('and a mark along an edge is still one mark', () => {
+  // The case bridging is for: the tool centre exactly on the boundary of a
+  // feature, where "is the tool seated" is a coin flip from one sample to the
+  // next. Along a straight edge the flips do not happen at this resolution - the
+  // line is two points - so the round rim of a boss is the case that shows it:
+  // a circle drawn on the rim of a ⌀20 boss, with a 3mm ball, is one stroke
+  // when the gaps are bridged and sixteen to forty fragments, most of them a
+  // millimetre long, when they are not.
+  const BALL3 = { ...FLAT, type: 'ball', diameter: 3, name: '3mm ball' };
+  const boss = makeBoss({ plate: 60, plateHeight: 10, diameter: 20, height: 12, segments: 96 });
+  for (const points of [200, 60]) {
+    const circle = [];
+    for (let i = 0; i < points; i++) {
+      const a = (i / points) * Math.PI * 2;
+      circle.push(10 * Math.cos(a), 10 * Math.sin(a));
+    }
+    const cl = generateToolpath({
+      type: 'engrave', name: 'e', tool: BALL3, mesh: boss.mesh, drawing: [{ points: circle, closed: true }],
+      stock: { min: [-31, -31, 0], max: [31, 31, 23] },
+      params: {
+        topZ: 22, bottomZ: 10, stepdown: 1, clearanceHeight: 30, entryGap: 1,
+        tolerance: 0.05, side: 'on', engraveMode: 'depth', engraveDepth: 0.3,
+      },
+    });
+    let strokes = 0;
+    let prevWasRapid = true;
+    let length = 0;
+    let prev = null;
+    eachMove(cl, (op, x, y, z, i, j, k, feed) => {
+      const rapid = op === OP.RAPID || feed === FEED.RAPID;
+      if (!rapid && prevWasRapid) strokes++;
+      if (!rapid && prev) length += Math.hypot(x - prev[0], y - prev[1]);
+      prevWasRapid = rapid;
+      prev = [x, y];
+    });
+    assert.ok(strokes <= 2, `${points} points: ${strokes} separate strokes for one circle on a rim`);
+    assert.ok(length > 0.95 * 2 * Math.PI * 10, `${points} points: only ${length.toFixed(1)}mm of the 62.8mm circle is marked`);
+  }
+});
+
+test('an engraved mark across a curved surface follows the curve, not the chord', () => {
+  // A dome, z = 10 - r^2/40, marked with a line across the top. Thinning the
+  // sampled points against their neighbours' midpoint drops every one of them on
+  // a gentle curve - each is a few thousandths off its neighbours - and the
+  // dropped points add up: two points and a 5.6mm sag over the crest, on a mark
+  // that was to be 0.3mm deep.
+  const n = 60;
+  const half = 20;
+  const dome = (x, y) => 10 - (x * x + y * y) / 40;
+  const soup = [];
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const x0 = -half + (i * 2 * half) / n;
+      const x1 = -half + ((i + 1) * 2 * half) / n;
+      const y0 = -half + (j * 2 * half) / n;
+      const y1 = -half + ((j + 1) * 2 * half) / n;
+      const a = [x0, y0, dome(x0, y0)];
+      const b = [x1, y0, dome(x1, y0)];
+      const c = [x1, y1, dome(x1, y1)];
+      const d = [x0, y1, dome(x0, y1)];
+      soup.push(...a, ...b, ...c, ...a, ...c, ...d);
+    }
+  }
+  const mesh = meshFromSoup(new Float32Array(soup));
+  const cl = generateToolpath({
+    type: 'engrave', name: 'e', tool: VBIT60, mesh,
+    drawing: [{ points: [-15, 3, 15, 3], closed: false }],
+    stock: { min: [-20, -20, -20], max: [20, 20, 10.5] },
+    params: {
+      topZ: 10, bottomZ: -20, stepdown: 1, clearanceHeight: 25, entryGap: 1,
+      tolerance: 0.05, side: 'on', engraveMode: 'depth', engraveDepth: 0.3,
+    },
+  });
+  // every point along every cut move, against the surface it should be under
+  let worst = 0;
+  let prev = null;
+  let cutMoves = 0;
+  eachMove(cl, (op, x, y, z, i, j, k, feed) => {
+    if (op === OP.RAPID || feed === FEED.RAPID) { prev = null; return; }
+    cutMoves++;
+    if (prev) {
+      const pieces = Math.max(1, Math.ceil(Math.hypot(x - prev[0], y - prev[1]) / 0.25));
+      for (let m = 1; m <= pieces; m++) {
+        const t = m / pieces;
+        const px = prev[0] + (x - prev[0]) * t;
+        const py = prev[1] + (y - prev[1]) * t;
+        const pz = prev[2] + (z - prev[2]) * t;
+        worst = Math.max(worst, Math.abs(pz - (dome(px, py) - 0.3)));
+      }
+    }
+    prev = [x, y, z];
+  });
+  assert.ok(cutMoves > 3, `the curve is written as more than its ends (${cutMoves} moves)`);
+  assert.ok(worst < 0.12, `the mark is ${worst.toFixed(2)}mm off the 0.3mm-deep groove it should be`);
+});
+
+test('and a flat face is still not resampled into hundreds of moves', () => {
+  const cl = generateToolpath({
+    type: 'engrave', name: 'e', tool: VBIT60, mesh: makeBox(40, 40, 10),
+    drawing: [{ points: [5, 20, 35, 20], closed: false }],
+    params: {
+      topZ: 10, bottomZ: 0, stepdown: 1, clearanceHeight: 25, entryGap: 1,
+      tolerance: 0.05, side: 'on', engraveMode: 'depth', engraveDepth: 0.3,
+    },
+  });
+  assert.ok(cutPoints(cl).length <= 3, `${cutPoints(cl).length} cut points for a line across a flat face`);
 });

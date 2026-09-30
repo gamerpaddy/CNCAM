@@ -199,6 +199,11 @@ export function generateEngrave({
       const s = surface(x, y);
       return s === null ? null : s - below;
     };
+    // and how low the tool may go at a point it is held up at, for the same level
+    zAt.held = (x, y) => {
+      const h = surface.held(x, y);
+      return h === null ? null : h - below;
+    };
     const { outers, holes } = drawnPaths
       ? drawingBoundaries(drawnPaths)
       : splitBoundaries(silhouette.down(z), params.engraveLines ?? 'all');
@@ -278,6 +283,8 @@ export function generateEngrave({
  */
 function engraveSurface(mesh, tool, params, { tolerance, surfaceZ }) {
   const flat = () => surfaceZ;
+  // nothing to be held up by: see `held` below
+  flat.held = () => null;
   if (params.engraveFollow === false || !mesh?.positions?.length) return flat;
   const map = buildHeightmap(mesh, {
     cellSize: Math.max(0.1, Math.min(0.5, (tolerance ?? 0.05) * 4)),
@@ -303,7 +310,7 @@ function engraveSurface(mesh, tool, params, { tolerance, surfaceZ }) {
   // resolution the surface is known to.
   const seated = Math.max(cellSize, 2 * (tolerance ?? 0.05));
 
-  return (x, y) => {
+  const surface = (x, y) => {
     const z = dropCutter(map, kernel, x, y);
     // Off the part, or over a void. Not a height — and saying `surfaceZ` here
     // is what made a line that runs past the edge of the model climb back to
@@ -327,6 +334,16 @@ function engraveSurface(mesh, tool, params, { tolerance, surfaceZ }) {
     if (!Number.isFinite(under)) return null;
     return z - under > seated ? null : z;
   };
+  /**
+   * How low the tool may rest at a point whether or not it is seated there: the
+   * drop cutter's own answer, a wall's top edge held up or not. Null off the
+   * part. What a bridge across a gap has to be checked against.
+   */
+  surface.held = (x, y) => {
+    const z = dropCutter(map, kernel, x, y);
+    return Number.isFinite(z) ? z : null;
+  };
+  return surface;
 }
 
 /**
@@ -370,17 +387,13 @@ function cutAlong(cl, flat, {
     if (run.length >= 2) {
       const [fx, fy, fz] = run[0];
       approach(cl, fx, fy, fz, { clearance: clearanceZ, feedPlane });
-      for (let i = 1; i < run.length; i++) {
-        const [x, y, z, interpolated] = run[i];
-        // An interpolated point is only worth writing where the surface departs
-        // from the straight line the move would otherwise be. On a flat face
-        // that is never, so a two-point line stays a two-point line rather than
-        // becoming fifty moves that say the same thing.
-        if (!interpolated) { cl.cut(x, y, z); continue; }
-        const prev = run[i - 1];
-        const next = run[i + 1] ?? prev;
-        const mid = (prev[2] + next[2]) / 2;
-        if (Math.abs(z - mid) > tolerance) cl.cut(x, y, z);
+      // An interpolated point is only worth writing where the surface departs
+      // from the straight line the move would otherwise be. On a flat face that
+      // is never, so a two-point line stays a two-point line rather than
+      // becoming fifty moves that say the same thing.
+      const keep = thinned(run, tolerance);
+      for (let i = 1; i < run.length - 1; i++) {
+        if (keep[i]) cl.cut(run[i][0], run[i][1], run[i][2]);
       }
       const last = run[run.length - 1];
       cl.cut(last[0], last[1], last[2]);
@@ -447,13 +460,97 @@ function cutAlong(cl, flat, {
     const tooFar = pending.length > 0 && span > bridge;
     const stepped = !!from
       && Math.abs(z - from[2]) > Math.max(maxDrop, span * MAX_FOLLOW_SLOPE);
-    if (tooFar || stepped) flush();
+    // …and the gap has to be one the tool can span at the height it would be
+    // carried at. Held up by a wall it runs beside, it cannot: a line passing a
+    // millimetre from the corner of a step is held up for two millimetres of
+    // it, and carried straight on at the foot of the wall the flank of a ball
+    // is half a millimetre into the wall for all of them.
+    const blocked = !tooFar && !stepped && pending.length > 0
+      && bridgeBlocked(run, pending, [x, y, z], zAt.held, Math.max(2 * tolerance, 0.05));
+    if (tooFar || stepped || blocked) flush();
     else if (pending.length) carryAcross(run, pending, [x, y, z]);
     pending = [];
     run.push([x, y, z, interpolated]);
   }
   flush();
   return cut;
+}
+
+/**
+ * Which points of a run are worth writing: every point the drawing itself has,
+ * and of the samples between them just enough that no sample is more than
+ * `tolerance` above or below the straight move that leaves it out.
+ *
+ * Judged against the move that replaces them, not against their neighbours. A
+ * sample on a gentle curve is a few thousandths off the midpoint of the two
+ * beside it, so each of them passes that test - and dropping all of them is a
+ * chord across the whole curve. On a dome, two points and a 5.6mm sag over the
+ * crest of a mark that was to be 0.3mm deep. Douglas-Peucker on the height
+ * against the way along, between the points the drawing has.
+ */
+function thinned(run, tolerance) {
+  const keep = new Array(run.length).fill(false);
+  keep[0] = true;
+  keep[run.length - 1] = true;
+  const along = [0];
+  for (let i = 1; i < run.length; i++) {
+    along.push(along[i - 1] + Math.hypot(run[i][0] - run[i - 1][0], run[i][1] - run[i - 1][1]));
+  }
+  const between = (lo, hi) => {
+    if (hi - lo < 2) return;
+    const span = along[hi] - along[lo];
+    let worst = 0;
+    let at = -1;
+    for (let i = lo + 1; i < hi; i++) {
+      const t = span > 0 ? (along[i] - along[lo]) / span : 0;
+      const off = Math.abs(run[i][2] - (run[lo][2] + (run[hi][2] - run[lo][2]) * t));
+      if (off > worst) { worst = off; at = i; }
+    }
+    if (worst > tolerance) {
+      keep[at] = true;
+      between(lo, at);
+      between(at, hi);
+    }
+  };
+  // the drawing's own points are always kept, and the samples between two of
+  // them are thinned against the straight move from one to the other
+  let lo = 0;
+  for (let i = 1; i < run.length; i++) {
+    if (run[i][3] && i < run.length - 1) continue;
+    keep[i] = true;
+    between(lo, i);
+    lo = i;
+  }
+  return keep;
+}
+
+/**
+ * Whether carrying the tool across a gap at the height `carryAcross` would put
+ * it there takes it lower than it may go anywhere along the way.
+ *
+ * "May go" is the drop cutter's answer less the depth of the mark: a mark is cut
+ * that far *below* the height the tool rests at, so a point along a bridge that
+ * is that much lower than the level of the mark either side of it is in the
+ * groove the mark makes. Lower than that is in the metal beside it. Along an
+ * edge, where bridging earns its keep, the two are the same level.
+ */
+function bridgeBlocked(run, pending, far, mayGo, slack) {
+  if (typeof mayGo !== 'function') return false;
+  const from = run[run.length - 1];
+  const stops = [from, ...pending, far];
+  const along = [0];
+  let total = 0;
+  for (let i = 1; i < stops.length; i++) {
+    total += Math.hypot(stops[i][0] - stops[i - 1][0], stops[i][1] - stops[i - 1][1]);
+    along.push(total);
+  }
+  for (let i = 0; i < pending.length; i++) {
+    const t = total > 0 ? along[i + 1] / total : 0;
+    const carried = from[2] + (far[2] - from[2]) * t;
+    const lowest = mayGo(pending[i][0], pending[i][1]);
+    if (lowest !== null && lowest - carried > slack) return true;
+  }
+  return false;
 }
 
 /**

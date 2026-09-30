@@ -195,6 +195,18 @@ in the wrong place. With a V bit the depth is also the width, and machinists
 think in the width they want to see, so the operation takes either: a depth, or
 a line width it converts through the cutter's own point angle.
 
+On a model, the mark follows the surface: the cutter is dropped onto the part at
+each sample along the line, and a sample it cannot rest on the surface at - past
+the edge of the part, or held up by the top of a wall it runs beside - is a gap.
+A gap shorter than the cutter is carried across at the height of the mark either
+side, which is what keeps a circle drawn on the rim of a boss one stroke instead
+of forty; it is only carried across where the tool can go lower than that at every
+point along it, so a line that grazes the corner of a step breaks there rather
+than dragging the flank of the cutter through the wall. The samples between the
+points the drawing has are thinned against the straight move that would replace
+them, not against their neighbours: a gentle curve is a few thousandths off its
+neighbours everywhere, and dropping all of them is a chord.
+
 **Lathe turning.** A setup is milled or turned, and a turned one machines a
 *profile* rather than a solid: the largest radius at each point along the
 spindle axis, taken as the envelope of the part so a hex bar or a part with a
