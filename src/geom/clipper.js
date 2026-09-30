@@ -137,6 +137,24 @@ function toPath(loop) {
   return path;
 }
 
+/**
+ * An open path with no point repeated back to back.
+ *
+ * The port's open-path AddPath does not survive one: a lead-out written as the
+ * pass's last point followed by an arc whose first point is that same point
+ * sent it round its local-minima loop until the array holding them could grow
+ * no more — "Invalid array length", from inside a clearing pass. Two equal
+ * points in a row say nothing a single one does not.
+ */
+function withoutRepeats(path) {
+  const out = [];
+  for (const p of path) {
+    const last = out[out.length - 1];
+    if (!last || last.X !== p.X || last.Y !== p.Y) out.push(p);
+  }
+  return out;
+}
+
 function fromPath(path) {
   const loop = new Array(path.length * 2);
   for (let i = 0; i < path.length; i++) {
@@ -257,7 +275,7 @@ export function intersectLoops(subjectLoops, clipLoops) {
  */
 export function clipOpenPaths(paths, clipLoops, mode = 'intersect') {
   const clipper = new ClipperLib.Clipper();
-  clipper.AddPaths(paths.map(toPath).filter((p) => p.length >= 2),
+  clipper.AddPaths(paths.map((p) => withoutRepeats(toPath(p))).filter((p) => p.length >= 2),
     ClipperLib.PolyType.ptSubject, false);
   clipper.AddPaths(clipLoops.map(toPath).filter((p) => p.length >= 3),
     ClipperLib.PolyType.ptClip, true);

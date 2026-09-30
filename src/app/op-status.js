@@ -5,7 +5,10 @@
 // empty viewport will never look. This turns that into something the tree and
 // the properties panel can put in front of them.
 
-import { toolpathStats } from '../engine/toolpath.js';
+import { toolpathStats, READS_EARLIER } from '../engine/toolpath.js';
+import {
+  roughingLeftover as leftoverAfter, suggestedEntryGap, stepsTooTallFor,
+} from '../engine/heights.js';
 import { chamferGeometry, maxWidthFor } from '../engine/strategies/chamfer.js';
 import { grooveGeometry } from '../engine/strategies/engrave.js';
 import { reachCheck, latheReachOf, tipAngleOf } from '../engine/tool-geometry.js';
@@ -28,35 +31,22 @@ const NO_STEPDOWN = new Set([
 /** Passes that take the part's surface as all there is — see `roughingLeftover`. */
 const FINISHING = new Set(['parallel3d', 'waterline']);
 
-/** Passes that clear an area level by level, leaving a staircase on a slope. */
-const ROUGHING = new Set(['clear2d', 'adaptive', 'pocket']);
-
 /**
  * How far above the finished surface the passes before this one in its setup
- * may have left metal standing.
- *
- * A roughing pass takes an area down a level at a time, so on a slope it
- * leaves a step between each pair of levels — as tall as its stepdown, with its
- * allowance on top. That is the most there can be, and a finishing pass whose
- * entries and links come closer to the surface than that meets the steps at
- * rapid. Works for an operation not yet in the setup: then every enabled pass
- * in it is before it.
+ * may have left metal standing — engine/heights.js roughingLeftover, asked of
+ * the passes ahead of `op`. Works for an operation not yet in the setup: then
+ * every enabled pass in it is before it.
  */
 export function roughingLeftover(setup, op) {
-  let most = 0;
+  const earlier = [];
   for (const previous of setup?.operations ?? []) {
     if (previous.id === op.id) break;
-    if (!previous.enabled || !ROUGHING.has(previous.type)) continue;
-    const q = previous.params ?? {};
-    most = Math.max(most, (q.stepdown ?? 0) + Math.max(0, q.stockToLeave ?? 0));
+    if (previous.enabled) earlier.push(previous);
   }
-  return most;
+  return leftoverAfter(earlier);
 }
 
-/** An entry gap that clears `leftover`, with half a millimetre to spare. */
-export function suggestedEntryGap(leftover) {
-  return Math.ceil((leftover + 0.5) * 2) / 2;
-}
+export { suggestedEntryGap };
 
 export function isFinishingPass(type) { return FINISHING.has(type); }
 
@@ -208,7 +198,12 @@ export function opFingerprint(doc, op, setup = null) {
     // and Export posted, a pass that skipped stock on the grounds that a
     // roughing pass which is no longer going to run had already taken it.
     // Reordering the two does the same thing and was equally silent.
-    op.params?.restMachining && setup ? earlierFingerprints(doc, op, setup) : null,
+    //
+    // Boring is the same on a lathe: it starts from the hole the drill ahead
+    // of it made (see engine/strategies/turning.js drilledHole), so changing
+    // that drill changes the bore without touching the bore's own settings.
+    (op.params?.restMachining || READS_EARLIER.has(op.type)) && setup
+      ? earlierFingerprints(doc, op, setup) : null,
   ]);
 }
 
@@ -222,7 +217,8 @@ export function opFingerprint(doc, op, setup = null) {
  * this function answers, one operation up.
  *
  * It only ever looks backwards, so the recursion ends at the first operation in
- * the setup, and it is only entered for an operation with rest machining on.
+ * the setup, and it is only entered for an operation that reads what came before
+ * it: rest machining, and the strategies in `READS_EARLIER`.
  */
 function earlierFingerprints(doc, op, setup) {
   const out = [];
@@ -491,15 +487,21 @@ export function opPreflight(doc, op) {
   // A roughing pass before it leaves a staircase on every slope, each step as
   // tall as its stepdown, and a 1mm gap is inside every one of them — measured
   // after an ordinary Z-level rough, waterline rapided 1.1mm into the steps on
-  // the slope part and parallel finishing 1.9mm into them on the clamp.
+  // the slope part and parallel finishing 1.9mm into them on the clamp. The
+  // pass raises its own gap past them (engine/heights.js clearOfRoughing);
+  // this says what it will use, and why, before it is generated.
   if (FINISHING.has(op.type) && setup) {
     const leftover = roughingLeftover(setup, op);
     const gap = p.entryGap ?? 1;
     if (leftover > 0 && gap <= leftover + 1e-9) {
       notes.push(`The roughing before this leaves steps up to ${round3(leftover)}mm above the `
-        + `finished surface, and this pass enters and links ${round3(gap)}mm above it — its `
-        + `rapids will run into them. Set Entry gap to ${suggestedEntryGap(leftover)}mm or more.`);
+        + `finished surface, above the ${round3(gap)}mm Entry gap — so this pass enters and `
+        + `links ${suggestedEntryGap(leftover)}mm above it instead. Set Entry gap to that or `
+        + 'more to say so here.');
     }
+    // and meets each step whole where a slope is shallow — see heights.js
+    const tall = stepsTooTallFor(leftover, tool);
+    if (tall) notes.push(tall[0].toUpperCase() + tall.slice(1));
   }
   if (setup) {
     const stock = setup.stock;

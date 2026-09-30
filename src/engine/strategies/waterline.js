@@ -26,6 +26,7 @@
 // above left.
 
 import { CLBuilder } from '../cl.js';
+import { plural } from '../text.js';
 import { mergeTolerance } from '../simplify.js';
 import { offsetLoops, unionLoops } from '../../geom/clipper.js';
 import { SilhouetteStack } from '../../geom/silhouette.js';
@@ -35,8 +36,11 @@ import { applyRegionsToPaths, regionRefusal } from '../regions.js';
 import {
   cutLoopPass, cutOpenPass, orderLoopForEntry, loopEntryPoint, loopExitPoint, resolveLead,
 } from './contour.js';
+import { roomOutside } from '../leads.js';
 import { zLevelLinker } from '../linking.js';
-import { entryPlane, crossingPlane, goHome, entryGapOf } from '../heights.js';
+import {
+  entryPlane, crossingPlane, goHome, entryGapOf, clearOfRoughing, roughingNote,
+} from '../heights.js';
 import { applyCutting } from '../cutting.js';
 import { tipLengthOf, cuttingPoints } from '../tool-geometry.js';
 
@@ -109,8 +113,11 @@ export function profileSteps(tool, spacing, maxBands = 12) {
 }
 
 export function generateWaterline({
-  mesh, tool, params, regions, stock, fixtures,
+  mesh, tool, params: given, regions, stock, fixtures, earlier = null,
 }) {
+  // clear of the steps the roughing ahead of this leaves — see heights.js
+  const clear = clearOfRoughing(given, earlier);
+  const { params } = clear;
   const r = tool.diameter / 2;
   const stockToLeave = params.stockToLeave ?? 0;
   const clearance = params.clearanceHeight;
@@ -125,6 +132,7 @@ export function generateWaterline({
   const cl = new CLBuilder().simplify(mergeTolerance(tolerance));
   cl.toolChange(tool.number);
   applyCutting(cl, { params }, tool);
+  roughingNote(cl, clear, tool);
 
   const silhouette = new SilhouetteStack(mesh, { tolerance });
   const clip = { radius: r, tolerance };
@@ -232,9 +240,21 @@ export function generateWaterline({
   // one traverse, and a retract to one height followed by a positioning move to
   // a lower one is a diagonal that cuts the corner off whatever is between.
   const passes = [];
+  // Leads left off because they would have swung into the part or a clamp — see
+  // contour.js leadRoomFor. A waterline ring's lead swings off the wall into
+  // what the roughing left, and the next feature of the part may be in the way.
+  const leadNotes = { gouged: 0 };
+  const leading = lead.type !== 'none' && lead.radius > 0;
+  const rooms = new Map();   // a level's keepout → its lead room, built when asked
+  const roomOf = (keepout) => {
+    if (!rooms.has(keepout)) {
+      rooms.set(keepout, roomOutside(keepout, { stock, regions, radius: r, tolerance, notes: leadNotes }));
+    }
+    return rooms.get(keepout);
+  };
   let from = null;   // the [x, y] the previous pass finishes on
   for (const column of chainColumns(levels)) {
-    for (const { z, loop } of column) {
+    for (const { z, loop, region } of column) {
       if (loop.length / 2 < 3) continue;
       // Which side the metal is on, settled here against the loop the offsetter
       // produced and then carried. Re-derived from `ready` it would come out the
@@ -249,19 +269,21 @@ export function generateWaterline({
         loop: ready,
         lead: passLead,
         link: from ? linkAt([...from, passes[passes.length - 1].z], [...entry, z]) : ceiling,
+        room: leading ? roomOf(region) : null,
       });
       from = loopExitPoint(ready, passLead);
     }
   }
 
   for (let i = 0; i < passes.length; i++) {
-    const { z, loop, link, lead: passLead } = passes[i];
+    const { z, loop, link, lead: passLead, room } = passes[i];
     // each level is entered at depth: the wall above is already cut away, so
     // there is nothing to ramp through
     if (cutLoopPass(cl, loop, z, z, {
       clearance,
       direction,
       lead: passLead,
+      leadRoom: room,
       params,
       crossAt: link,
       // the last pass hands the tool back at clearance — see goHome
@@ -284,6 +306,10 @@ export function generateWaterline({
     if (cutHere) { cutAnything = true; zEntry = z; }
   }
 
+  if (leadNotes.gouged > 0 && cutAnything) {
+    cl.info(`the ${lead.type} lead is left off ${plural(leadNotes.gouged, 'pass', 'passes')} `
+      + 'where it would have swung into the part or a clamp — a smaller lead radius keeps it.');
+  }
   if (!cutAnything) {
     // see engine/regions.js regionRefusal — a picked face that leaves the
     // cutter nowhere to go is not a heights problem
@@ -314,7 +340,7 @@ function chainColumns(levels) {
   const columns = [];
   let openColumns = [];   // { column, at: [x, y] } still being extended
 
-  for (const { z, closed } of levels) {
+  for (const { z, closed, region } of levels) {
     const free = [...openColumns];
     const next = [];
     for (const loop of closed) {
@@ -332,7 +358,7 @@ function chainColumns(levels) {
         entry = { column: [], at: c };
         columns.push(entry.column);
       }
-      entry.column.push({ z, loop });
+      entry.column.push({ z, loop, region });
       entry.at = c;
       next.push(entry);
     }

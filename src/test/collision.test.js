@@ -29,6 +29,14 @@ import { regionReachFor } from '../engine/op-reach.js';
 import { fixtureLoops } from '../engine/fixtures.js';
 import { offsetLoops } from '../geom/clipper.js';
 import { makeStepped, makePocketBlock, makeMushroom, makeBox } from './fixtures.js';
+import { simulateRemoval } from '../engine/simulate.js';
+import { loadSampleBuffer } from './samples.js';
+import { parseSTL } from '../io/stl.js';
+import { meshFromSoup, computeNormals } from '../geom/mesh.js';
+import { resolveSetup } from '../engine/setup.js';
+import { computeStock } from '../engine/stock.js';
+import { createSetup } from '../doc/schema.js';
+import { cutsOf } from './cuts.js';
 
 const TOOLS = {
   flat: { number: 1, type: 'flat', diameter: 6, flutes: 2, fluteLength: 30, spindleRpm: 12000, feedCut: 800, feedPlunge: 250 },
@@ -322,4 +330,132 @@ test('no milling op traverses below a clamp taller than its clearance', () => {
     }
     assert.ok(worst <= 0.1, `${type} passes ${worst.toFixed(1)}mm below the Z${TALL.height} toe clamp`);
   }
+});
+
+// --- what a level takes, measured by the simulator ---------------------------
+//
+// A Z-level pass cuts one level at a time on the promise that the level above
+// took its ground down to itself. Where it did not — a strip beside a vise jaw
+// it skipped, a gap too narrow for adaptive to open — the level below cut that
+// stock at the depth of two or three levels, and dropped onto it at rapid
+// first. Measured on the real simulator's own record, which is what a user
+// sees: every cell a step lowered, how far it came down under the cutter that
+// lowered it, and whether that was above the top of the flutes.
+
+/** Two vise jaws gripping a billet across its X ends, a millimetre off it and taller than it. */
+function viseJaws(stock) {
+  const cy = (stock.min[1] + stock.max[1]) / 2;
+  const jaw = (x) => ({
+    kind: 'box', name: 'Jaw', enabled: true, center: [x, cy],
+    size: [10, (stock.max[1] - stock.min[1]) * 0.6], rotationDeg: 0,
+    baseZ: stock.min[2], height: stock.max[2] - stock.min[2] + 15,
+  });
+  return [jaw(stock.min[0] - 6), jaw(stock.max[0] + 6)];
+}
+
+/** One roughing op the way the app generates it, simulated from the raw billet. */
+function roughAndMeasure(type, mesh, stock, fixtures, over = {}) {
+  const tool = { ...TOOLS.flat, fluteLength: 20 };
+  const params = { ...defaultParamsFor(type, { stock, tool }), tolerance: 0.02, ...over };
+  const cl = generateToolpath({
+    type, name: type, tool, mesh, stock, params, fixtures,
+    regions: fixtures.length
+      ? { include: [], avoid: clampAvoid(type, tool, params, fixtures), cleared: [], edgePaths: [] }
+      : null,
+  });
+  const sim = simulateRemoval({ stock, ops: [{ cl, tool }], maxCells: 90_000, record: 8 });
+  return { cl, sim, params, ...cutsOf(sim, tool.diameter / 2, tool.fluteLength) };
+}
+
+test('Z-level roughing beside clamps cuts no deeper than a level', () => {
+  // The outermost ring was dropped at every level wherever it counted as the
+  // billet's edge, which cuts nothing — and a ring counted as that if it was
+  // mostly edge, so the stretch of it round a clamp's keep-out went too. That
+  // stretch runs inside the billet and is the only pass that reaches the strip
+  // of stock beside the clamp. The strip stood the whole height of the part until
+  // the level where the base came out far enough for a wall ring to reach it,
+  // which cut it in one pass: 12mm deep on this stepped block, 24mm on the clamp
+  // part — and the level below dropped into it at rapid, 9.7mm deep.
+  const { mesh } = makeStepped({ base: 40, top: 20, baseHeight: 10, topHeight: 10 });
+  const stock = { kind: 'box-margin', min: [-1, -1, 0], max: [41, 41, 21] };
+  const toe = {
+    kind: 'box', name: 'Toe', enabled: true, center: [stock.min[0] - 4, 20], size: [6, 6],
+    rotationDeg: 0, baseZ: 0, height: 40,
+  };
+  for (const [name, fixtures] of [['a pair of vise jaws', viseJaws(stock)], ['a toe clamp', [toe]]]) {
+    const { sim, params, deepest } = roughAndMeasure('clear2d', mesh, stock, fixtures);
+    assert.ok(!sim.truncated, 'the simulation ran to the end');
+    assert.eq(sim.rapidCut.count, 0, `beside ${name}, ${sim.rapidCut.count} rapids through stock, `
+      + `${sim.rapidCut.depth.toFixed(2)}mm deep`);
+    assert.ok(deepest <= params.stepdown * 1.25 + 0.3,
+      `beside ${name}, a cut ${deepest.toFixed(2)}mm deep on a ${params.stepdown}mm stepdown`);
+  }
+});
+
+test('adaptive between vise jaws neither drops onto nor ploughs through stock a level above left', async () => {
+  // On the sloped part the gap between a jaw's keep-out and the part's was
+  // narrower than a bite, so no front of the peel landed in it and the wall pass
+  // would not drive along it with stock on both sides: a band beside the part
+  // stood at the top of the billet. The next level rapided 9.3mm into it at its
+  // feed plane and cut it 20.7mm deep, past the end of the flutes.
+  //
+  // Kept out of the level below, the band is still there to be come down
+  // beside: at a 0.4xD bite the level below dropped to its feed plane over it
+  // at rapid, 9.3mm into it, until the drop was raised over what stands there
+  // (see adaptive.js topAt).
+  //
+  // And the band was never out of reach. The wall pass runs beside it at every
+  // level; it was asked whether it removed anything at twelve points 37mm
+  // apart, missed the band between them, and was dropped whole — and at a
+  // 0.4xD bite the strip of billet between the band and the edge of the stock
+  // was narrower than the raster could see at all (see adaptive.js
+  // removesMaterial, geom/coverage.js ClearingMap). Now it is taken a level at
+  // a time, and there is nothing tall left to report.
+  const raw = computeNormals(meshFromSoup(parseSTL(await loadSampleBuffer('test-slope.stl'))));
+  const { meshes, stock } = resolveSetup(createSetup(), [raw], computeStock);
+  for (const over of [{}, { engagement: 0.25 }, { engagement: 0.4 }]) {
+    const { sim, params, deepest, overFlutes } = roughAndMeasure('adaptive', meshes[0], stock,
+      viseJaws(stock), over);
+    const at = JSON.stringify(over);
+    assert.ok(!sim.truncated, 'the simulation ran to the end');
+    assert.eq(sim.rapidCut.count, 0,
+      `${at}: ${sim.rapidCut.count} rapids through stock, ${sim.rapidCut.depth.toFixed(2)}mm deep`);
+    assert.ok(deepest <= params.stepdown * 1.25 + 0.3,
+      `${at}: a cut ${deepest.toFixed(2)}mm deep on a ${params.stepdown}mm stepdown`);
+    assert.ok(overFlutes <= 0.05, `${at}: stock ${overFlutes.toFixed(2)}mm above the top of the flutes was cut`);
+  }
+});
+
+test('adaptive takes the strip of billet a tight margin leaves, a level at a time', async () => {
+  // Placed with 0.6mm to spare, the sloped part leaves a strip of billet 0.3mm
+  // wide beside it once the allowance is off, and at a 0.4xD bite the raster's
+  // cells are 0.8mm: no cell centre fell in the strip, the pass saw air there,
+  // and a level near the bottom took the whole of it at once — 20.7mm deep,
+  // past the end of the flutes. See geom/coverage.js ClearingMap.
+  const raw = computeNormals(meshFromSoup(parseSTL(await loadSampleBuffer('test-slope.stl'))));
+  const setup = createSetup();
+  setup.stock.margin = [0.6, 0.6, 1];
+  const { meshes, stock } = resolveSetup(setup, [raw], computeStock);
+  const { sim, params, deepest, overFlutes } = roughAndMeasure('adaptive', meshes[0], stock, [],
+    { engagement: 0.4 });
+  assert.ok(!sim.truncated, 'the simulation ran to the end');
+  assert.eq(sim.rapidCut.count, 0, `${sim.rapidCut.count} rapids through stock`);
+  assert.ok(deepest <= params.stepdown * 1.25 + 0.3,
+    `a cut ${deepest.toFixed(2)}mm deep on a ${params.stepdown}mm stepdown`);
+  assert.ok(overFlutes <= 0.05, `stock ${overFlutes.toFixed(2)}mm above the top of the flutes was cut`);
+});
+
+test('adaptive keeps its links out of an allowance taller than its flutes', async () => {
+  // A stay-down link may stray into the stock-to-leave, which saves a lift and a
+  // re-entry and costs a scratch on stock the finishing pass is going to take
+  // anyway. But the allowance is a wall as tall as the part beside it, and at a
+  // level deeper than the flutes reach the thing that strays into it is the
+  // shank: a 76mm link at the bottom of the sloped part ran 0.2mm into a 31mm
+  // wall with 11mm of plain shank above the flutes.
+  const raw = computeNormals(meshFromSoup(parseSTL(await loadSampleBuffer('test-slope.stl'))));
+  const { meshes, stock } = resolveSetup(createSetup(), [raw], computeStock);
+  const { sim, overFlutes } = roughAndMeasure('adaptive', meshes[0], stock, []);
+  assert.ok(!sim.truncated, 'the simulation ran to the end');
+  assert.eq(sim.rapidCut.count, 0, `${sim.rapidCut.count} rapids through stock`);
+  assert.ok(overFlutes <= 0.05, `stock ${overFlutes.toFixed(2)}mm above the top of the flutes was cut`);
 });

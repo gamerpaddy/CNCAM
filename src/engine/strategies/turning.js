@@ -36,7 +36,9 @@
 //     because assuming external is how a boring bar ends up retracting through
 //     the wall it just cut.
 
-import { CLBuilder, FEED, lastXY } from '../cl.js';
+import {
+  CLBuilder, FEED, OP, MOVE_STRIDE, lastXY,
+} from '../cl.js';
 import { plural, pluralEs } from '../text.js';
 import { applyCutting } from '../cutting.js';
 import { chuckLimit } from '../fixtures.js';
@@ -47,6 +49,7 @@ import {
 } from '../lathe.js';
 import { tipLengthOf, bladeHalfWidth, latheControlPoint } from '../tool-geometry.js';
 import { insertEngagement, recommendedDepthOfCut } from '../insert.js';
+import { holeApproachZ } from '../heights.js';
 
 /** Everything the strategies share: the profile, the bar, and where safety is. */
 function turningContext({ mesh, params, stock, tool, fixtures }) {
@@ -83,6 +86,108 @@ function startProgram(tool, params) {
   if (x !== 0 || z !== 0) cl.event('controlPoint', { x, z });
   applyCutting(cl, { params }, tool);
   return cl;
+}
+
+/**
+ * Where a lathe operation starts from and finishes at: clear of the bar
+ * radially and in front of its end — `[radius, Z]`.
+ *
+ * Every operation used to begin with a rapid straight to its own first point,
+ * from wherever the operation before it had stopped, and to stop wherever its
+ * last move left it. The post writes exactly that, one G0 from the one to the
+ * other with the turret indexed in between, and nothing about it is safe: a
+ * boring bar stopped in the mouth of its bore and the rougher that followed it
+ * was dragged across the faced end, 12.7mm deep at rapid; a finishing pass
+ * stopped at the chuck end of the part, and a centre drill after it went
+ * diagonally through the whole bar to the axis; an internal thread stopped
+ * inside its hole and the rougher after it went out through the wall. Every
+ * order of operations had a pair like that in it.
+ *
+ * So every operation goes home at both ends, and home is the one place that is
+ * safe whatever comes next: outside the bar's radius and in front of its end,
+ * with the whole tool clear of both — the insert's nose, a blade's half-width.
+ * The move between two homes stays in that corner, which the bar never enters,
+ * and the tool change happens there rather than wherever the last cut ended.
+ *
+ * Further off than the clearance radius the passes travel at, because the move
+ * out of one home is made with the *next* tool standing where the last one
+ * stopped: a round insert's 5mm nose, parked where a 0.4mm one had been two
+ * millimetres off the bar, overlaps the bar's corner. `HOME_GAP` each way puts
+ * the corner more than seven millimetres from any home, and gives the turret
+ * room to index.
+ */
+function homeFor(ctx, tool) {
+  const reach = tool?.type === 'parting' || tool?.type === 'threading'
+    ? bladeHalfWidth(tool)
+    : tool?.type === 'drill' || tool?.type === 'spot' ? 0 : ctx.nose;
+  const gap = Math.max(HOME_GAP, reach + RADIAL_GAP);
+  const end = Number.isFinite(ctx.bar?.zMax) ? Math.max(ctx.bar.zMax, ctx.zStart) : ctx.zStart;
+  return [Math.max(ctx.clearX, (ctx.bar?.radius ?? 0) + gap), end + gap];
+}
+
+/** How far off the bar, radially and past its end, an operation starts and finishes. */
+const HOME_GAP = 5;
+
+/**
+ * The finished program, brought out from home and sent back there — see
+ * `homeFor`.
+ *
+ * The way in and the way out are dog-legs, and which leg comes first is the
+ * whole of the safety of them. Outside the part the tool travels along the bar
+ * at the home radius, where nothing is, and only then comes in; inside a bore it
+ * crosses in front of the end first and only then goes down the hole. Leaving
+ * is the same path backwards. The operation's own first and last points are
+ * where it chose to enter and leave the work, and each strategy is answerable
+ * for those being clear.
+ *
+ * Events keep their places: those before the first move (the tool change, the
+ * spindle, the control point) stay before the approach, so the tool is changed
+ * at home, and every later one moves up with the move it belongs to.
+ *
+ * @param side 'external' | 'internal'
+ */
+function finishTurn(cl, ctx, tool, side = 'external') {
+  const program = cl.finish();
+  if (!program.count) return program;
+  const [homeX, homeZ] = homeFor(ctx, tool);
+  const d = program.moves;
+  const pointAt = (n) => {
+    const o = n * MOVE_STRIDE;
+    return d[o] === OP.DRILL ? [0, d[o + 4]] : [d[o + 1], d[o + 3]];
+  };
+  const first = pointAt(0);
+  const last = pointAt(program.count - 1);
+  const inside = side === 'internal';
+  const same = (a, b) => Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6;
+  const route = (points, from) => {
+    const out = [];
+    let at = from;
+    for (const p of points) {
+      if (at && same(p, at)) continue;
+      out.push(p);
+      at = p;
+    }
+    return out;
+  };
+  // walked backwards from the first point, so a leg that lands on it is dropped
+  const before = route(inside
+    ? [[first[0], homeZ], [homeX, homeZ]]
+    : [[homeX, first[1]], [homeX, homeZ]], first).reverse();
+  const after = route(inside
+    ? [[last[0], homeZ], [homeX, homeZ]]
+    : [[homeX, last[1]], [homeX, homeZ]], last);
+  const count = program.count + before.length + after.length;
+  const moves = new Float32Array(count * MOVE_STRIDE);
+  const put = (n, [x, z]) => moves.set([OP.RAPID, x, 0, z, 0, 0, 1, FEED.RAPID], n * MOVE_STRIDE);
+  before.forEach((p, i) => put(i, p));
+  moves.set(d.subarray(0, program.count * MOVE_STRIDE), before.length * MOVE_STRIDE);
+  after.forEach((p, i) => put(before.length + program.count + i, p));
+  return {
+    ...program,
+    moves,
+    count,
+    events: program.events.map((e) => (e.index > 0 ? { ...e, index: e.index + before.length } : e)),
+  };
 }
 
 /**
@@ -290,7 +395,7 @@ export function generateTurnFace({ mesh, tool, params, stock, fixtures }) {
 
   if (!(ctx.zStart > zEnd + 1e-6)) {
     cl.warn('facing has no depth — Z start is not ahead of Z end');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'external');
   }
 
   // Nothing to face past the end of the bar. A Z start left beyond it — the bar
@@ -344,7 +449,7 @@ export function generateTurnFace({ mesh, tool, params, stock, fixtures }) {
 
   cl.info(`faced ${(zStart - zEnd).toFixed(2)}mm off the end in ${pluralEs(passes.length, 'pass')}`
     + (bar.innerRadius > 0 ? `, stopping at the ⌀${dia(bar.innerRadius)} bore` : ''));
-  return cl.finish();
+  return finishTurn(cl, ctx, tool, 'external');
 }
 
 // --- roughing ---
@@ -380,7 +485,7 @@ export function generateTurnRough({ mesh, tool, params, stock, fixtures }) {
   if (!(bar.radius > finishR + 1e-6)) {
     cl.warn(`nothing to rough — the bar is ⌀${dia(bar.radius)} and the part `
       + `reaches ⌀${dia(finishR)} here`);
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'external');
   }
 
   // The passes share one state object so each of them knows where the tool
@@ -405,7 +510,7 @@ export function generateTurnRough({ mesh, tool, params, stock, fixtures }) {
 
   if (passes === 0) {
     cl.warn('roughing produced no passes — check the Z range against the part');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'external');
   }
   cl.info(`${pluralEs(passes, 'roughing pass')} from ⌀${dia(bar.radius)} to ⌀${dia(finishR)}`
     + (allowance > 0 ? `, leaving ${allowance}mm on` : ''));
@@ -420,7 +525,7 @@ export function generateTurnRough({ mesh, tool, params, stock, fixtures }) {
       + `${recess.depth.toFixed(2)}mm behind the ⌀${dia(recess.shoulder)} either side of it, `
       + 'which a turning pass cannot get past; it needs a grooving tool');
   }
-  return cl.finish();
+  return finishTurn(cl, ctx, tool, 'external');
 }
 
 /** How much of the bar a plateau must run along to be worth a pass of its own. */
@@ -611,7 +716,7 @@ export function generateTurnFinish({ mesh, tool, params, stock, fixtures }) {
   const raw = profilePoints(profile, ctx.zStart, zEnd, { step });
   if (raw.length < 2) {
     cl.warn('finishing found no profile in the Z range');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'external');
   }
   const withAllowance = raw.map(([z, r]) => [z, r + allowance]);
   const whole = offsetProfile(withAllowance, nose);
@@ -622,7 +727,7 @@ export function generateTurnFinish({ mesh, tool, params, stock, fixtures }) {
   if (path.length < 2) {
     cl.warn(`there is nothing to finish in front of ${ctx.chuck.name} — the nose `
       + `has to stay clear of the jaws at Z${round(ctx.chuck.z)}`);
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'external');
   }
   const end = path[path.length - 1][0];
   const stopped = end > whole[whole.length - 1][0] + 1e-9;
@@ -657,7 +762,7 @@ export function generateTurnFinish({ mesh, tool, params, stock, fixtures }) {
       + `below the ⌀${dia(recess.shoulder)} either side of it — no turning pass can reach in `
       + 'there, so this insert takes the whole depth in one cut; open it with a grooving tool first');
   }
-  return cl.finish();
+  return finishTurn(cl, ctx, tool, 'external');
 }
 
 /**
@@ -758,7 +863,7 @@ export function generateTurnGroove({ mesh, tool, params, stock, fixtures }) {
   if (internal && !(from > 0)) {
     cl.warn(`there is no hole at Z${round(zLo)}–${round(zHi)} to cut an internal groove in — `
       + 'drill and bore it first, or untick "Inside a bore"');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, params.grooveInternal ? 'internal' : 'external');
   }
   const safeX = internal ? Math.max(0.5, from - 2) : clearX;
   // How deep the groove goes, when nobody has said.
@@ -783,14 +888,14 @@ export function generateTurnGroove({ mesh, tool, params, stock, fixtures }) {
   if (width < blade * 0.999) {
     cl.warn(`the groove is ${width.toFixed(2)}mm wide and the blade is ${blade}mm — `
       + 'it cannot fit');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, params.grooveInternal ? 'internal' : 'external');
   }
   const depth = internal ? floor - from : from - floor;
   if (!(depth > 1e-6)) {
     cl.warn(internal
       ? `nothing to groove — the floor ⌀${dia(floor)} is not outside the bore ⌀${dia(from)}`
       : `nothing to groove — the floor ⌀${dia(floor)} is not inside the stock ⌀${dia(from)}`);
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, params.grooveInternal ? 'internal' : 'external');
   }
 
   const { wallAllowance, cutWidth, inner, cuts } = grooveBites(width, blade, allowance);
@@ -807,7 +912,7 @@ export function generateTurnGroove({ mesh, tool, params, stock, fixtures }) {
   if (allowance > 0 && !(internal ? target > from + 1e-6 : target < from - 1e-6)) {
     cl.warn(`${allowance}mm to leave is more than the groove is deep (${depth.toFixed(2)}mm) — `
       + 'there is nothing left for this pass to cut');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, params.grooveInternal ? 'internal' : 'external');
   }
   // Half a millimetre off the surface the blade plunges from. Every plunge
   // starts and ends there, and the step along the bar between them happens
@@ -815,11 +920,25 @@ export function generateTurnGroove({ mesh, tool, params, stock, fixtures }) {
   // the clearance radius between plunges is a round trip to nowhere — and there
   // is one per bite of a groove several blades wide.
   const off = internal ? from - 0.5 : from + 0.5;
+  // Inside a bore the blade cannot travel along the groove at rapid. Outside
+  // the part it steps along half a millimetre off the bar, where nothing is; in
+  // a hole it steps half a millimetre inside the bore — and the bore is what a
+  // boring bar left, which on the groove's far wall is every pass stopped
+  // against it with its nose: a washer of stock and a ridge between passes as
+  // tall as the nose radius. Stepping the blade's face onto that wall at rapid
+  // ran it 0.44mm into them. So it comes down the hole with the whole blade
+  // still clear of the groove, and everything inside the groove's span is fed.
   for (let i = 0; i < centres.length; i++) {
     const z = centres[i];
-    if (i === 0) {
-      if (internal) safeToInternal(cl, safeX, z); else safeTo(cl, safeX, z);
+    if (i === 0 && internal) {
+      safeToInternal(cl, safeX, Math.max(z, zHi + blade / 2 + RADIAL_GAP));
+      cl.cut(safeX, 0, z, FEED.LEAD);
+      cl.cut(off, 0, z, FEED.PLUNGE);
+    } else if (i === 0) {
+      safeTo(cl, safeX, z);
       cl.rapid(off, 0, z);
+    } else if (internal) {
+      cl.cut(off, 0, z, FEED.LEAD);   // the step along, fed — see above
     } else {
       cl.rapid(off, 0, z);            // already at `off`; this is the step along
     }
@@ -836,7 +955,7 @@ export function generateTurnGroove({ mesh, tool, params, stock, fixtures }) {
       } (this pass cuts ${cutWidth.toFixed(2)}mm to ⌀${dia(internal ? target : target)})`
       : '')
     + (peck > 0 ? `, pecking ${peck}mm` : ''));
-  return cl.finish();
+  return finishTurn(cl, ctx, tool, params.grooveInternal ? 'internal' : 'external');
 }
 
 /**
@@ -1164,11 +1283,11 @@ export function generateTurnThread({ mesh, tool, params, stock, fixtures }) {
 
   if (!(zHi > zLo + 1e-6)) {
     cl.warn('the thread has no length — Top Z and Bottom Z are the same place');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, params.threadInternal ? 'internal' : 'external');
   }
   if (internal && major - depth <= 0) {
     cl.warn('an internal thread that deep would cut through the axis');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, params.threadInternal ? 'internal' : 'external');
   }
 
   // A lead-in and a run-out, because the carriage has to be up to speed before
@@ -1254,7 +1373,7 @@ export function generateTurnThread({ mesh, tool, params, stock, fixtures }) {
     cl.warn(`there is no room for a pass in front of ${ctx.chuck?.name ?? 'the chuck'} — `
       + `the insert reaches ${round(reach)}mm either side of its centre, and the jaws `
       + `are at Z${round(ctx.chuck?.z ?? 0)}`);
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, params.threadInternal ? 'internal' : 'external');
   }
   const jaws = ctx.chuck && `the jaws of ${ctx.chuck.name} are at Z${round(ctx.chuck.z)}`;
   if (jawsIn) {
@@ -1382,7 +1501,7 @@ export function generateTurnThread({ mesh, tool, params, stock, fixtures }) {
     + `, first bite ${schedule[0].toFixed(3)}mm`
     + (passes > asked ? ` (${asked} asked for; more were needed to keep the first `
       + 'bite down)' : ''));
-  return cl.finish();
+  return finishTurn(cl, ctx, tool, params.threadInternal ? 'internal' : 'external');
 }
 
 /**
@@ -1424,15 +1543,20 @@ export function generateTurnDrill({ mesh, tool, params, stock, fixtures }) {
   const cl = startProgram(tool, params);
   const ctx = turningContext({ mesh, params, stock, tool, fixtures });
   const zEnd = limitToChuck(cl, ctx, 'internal');
-  const retract = Math.max(ctx.zStart, zEnd) + Math.max(1, params.entryGap ?? 1);
+  // From the end of the bar where it stands further out than the hole's top —
+  // an unfaced bar, or one set further out than the part — because the R plane
+  // is reached at rapid. Measured from the part, it sat exactly on the end of a
+  // bar with the default millimetre left to face, and inside any longer one.
+  // The milling holes answer the same question the same way; see heights.js.
+  const retract = holeApproachZ(Math.max(ctx.zStart, zEnd), stock, params, 1);
 
   if (!(ctx.zStart > zEnd + 1e-6)) {
     cl.warn('the hole has no depth — Top Z is not ahead of Bottom Z');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'internal');
   }
   if (!(tool?.diameter > 0)) {
     cl.warn('drilling needs a drill with a diameter');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'internal');
   }
   // A hole on the centreline is made by a drill and by nothing else. A turning
   // insert cannot reach the axis — it is a corner working on the outside of a
@@ -1453,7 +1577,7 @@ export function generateTurnDrill({ mesh, tool, params, stock, fixtures }) {
     cl.warn(`${tool.name ? `${tool.name} is a ` : 'this is a '}${tool.type ?? 'non-drill'} `
       + 'tool, and a hole on the centreline can only be made by a drill or a '
       + 'centre drill. Fit one, or use Bore to open a hole that is already there.');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'internal');
   }
 
   // A drill wider than the bore it goes down cuts that bore oversize, and the
@@ -1481,7 +1605,7 @@ export function generateTurnDrill({ mesh, tool, params, stock, fixtures }) {
   const depth = ctx.zStart - zEnd;
   cl.info(`⌀${tool.diameter} hole ${depth.toFixed(2)}mm deep on the centreline`
     + (params.peck > 0 ? `, pecking ${params.peck}mm` : ''));
-  return cl.finish();
+  return finishTurn(cl, ctx, tool, 'internal');
 }
 
 // --- internal turning ---
@@ -1499,7 +1623,9 @@ export function generateTurnDrill({ mesh, tool, params, stock, fixtures }) {
  * and past four or five diameters it will chatter whatever the numbers say. The
  * strategy stops where the tool says it stops, and says so.
  */
-export function generateTurnBore({ mesh, tool, params, stock, fixtures }) {
+export function generateTurnBore({
+  mesh, tool, params, stock, fixtures, earlier = null,
+}) {
   const cl = startProgram(tool, params);
   const ctx = turningContext({ mesh, params, stock, tool, fixtures });
   const { allowance, nose, bar } = ctx;
@@ -1509,12 +1635,25 @@ export function generateTurnBore({ mesh, tool, params, stock, fixtures }) {
   let zEnd = limitToChuck(cl, ctx, 'internal');
 
   const zHi = Math.max(ctx.zStart, zEnd);
-  const zLo = Math.min(ctx.zStart, zEnd);
+  let zLo = Math.min(ctx.zStart, zEnd);
+
+  // The hole a drill before this one in the setup actually made, when there is
+  // one — see `drilledHole`. A bar cannot bore into solid, so it stops where
+  // that hole does.
+  const drilled = drilledHole(earlier, zLo, zHi);
+  if (!(params.boreStartRadius > 0) && !(bar.innerRadius > 0) && drilled
+    && drilled.bottom > zLo + 1e-6) {
+    cl.warn(`the ⌀${dia(drilled.radius)} hole drilled before this reaches Z${round(drilled.bottom)} `
+      + `at full size, so boring stops there rather than at Z${round(zLo)} — a boring bar `
+      + 'cannot cut into solid. Drill deeper to bore further.');
+    zLo = drilled.bottom;
+    if (!(zHi > zLo + 1e-6)) return finishTurn(cl, ctx, tool, 'internal');
+  }
 
   if (!hasBore(bore, zLo, zHi)) {
     cl.warn('no bore found in this Z range — the part is solid here, so there is '
       + 'nothing to open up. Drill it first, or check Top Z and Bottom Z.');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'internal');
   }
 
   // How far the bar can reach into the hole before it is all overhang.
@@ -1539,10 +1678,28 @@ export function generateTurnBore({ mesh, tool, params, stock, fixtures }) {
   // from nowhere: on that shaft it announced a ⌀6.40 pilot, refused because a
   // ⌀12 bar will not fit a ⌀6.40 hole, and cut nothing — a refusal invented
   // entirely by the fallback.
+  //
+  // The drill before this one comes ahead of the part's narrowest section,
+  // because it is not a guess. The default drill is the biggest in the rack that
+  // does not oversize the bore, which is rarely the bore's own size: a ⌀10 drill
+  // for a ⌀12 section, a ⌀8 where the rack has nothing bigger. Guessing ⌀12
+  // there made the first pass open the hole from ⌀8 in one bite — 2.46mm deep
+  // on a bar set to 0.8 — and put the bar's rapid approach outside the hole that
+  // was really there.
   const target = boreTargetRadius(bore, zStop, zHi);
   const known = params.boreStartRadius > 0 ? params.boreStartRadius
-    : bar.innerRadius > 0 ? bar.innerRadius : 0;
+    : bar.innerRadius > 0 || drilled
+      ? Math.max(bar.innerRadius, drilled?.radius ?? 0)
+      : 0;
   const pilot = known > 0 ? known : boreSmallestRadius(bore, zStop, zHi);
+  // Guessed, from a setup that says what came before and has no drill in it:
+  // the hole has to have been made somewhere else, and nothing here knows it was.
+  if (!(known > 0) && Array.isArray(earlier)) {
+    cl.warn(`nothing before this in the setup drills the hole, so boring assumes a `
+      + `⌀${dia(pilot)} hole is already there — the part's narrowest section. Drill it `
+      + 'first, or set the existing hole size; a smaller hole makes the first pass deeper '
+      + 'than the stepdown.');
+  }
 
   const finishR = Math.max(0, target - allowance);
   if (!(finishR > pilot + 1e-6)) {
@@ -1554,7 +1711,7 @@ export function generateTurnBore({ mesh, tool, params, stock, fixtures }) {
       : `nothing to bore — this bore is ⌀${dia(target)} all the way, so there is `
         + 'no narrower section to open it from. Set the existing hole size, or '
         + 'drill it first.');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'internal');
   }
   // A hundredth, because bore sizes are quoted to a hundredth: without it a
   // pilot the profile puts at 5.9995 is refused by a ⌀12 bar in a message that
@@ -1562,7 +1719,7 @@ export function generateTurnBore({ mesh, tool, params, stock, fixtures }) {
   if (tool?.minBore > 0 && pilot * 2 < tool.minBore - 0.01) {
     cl.warn(`this bar needs a ⌀${tool.minBore} hole to fit in and the pilot is `
       + `⌀${dia(pilot)}`);
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'internal');
   }
 
   const safeX = Math.max(0.2, pilot - 1);
@@ -1587,7 +1744,7 @@ export function generateTurnBore({ mesh, tool, params, stock, fixtures }) {
 
   if (passes === 0) {
     cl.warn('boring produced no passes — check the Z range against the hole');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'internal');
   }
   // What the passes reached, not what the profile's widest point asked for: a
   // groove in the wall is the widest point of a grooved bore and no boring pass
@@ -1601,7 +1758,7 @@ export function generateTurnBore({ mesh, tool, params, stock, fixtures }) {
       + 'mouth of the hole, which a boring pass cannot get past; it needs an internal '
       + 'grooving tool');
   }
-  return cl.finish();
+  return finishTurn(cl, ctx, tool, 'internal');
 }
 
 /**
@@ -1639,6 +1796,34 @@ function hiddenBoreRecesses(bore, zLo, zHi) {
   }
   close();
   return out.sort((a, b) => b.depth - a.depth);
+}
+
+/**
+ * The hole the drills before this operation made, where it reaches into
+ * [zLo, zHi]: the widest of them, and how far down it is still that wide — or
+ * null when none of them reaches this far, or nothing says what came before.
+ *
+ * @param earlier [{ type, tool, params }] — the enabled operations ahead of this
+ *   one in its setup, in order; null when the caller did not say
+ */
+function drilledHole(earlier, zLo, zHi) {
+  let best = null;
+  for (const op of earlier ?? []) {
+    const t = op?.tool;
+    // a centre drill spots a cone and a turning insert cannot drill at all;
+    // only a drill leaves a hole its own size — see generateTurnDrill
+    if (op?.type !== 'turnDrill' || t?.type !== 'drill' || !(t.diameter > 0)) continue;
+    const bottom = Math.min(op.params?.topZ ?? Infinity, op.params?.bottomZ ?? Infinity);
+    if (!Number.isFinite(bottom) || !(bottom < zHi)) continue;
+    const radius = t.diameter / 2;
+    // full size only above the point
+    const full = bottom + tipLengthOf(t);
+    if (!best || radius > best.radius + 1e-9
+      || (Math.abs(radius - best.radius) <= 1e-9 && full < best.bottom)) {
+      best = { radius, bottom: Math.max(full, zLo) };
+    }
+  }
+  return best;
 }
 
 /** The pilot, when nothing else says what was drilled — see lathe.js. */
@@ -1733,7 +1918,7 @@ export function generateTurnPart({ mesh, tool, params, stock, fixtures }) {
 
   if (!(bar.radius > toRadius + 1e-6)) {
     cl.warn('parting off has no depth — the bar is already smaller than the finish radius');
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'external');
   }
 
   // A slot cut exactly as wide as the blade closes on it: the bar springs, the
@@ -1757,7 +1942,7 @@ export function generateTurnPart({ mesh, tool, params, stock, fixtures }) {
       + `${round(jaws - (end - blade))}mm into ${chuck.name}, whose jaws are at `
       + `Z${round(chuck.z)} — the slot is cut behind the part, so the jaws have to `
       + `stop at least a blade's width short of it. Grip less of the bar.`);
-    return cl.finish();
+    return finishTurn(cl, ctx, tool, 'external');
   }
   if (end - blade - widen < jaws - 1e-6) {
     widen = Math.max(0, end - blade - jaws);
@@ -1778,5 +1963,5 @@ export function generateTurnPart({ mesh, tool, params, stock, fixtures }) {
   cl.info(`parted off at Z${round(end)} to ⌀${dia(toRadius)}`
     + (widen > 0 ? `, slot ${(blade + widen).toFixed(2)}mm wide` : '')
     + (peck > 0 ? ` in ${pecks} pecks of ${peck}mm` : ''));
-  return cl.finish();
+  return finishTurn(cl, ctx, tool, 'external');
 }

@@ -37,7 +37,9 @@ import {
   loopsBounds, loopArea, unionWithHoles,
 } from '../../geom/clipper.js';
 import { pointInLoops, segmentInLoops } from '../../geom/inside.js';
-import { ClearingMap, engagementFraction } from '../../geom/coverage.js';
+import {
+  ClearingMap, engagementFraction, makeGrid, rasterizeLoops, reachMask, cellLoops,
+} from '../../geom/coverage.js';
 import { SilhouetteStack } from '../../geom/silhouette.js';
 import { depthLevelsFor, depthRefusal, stockOutline } from '../stock.js';
 import { applyRegionsToArea, regionRefusal } from '../regions.js';
@@ -46,6 +48,7 @@ import { cutSpanWithRamp } from '../linking.js';
 import { applyCutting } from '../cutting.js';
 import { entryPlane, crossingPlane, goHome } from '../heights.js';
 import { mergeTolerance } from '../simplify.js';
+import { fluteLengthOf } from '../tool-geometry.js';
 
 const MAX_RINGS = 4000;
 const MAX_SEEDS = 24;
@@ -150,15 +153,20 @@ export function generateAdaptive({
 
   const report = {
     peak: 0, entries: 0, links: 0, hops: 0, steepest: 0, seeds: 0, opened: 0, unopened: 0,
+    leftAbove: 0,
   };
   let zEntry = params.topZ;
   let cutAnything = false;
+  // How high the stock still stands, cell by cell, on the raster every level's
+  // map shares — see `unreachedAbove`. Null until a level has cut; a cell no
+  // level has cut stands at the top of the billet.
+  let standing = null;
 
   const levels = depthLevelsFor(params, mesh, tool);
   for (const z of levels) {
     const shadow = silhouette.down(z);
     // where the centre may go, and what is still standing at this level
-    const allowed = applyRegionsToArea(
+    let allowed = applyRegionsToArea(
       diffLoops(outer, offsetLoops(shadow, r + stockToLeave, tolerance)),
       // depth-aware: see the note in clear2d.js and engine/rest.js
       // a bite's worth: cleared ground narrower than that saves no cutting
@@ -167,9 +175,28 @@ export function generateAdaptive({
     // A level that clears nothing has lowered nothing, so it must not lower the
     // height the *next* level enters through — see the note on zEntry below.
     if (allowed.length === 0) continue;
-    const material = diffLoops(
-      stockOutline(stock, 0), offsetLoops(shadow, stockToLeave, tolerance),
-    );
+    const kept = offsetLoops(shadow, stockToLeave, tolerance);
+    const billet = stockOutline(stock, 0);
+    const material = diffLoops(billet, kept);
+    // Stock a level above could not reach and this one could. Where taking it
+    // here would be a cut deeper than a stepdown and a quarter, or deeper than
+    // the flutes, it is kept out of this level's reach; anything shorter is cut
+    // here, with the entries over it raised to clear it — see `topAt`.
+    // This level's stock on the raster every level's map shares, undilated: the
+    // cells that really are stock here, which `standing` is only asked about.
+    const grid = makeGrid(bounds, cellSize, r + 4 * cellSize);
+    const stockHere = rasterizeLoops(material, grid);
+    if (standing) {
+      const above = unreachedAbove({
+        standing, z, stockHere, allowed, radius: r, grid, tolerance,
+        deepest: Math.min(fluteLengthOf(tool), DEPTH_OVER_STEPDOWN * Math.max(0.05, params.stepdown ?? 1)),
+      });
+      if (above) {
+        report.leftAbove = Math.max(report.leftAbove, above.height);
+        allowed = diffLoops(allowed, above.keepout);
+        if (allowed.length === 0) continue;
+      }
+    }
 
     // The allowed area in separate pieces — one per place the cutter can be
     // without crossing the part — worked out when the first seed asks, which on
@@ -180,15 +207,34 @@ export function generateAdaptive({
       return pieces.find((loops) => pointInLoops(loops, x, y));
     };
 
-    const map = new ClearingMap({ material, allowed, radius: r, cellSize, bounds });
+    const map = new ClearingMap({
+      material, allowed, radius: r, cellSize, bounds,
+      // The billet's edge where it has material inside it — see ClearingMap.
+      // Measured a tolerance clear of the part, because where the part runs
+      // out to the edge of the billet the two lie on one line, and which side
+      // of it the clipper puts a stretch of that line is a coin toss.
+      edges: clipOpenPaths(billet.map(loopToOpenPath),
+        offsetLoops(shadow, stockToLeave + tolerance, tolerance), 'difference'),
+    });
+    // the stock at this level before any of it was cut — see `standing`
+    const before = map.uncut.slice();
     const level = new LevelCutter({
-      cl, map, z, zEntry, clearance, rampAngle, bite, tolerance,
+      cl, map, z, zEntry, clearance, rampAngle, bite, tolerance, standing, stockHere,
       feedPlane: entryPlane(params, zEntry, z),
       stockPlane,
       direction, allowed, report, minSegment,
       // how far a link may stray outside `allowed` and still not reach the
-      // part: the allowance, less the tolerance — see canStayDown
-      linkSlack: Math.max(tolerance, stockToLeave - tolerance),
+      // part: the allowance, less the tolerance — see canStayDown.
+      //
+      // Only while the flutes are long enough to be what strays. The allowance
+      // is a wall of stock standing as tall as the part beside it, and a link
+      // taken into it deeper than the flutes reach below the top of the billet
+      // cuts it with the shank: on the sloped part, a 76mm link at the bottom
+      // level ran 0.2mm into a 31mm wall with 11mm of plain shank above a 20mm
+      // flute. There a link keeps to the region like everything else.
+      linkSlack: stock.max[2] - z > fluteLengthOf(tool) + 1e-9
+        ? tolerance
+        : Math.max(tolerance, stockToLeave - tolerance),
     });
 
     // The stock boundary marched inward one bite at a time, starting one bite
@@ -289,6 +335,12 @@ export function generateAdaptive({
     // comes after it and may well take the piece off: what makes this worth
     // saying is material still standing when the level is *over*.
     if (stalled > 0 && map.remainingArea() >= stalled - 1e-9) report.unopened++;
+    // What this level took down to its own depth. Every level's map is laid on
+    // the same raster, so the cells line up from one level to the next.
+    standing ??= new Float64Array(before.length).fill(stock.max[2]);
+    for (let k = 0; k < before.length; k++) {
+      if (before[k] && !map.uncut[k] && z < standing[k]) standing[k] = z;
+    }
     // Only a level that cut something has taken the surface down to itself. A
     // level that found nothing to do leaves the material where it was, and the
     // pass below has to enter through *that*, not through a plane no cutter
@@ -298,6 +350,12 @@ export function generateAdaptive({
 
   goHome(cl, clearance);
   cl.info(summary(report, tool, target, cl.merger));
+  if (report.leftAbove > 0) {
+    cl.warn(`stock up to ${report.leftAbove.toFixed(1)}mm tall was left standing where a `
+      + 'level above could not reach it — cutting it lower down would take it deeper than '
+      + 'the stepdown or the flutes allow. It is next to a clamp, a keep-out or the part in '
+      + 'a gap narrower than this cutter can work; take it with a smaller cutter or a rest pass.');
+  }
   if (!cutAnything) {
     // Naming the heights when a picked face is the reason sends the user to the
     // one tab that is not the problem — see engine/regions.js regionRefusal.
@@ -353,6 +411,15 @@ class LevelCutter {
     // reads one bite.
     this.minBuried = this.bite;
     this.thin = (path) => thinPath(path, this.minSegment);
+    // Whether the levels above left anything standing on this level's stock at
+    // all, which on nearly every level they did not — and then nothing that
+    // asks `topAt` has to look.
+    this.anyLeft = false;
+    if (this.standing && this.stockHere) {
+      for (let c = 0; c < this.standing.length; c++) {
+        if (this.stockHere[c] && this.standing[c] > this.zEntry + 1e-6) { this.anyLeft = true; break; }
+      }
+    }
     this.px = 0;
     this.py = 0;
     this.cursor = null;    // where the tool sits at depth, null when retracted
@@ -401,6 +468,55 @@ class LevelCutter {
   rapidTo(x, y, z) {
     this.cl.rapid(x, y, z);
     this.px = x; this.py = y;
+  }
+
+  /**
+   * The top of what stands under a cutter at (x, y): the floor of the level
+   * above, or higher where that level left stock it could not reach.
+   *
+   * Everything this level does from above — the rapid down to the feed plane,
+   * the crossing at it, the ramp down from it — was worked out from the level
+   * above's floor, on the promise that it had cut its ground down to itself.
+   * Where it had not, a rapid to a gap above that floor ran into what it left:
+   * 9.3mm deep beside a vise jaw on the sloped part. Only stock still standing
+   * at this level counts; ground this level has already cut is empty down to it.
+   */
+  topAt(x, y) {
+    if (!this.anyLeft) return this.zEntry;
+    const { min, cellSize, width, height } = this.map.grid;
+    const ci = Math.round((x - min[0]) / cellSize);
+    const cj = Math.round((y - min[1]) / cellSize);
+    // The cells under the cutter's own disc, measured from the point itself and
+    // not from the cell it rounds to: the cell is up to most of a cell off, and
+    // that is how far into an inside corner a disc about it reaches — into stock
+    // no round cutter gets to, which stands at the top of the billet on every
+    // level. A cell on the rim is the cutter touching, not entering.
+    const k = this.map.disc;
+    const reach = this.map.radius - RIM;
+    let top = this.zEntry;
+    for (let n = 0; n < k.length; n += 2) {
+      const i = ci + k[n];
+      const j = cj + k[n + 1];
+      if (i < 0 || j < 0 || i >= width || j >= height) continue;
+      const c = j * width + i;
+      // stock of this level that this level has not yet cut
+      if (!this.stockHere[c] || !this.map.uncut[c] || !(this.standing[c] > top)) continue;
+      if (Math.hypot(min[0] + i * cellSize - x, min[1] + j * cellSize - y) > reach) continue;
+      top = this.standing[c];
+    }
+    return top;
+  }
+
+  /**
+   * How high the feed plane has to be over (x, y): its own gap over what stands
+   * there, and never less than OVER_STANDING over stock a level above left.
+   */
+  dropHeight(x, y) {
+    const hop = this.feedPlane;
+    if (hop == null) return null;
+    const top = this.topAt(x, y);
+    if (!(top > this.zEntry + 1e-6)) return hop;
+    return Math.max(hop, top + Math.max(hop - this.zEntry, OVER_STANDING));
   }
 
   /**
@@ -464,10 +580,14 @@ class LevelCutter {
     }
   }
 
-  /** One family of spans with no ring structure — the wall pass, or a leftover. */
+  /**
+   * One family of spans with no ring structure — the wall pass, or a leftover.
+   * Asked whether they remove anything along the whole of each: see
+   * removesMaterial.
+   */
   cutSpans(spans, { requireContact = true } = {}) {
     const pool = spans.filter((s) => s.length >= 2)
-      .map((span) => ({ span, ring: 0, opener: !requireContact }));
+      .map((span) => ({ span, ring: 0, opener: !requireContact, whole: true }));
     for (;;) {
       const pick = this.chooseSpan(pool);
       if (pick.index < 0) break;
@@ -506,7 +626,7 @@ class LevelCutter {
   chooseSpan(pool) {
     // anything with no material left under it is finished business
     for (let i = pool.length - 1; i >= 0; i--) {
-      if (!this.removesMaterial(pool[i].span)) pool.splice(i, 1);
+      if (!this.removesMaterial(pool[i].span, pool[i].whole)) pool.splice(i, 1);
     }
     const bothWays = this.direction === 'both';
     let best = -1;
@@ -642,9 +762,17 @@ class LevelCutter {
    * Would this span remove anything, or is it tracing air the peel already
    * passed? Sampled rather than walked: these run once per candidate per pick,
    * and the question is about whether a whole pass is worth making.
+   *
+   * Except where the pass is the last thing to come this way. The wall pass is
+   * one span per boundary of the level, hundreds of millimetres of it, and
+   * twelve probes along 450mm are 37mm apart: what the peel left standing
+   * beside the wall in a patch shorter than that was never seen, the whole
+   * wall pass was dropped as removing nothing, and the patch stood until a
+   * level low enough took it in one cut — 22.7mm deep past the end of the
+   * flutes, on the sloped part between vise jaws. So `whole` walks all of it.
    */
-  removesMaterial(span) {
-    for (const [x, y] of samplePath(span, this.probeStep)) {
+  removesMaterial(span, whole = false) {
+    for (const [x, y] of samplePath(span, this.probeStep, whole ? Infinity : PROBES)) {
       if (this.map.engagementAt(x, y) > 0) return true;
     }
     return false;
@@ -758,6 +886,8 @@ class LevelCutter {
     // walk in at depth. See openDescent.
     const open = entry ? null : this.openDescent(span);
     const [dx, dy] = open ?? [sx, sy];
+    // the feed plane over this spot, raised over anything left standing — see topAt
+    const drop = this.dropHeight(dx, dy);
     const cross = this.cursor && hop != null && this.canHop(this.cursor, [dx, dy])
       ? hop
       : this.stockPlane;
@@ -765,7 +895,7 @@ class LevelCutter {
       this.report.hops++;
       this.rapidTo(this.px, this.py, cross);
       this.rapidTo(dx, dy, cross);
-      if (hop != null && hop < cross - 1e-9) this.rapidTo(dx, dy, hop);
+      if (drop != null && drop < cross - 1e-9) this.rapidTo(dx, dy, drop);
     } else {
       // Including the first entry of a level, which has no cursor: "the tool is
       // somewhere else on this job" is the same claim whether the somewhere
@@ -775,7 +905,7 @@ class LevelCutter {
       this.rapidTo(dx, dy, home);
       // drop to the feed plane at rapid; with hundreds of entries per level, the
       // air above the material is where a clearing program spends its time
-      if (hop != null && hop > this.zEntry + 1e-9) this.rapidTo(dx, dy, hop);
+      if (drop != null && drop > this.zEntry + 1e-9) this.rapidTo(dx, dy, drop);
     }
     this.report.entries++;
     if (open) {
@@ -788,9 +918,11 @@ class LevelCutter {
       this.cursor = span[span.length - 1];
       return;
     }
+    // A ramp starts from the top of what it enters, which is the level above
+    // unless that left something standing here — see topAt.
     this.cursor = cutSpanWithRamp(
       entry ? (x, y, z) => this.emit(x, y, z, FEED.LEAD) : this.emit,
-      span, this.zEntry, this.z, this.rampAngle,
+      span, Math.max(this.zEntry, this.topAt(sx, sy)), this.z, this.rampAngle,
       {
         // a span no longer than the cutter is wide cannot be ramped into — see
         // engine/linking.js
@@ -847,6 +979,11 @@ class LevelCutter {
       const inside = i === 0 || i === steps
         ? this.map.insideAt(x, y) : this.map.allowedAt(x, y);
       if (!inside) return false;
+      // …and nothing a level above left standing up into the plane on the way
+      if (this.feedPlane != null && this.anyLeft) {
+        const top = this.topAt(x, y);
+        if (top > this.zEntry + 1e-6 && top > this.feedPlane - OVER_STANDING) return false;
+      }
     }
     return true;
   }
@@ -903,6 +1040,68 @@ class LevelCutter {
     this.cursor = null;
   }
 }
+
+/**
+ * Stock the levels above left standing, within reach of this one — as a keep-out
+ * for this level's cutter centre, and how far above the level it stands.
+ *
+ * A level cuts its stock down to itself, and every level below enters on that
+ * promise: it rapids down to a feed plane a gap above the level before, and it
+ * cuts one level's depth. The promise is only as good as the level before was
+ * at reaching everything, and adaptive does not always: a gap between a clamp's
+ * keep-out and the part's narrower than a bite gets no front at all, and the
+ * wall pass will not drive along it with stock on both sides. Measured on the
+ * sloped part in a vise: a band beside the part left at the top of the billet,
+ * the next level rapiding 9.3mm into it at its feed plane and then cutting it
+ * 20.7mm deep — past the end of the flutes.
+ *
+ * Kept out rather than cut, because cutting it now is cutting two levels at
+ * once, which is exactly the load the level structure exists to prevent. Only
+ * what this level could actually reach: the stock a round cutter can never get
+ * into, in an inside corner, stands above every level and harms none of them.
+ *
+ * And only what this level cannot take. Most of what a level leaves is short —
+ * the corner a thin flat level did not quite get round, a few millimetres a
+ * walled-off patch stood above its floor — and cutting it here costs a slightly
+ * deeper cut and nothing else, as long as nothing comes down onto it at rapid
+ * (see LevelCutter.topAt). Keeping all of it out left stock on the part that the
+ * finishing pass after it would meet unannounced. So only what would take this
+ * level deeper than `deepest` is kept out: a stepdown and a quarter, or the
+ * flutes, whichever is less.
+ *
+ * @returns { keepout, height } — height above *this* level — or null when
+ *   nothing like that is within reach
+ */
+function unreachedAbove({
+  standing, z, stockHere, allowed, radius, grid, tolerance, deepest,
+}) {
+  if (grid.width * grid.height !== standing.length) return null;
+  // exactly the cells a cutter centred anywhere this level allows can touch —
+  // see geom/coverage.js reachMask
+  const reach = reachMask(rasterizeLoops(allowed, grid), grid, radius);
+  const left = new Uint8Array(stockHere.length);
+  let height = 0;
+  for (let k = 0; k < left.length; k++) {
+    // a hair of slack, so a cell cut exactly to the limit is not over it
+    if (!stockHere[k] || !reach[k] || !(standing[k] - z > deepest + 1e-4)) continue;
+    left[k] = 1;
+    height = Math.max(height, standing[k] - z);
+  }
+  if (!left.some((v) => v)) return null;
+  return {
+    keepout: offsetLoops(cellLoops(left, grid), radius + grid.cellSize, tolerance),
+    height,
+  };
+}
+
+/** How much deeper than its stepdown one level may cut, taking what the levels above left. */
+const DEPTH_OVER_STEPDOWN = 1.25;
+
+/** How far over what still stands a rapid has to stop, as a floor under the feed plane's own gap. */
+const OVER_STANDING = 0.5;
+
+/** How close to the rim of the cutter a cell has to be before it counts as touched rather than entered. */
+const RIM = 0.01;
 
 /** Index ranges [start, end) over which `flags` is truthy (or falsy), in order. */
 function runsOf(flags, value) {

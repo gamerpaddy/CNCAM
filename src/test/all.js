@@ -36,6 +36,7 @@ import './wrap.test.js';
 import './post.test.js';
 import './indexing.test.js';
 import './collision.test.js';
+import './entries.test.js';
 import './arcs.test.js';
 import './defaults-notes.test.js';
 import './ui.test.js';

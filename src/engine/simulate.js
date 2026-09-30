@@ -657,6 +657,20 @@ function worksInside(cl, tool) {
   if (isInternalTool(tool)) return true;
   if (tool?.type !== 'threading' && tool?.type !== 'parting') return false;
   const d = cl.moves;
+  // The first cut that moves the tool radially is the plainest evidence there
+  // is: a blade feeds toward the metal, so a plunge toward the axis is on the
+  // outside and one away from it is in a hole. Asked first, because the radius
+  // the tool came from stopped being evidence once every operation started from
+  // home, outside the bar: an internal groove that feeds along the bore before
+  // it plunges looked back past its own approach to that home and was
+  // simulated on the outside of the part.
+  for (let n = 1; n < cl.count; n++) {
+    if (d[n * MOVE_STRIDE] !== OP.LINE) continue;
+    const dx = d[n * MOVE_STRIDE + 1] - d[(n - 1) * MOVE_STRIDE + 1];
+    if (Math.abs(dx) > 1e-6) return dx > 0;
+  }
+  // A thread fed only along the bar, its depth changed at rapid between passes:
+  // then it is where it came in from.
   for (let n = 1; n < cl.count; n++) {
     if (d[n * MOVE_STRIDE] !== OP.LINE) continue;
     // the first cut, and the nearest place before it the tool stood at a

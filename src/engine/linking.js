@@ -341,6 +341,10 @@ export function cutPerimeter(cl, loop, z) {
  * @param options.alreadyThere the tool is already sitting on the loop at
  *   `zEntry` — do not drop to it again. Set by a pass that arrived along a
  *   lead-in.
+ * @param options.lift the tabs the lap rides over (tabs.js tabLift), which the
+ *   plunge and the ramp have to keep above as well: a ramp is a lap and a
+ *   stepdown long, and one that took no notice of them cut through the tab it
+ *   was about to lift over, from the height it passed at down.
  * @returns the loop as it was finally walked, which is *not* the loop passed in
  *   when the ramp reached depth partway round: the last lap then starts and ends
  *   at the ramp-out point. A caller that follows the pass with a lead-out needs
@@ -350,6 +354,8 @@ export function cutLoopWithRamp(cl, loop, zEntry, zTarget, rampAngleDeg = 0, opt
   const n = loop.length / 2;
   const pt = (i) => [loop[(((i % n) + n) % n) * 2], loop[(((i % n) + n) % n) * 2 + 1]];
   const walk = options.walkPerimeter ?? ((l, z) => cutPerimeter(cl, l, z));
+  const lift = options.lift ?? null;
+  const floorAt = (s) => (lift ? lift.floorAt(s) : -Infinity);
   // rapid down to the feed plane rather than feeding through the air above the
   // material; see heights.js for why that is worth doing
   const dropTo = (x, y, z) => {
@@ -360,7 +366,7 @@ export function cutLoopWithRamp(cl, loop, zEntry, zTarget, rampAngleDeg = 0, opt
 
   if (!(rampAngleDeg > 0) || zEntry <= zTarget + 1e-9) {
     const [x0, y0] = pt(0);
-    dropTo(x0, y0, zTarget);
+    dropTo(x0, y0, Math.max(zTarget, floorAt(0)));
     walk(loop, zTarget);
     return loop;
   }
@@ -374,16 +380,52 @@ export function cutLoopWithRamp(cl, loop, zEntry, zTarget, rampAngleDeg = 0, opt
   // down to the material top, where the ramp begins — unless a lead-in already
   // brought the tool there, in which case dropping again is a move to where it
   // is standing
-  if (!options.alreadyThere) dropTo(sx, sy, zEntry);
+  if (!options.alreadyThere) dropTo(sx, sy, Math.max(zEntry, floorAt(0)));
+
+  // One stretch of the ramp, from `a` at `za` to `b` at `zb`, `sa` round the
+  // loop at `a`. Over a tab it rides at the tab's top rather than below it,
+  // stepping up onto the tab and down off it square, as the lap does.
+  let at = Math.max(zEntry, floorAt(0));
+  const rampTo = (a, b, len, za, zb, sa) => {
+    if (!lift) {
+      cl.cut(b[0], b[1], zb, FEED.RAMP);
+      return;
+    }
+    const base = ((sa % lift.total) + lift.total) % lift.total;
+    const cuts = [0, len];
+    for (const [w0, w1] of lift.windows) {
+      for (const bound of [w0, w1]) {
+        const local = bound - base;
+        if (local > 1e-6 && local < len - 1e-6) cuts.push(local);
+      }
+    }
+    cuts.sort((p, q) => p - q);
+    for (let k = 0; k + 1 < cuts.length; k++) {
+      const u0 = cuts[k];
+      const u1 = cuts[k + 1];
+      const floor = floorAt(sa + (u0 + u1) / 2);
+      const t0 = len > 0 ? u0 / len : 0;
+      const t1 = len > 0 ? u1 / len : 1;
+      const z0 = Math.max(za + (zb - za) * t0, floor);
+      const z1 = Math.max(za + (zb - za) * t1, floor);
+      if (Math.abs(z0 - at) > 1e-9) {
+        cl.cut(a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0, z0, FEED.LEAD);
+      }
+      cl.cut(a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1, z1,
+        z1 <= floor + 1e-9 ? FEED.LEAD : FEED.RAMP);
+      at = z1;
+    }
+  };
 
   let z = zEntry;
   let i = 0;
+  let travelled = 0;      // how far round the loop the ramp has come
   let guard = n * (MAX_RAMP_LAPS + 1);   // hard cap; see rampSlopeFor
   while (guard-- > 0) {
     const a = pt(i), b = pt(i + 1);
     const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
     const dz = len * slope;
-    if (dz <= 1e-12) { i++; continue; }
+    if (dz <= 1e-12) { i++; travelled += len; continue; }
 
     if (z - dz <= zTarget + 1e-9) {
       // target depth is reached partway along this segment — insert that point,
@@ -391,15 +433,16 @@ export function cutLoopWithRamp(cl, loop, zEntry, zTarget, rampAngleDeg = 0, opt
       const f = (z - zTarget) / dz;
       const px = a[0] + (b[0] - a[0]) * f;
       const py = a[1] + (b[1] - a[1]) * f;
-      cl.cut(px, py, zTarget, FEED.RAMP);
+      rampTo(a, [px, py], len * f, z, zTarget, travelled);
       // build a loop that starts at the ramp-out point so the walker can
       // apply tabs symmetrically from there
       const rotated = rotateLoop(loop, i + 1, [px, py]);
       walk(rotated, zTarget);
       return rotated;
     }
+    rampTo(a, b, len, z, z - dz, travelled);
     z -= dz;
-    cl.cut(b[0], b[1], z, FEED.RAMP);
+    travelled += len;
     i++;
   }
   // guard tripped (degenerate loop): finish with a plunge + perimeter

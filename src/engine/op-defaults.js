@@ -18,6 +18,8 @@
 // Heights come from the stock and the model rather than from constants, so a
 // new operation is already pointed at the material.
 
+import { tipLengthOf } from './tool-geometry.js';
+
 /**
  * Strategy-specific parameter defaults.
  *
@@ -383,6 +385,16 @@ export function defaultParamsFor(type, { stock, modelBounds, tool, boreBottomZ =
     const { topZ, bottomZ } = depthRangeFor(type, { stock, modelBounds, boreBottomZ });
     patch.topZ = topZ;
     patch.bottomZ = bottomZ;
+    // A hole that goes right through the part is drilled right through it: to
+    // the bottom of the bore the drill leaves its point, and its full diameter
+    // stops a point's length short of the end. The boring bar that follows can
+    // only open what is already a hole (see turning.js drilledHole), so a
+    // through bore drilled to its own end was bored everywhere but the last
+    // couple of millimetres. Past the part is the bar the part is parted from.
+    if (type === 'turnDrill' && tool?.type === 'drill' && boreBottomZ != null
+      && Number.isFinite(modelBounds?.min?.[2]) && boreBottomZ <= modelBounds.min[2] + 0.5) {
+      patch.bottomZ = round(bottomZ - tipLengthOf(tool) - 0.5);
+    }
     // clearance clears the tallest thing on the table; the feed plane sits just
     // above the material, which is where feeding needs to start and no higher
     patch.clearanceHeight = round(stock.max[2] + 10);

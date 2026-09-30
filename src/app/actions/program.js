@@ -19,7 +19,7 @@ import { rapidCutFinding } from '../../engine/backplot.js';
 const MAX_CHECKED_PROGRAM = 2_000_000;
 import { transformMesh } from '../../engine/setup.js';
 import { turningProfile, barFromStock } from '../../engine/lathe.js';
-import { estimateSeconds, generateToolpath } from '../../engine/toolpath.js';
+import { estimateSeconds, generateToolpath, READS_EARLIER } from '../../engine/toolpath.js';
 import { orientationFor, indexingWarnings } from '../../engine/indexing.js';
 import { wrapFor, wrapWarnings, wrapExtent, linearExtent } from '../../engine/wrap.js';
 import {
@@ -46,6 +46,27 @@ import { saveFile, saveFiles, safeFileName, ACCEPT } from '../../io/files.js';
 export function makeProgramActions(ctx, space) {
   const { doc } = ctx;
   const { resolveSetupSpace } = space;
+
+  /**
+   * The enabled operations ahead of `op` in its setup, each with its cutter and
+   * its settings — what a strategy needs to know about the work that will
+   * already have been done when it runs. The same walk rest machining and the
+   * fingerprint make (see op-status.js earlierFingerprints), so the three cannot
+   * disagree about which passes count.
+   */
+  function operationsBefore(setup, op) {
+    const out = [];
+    for (const previous of setup.operations) {
+      if (previous.id === op.id) break;
+      if (!previous.enabled || previous.type === 'command') continue;
+      const tool = doc.project.tools.find((t) => t.id === previous.toolId);
+      if (!tool) continue;
+      out.push({
+        type: previous.type, tool: structuredClone(tool), params: structuredClone(previous.params),
+      });
+    }
+    return out;
+  }
 
   /** The drawing an operation follows, already placed on the billet. */
   function drawingFor(op, stock) {
@@ -207,6 +228,14 @@ export function makeProgramActions(ctx, space) {
             // everything past a Z. The strategies need the fixtures themselves
             // to work that out. See engine/fixtures.js chuckLimit.
             fixtures: structuredClone(setup.fixtures ?? []),
+            // What the operations ahead of this one are, for the strategies whose
+            // path depends on them: a turning pass that opens a hole starts from
+            // the hole the drill made rather than the one the drawing ends up
+            // with (engine/strategies/turning.js drilledHole), and a finishing
+            // pass enters clear of the steps the roughing leaves
+            // (engine/heights.js clearOfRoughing). See toolpath.js READS_EARLIER.
+            earlier: (setup.mode ?? 'mill') === 'turn' || READS_EARLIER.has(op.type)
+              ? operationsBefore(setup, op) : undefined,
           }).then((cl) => {
             doc.toolpaths.set(op.id, cl);
             doc.fingerprints.set(op.id, fingerprint);

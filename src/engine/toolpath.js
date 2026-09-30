@@ -154,6 +154,17 @@ function clampSafeArgs(args) {
 }
 
 /**
+ * Strategies whose path depends on the operations ahead of them in the setup,
+ * whatever they themselves are set to — so they are handed those operations as
+ * `earlier`, and their fingerprint takes them in (app/op-status.js).
+ *
+ *   turnBore   starts from the hole the drill ahead of it made
+ *   waterline, parallel3d   enter and link clear of the steps a roughing pass
+ *              ahead of them leaves (see heights.js clearOfRoughing)
+ */
+export const READS_EARLIER = new Set(['turnBore', 'waterline', 'parallel3d']);
+
+/**
  * The strategies whose Top Z is simply "where the cut starts" — as opposed to a
  * chamfer's edge, an engraving's surface or a hole's top, which are features.
  */

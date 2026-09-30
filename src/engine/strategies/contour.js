@@ -28,7 +28,9 @@
 import { CLBuilder, FEED, lastXY, lastZ } from '../cl.js';
 import { plural, pluralEs } from '../text.js';
 import { mergeTolerance } from '../simplify.js';
-import { offsetLoops, loopArea, unionWithHoles } from '../../geom/clipper.js';
+import {
+  offsetLoops, loopArea, unionWithHoles, diffLoops,
+} from '../../geom/clipper.js';
 import { SilhouetteStack, silhouetteAbove } from '../../geom/silhouette.js';
 import { depthPasses } from '../stock.js';
 import {
@@ -36,12 +38,16 @@ import {
 } from '../linking.js';
 import {
   orientLoop, leadInPoints, leadOutPoints, emitLeadOut,
-  internalLeadStart, startOnSegment, leadOnLoop,
+  internalLeadStart, startOnSegment, leadOnLoop, leadRoomFor, leadFits, roomOutside,
 } from '../leads.js';
 import { applyRegionsToPaths, regionRefusal } from '../regions.js';
-import { approach, entryPlane, crossingPlane, goHome, EntrySurface } from '../heights.js';
+import { approach, entryPlane, crossingPlane, goHome } from '../heights.js';
 import { applyCutting } from '../cutting.js';
-import { cutPerimeterWithTabs } from '../tabs.js';
+import {
+  cutPerimeterWithTabs, spansBetweenTabs, tabAnchors, tabLift, startClearOfTabs,
+} from '../tabs.js';
+import { Ground, sweptBy } from '../ground.js';
+import { fluteLengthOf } from '../tool-geometry.js';
 
 export function generateContour({
   mesh, tool, params, regions, stock, fixtures,
@@ -66,16 +72,41 @@ export function generateContour({
   const partShadow = perLevel ? null : silhouetteAbove(mesh, params.bottomZ, { tolerance });
 
   let cutAnything = false;
-  // Where the material still stands, pass by pass — the height a ramp entry
-  // starts from. See engine/heights.js EntrySurface.
-  const surface = new EntrySurface(params.topZ, r);
+  // What has been cut so far and how deep: where every pass below asks how high
+  // the metal stands before it comes down, and before it swings a lead through
+  // it. See engine/ground.js.
+  const ground = new Ground({ stock, topZ: params.topZ });
+  const entry = {
+    ground,
+    radius: r,
+    // how much standing metal a lead may take with the side of the cutter: what
+    // one level takes, with a quarter to spare
+    limit: 1.25 * Math.max(0.05, params.stepdown ?? 1),
+    dropped: 0,       // leads left off, for the note below
+  };
+  // Leads left off because they would have swung into the part — see leadRoomFor.
+  const leadNotes = { gouged: 0 };
+  const roomFor = (raw) => contourLeadRoom(raw, side, regions, r, tolerance, stock, leadNotes);
   let finalShadow = null;
   const clip = { radius: r, tolerance };
-  const tabs = tabConfig(params, tool);
   const side = params.side ?? 'outside';
+  const tabs = tabConfig(params, tool);
+  if (tabs.count > 0 && tabs.height > 0) {
+    // Where the tabs are, once, on the outline the last pass cuts to size — and
+    // every lap below the tab top, rough or finish, lifts over those places.
+    const finished = offsetLoops(
+      selectProfiles(silhouetteAbove(mesh, params.bottomZ, { tolerance }), params.profile ?? 'outer'),
+      offsetFor(side, r, 0), tolerance);
+    tabs.anchors = tabAnchors(finished, tabs.count);
+    // a lap round the same profile is its allowance off it, at most
+    tabs.reach = stockToLeave + r + tolerance;
+  }
   // Boundaries the cutter was too big to go round, counted for the note below.
   let dropped = 0;
-  const emitLevel = (shadow, allowance, z, useTabs) => {
+  // Loops started again from the top of the metal rather than from the level
+  // above — see emitLevel.
+  let restarted = 0;
+  const emitLevel = (shadow, allowance, z, useTabs, zAbove) => {
     const profiles = selectProfiles(shadow, params.profile ?? 'outer');
     const raw = offsetLoops(profiles, offsetFor(side, r, allowance), tolerance);
     // Offsetting a boundary inward by more than its own half-width collapses
@@ -85,6 +116,7 @@ export function generateContour({
     // setting that does not work. See the note where this is reported.
     if (raw.length < profiles.length) dropped = Math.max(dropped, profiles.length - raw.length);
     const { closed, open } = applyRegionsToPaths(raw, regions, { ...clip, z });
+    const leadRoom = lead.type !== 'none' && closed.length ? roomFor(raw) : null;
     let any = false;
     // nearest first, from wherever the tool finished the level above — the
     // offsetter's own order has no relation to where anything is
@@ -94,24 +126,59 @@ export function generateContour({
       // first thing ever to visit that line and the stock there is untouched.
       // Taking it in one pass is a cut as deep as the whole operation — 15mm
       // with a ⌀6 cutter on the step plate, 23mm on the sloped one — so it is
-      // stepped down to like any other. See engine/heights.js EntrySurface.
-      let from = surface.entryFor(loop);
+      // stepped down to like any other.
+      //
+      // From as high as the metal stands anywhere under the pass, which is not
+      // the same question as whether the pass above ran near it. That was the
+      // test, and a loop the outline had pushed out by less than a radius passed
+      // it everywhere while the cutter stuck out past the pass above into metal
+      // standing the full height of the billet: on the clamp part a rapid 5mm
+      // into it and then 9mm taken at once, three levels in one.
+      let from = entryHeight(ground, sweptBy(loop, r, true), z, params.topZ);
+      if (from > zAbove + 1e-9) restarted++;
       for (const zz of depthPasses(from, z, params.stepdown)) {
         const useTabsHere = (useTabs && zz <= z + 1e-9) || zz < tabTop - 1e-9;
         if (cutLoopPass(cl, loop, from, zz, {
-          clearance, direction, lead, params, tabs: useTabsHere ? tabs : null, crossAt,
-        })) { any = true; surface.covered(loop); }
+          clearance, direction, lead, params, tabs: useTabsHere ? tabs : null, crossAt, entry, leadRoom,
+        })) any = true;
         from = zz;
       }
     }
     for (const path of open) {
-      let from = surface.entryFor(path, false);
+      let from = entryHeight(ground, sweptBy(path, r), z, params.topZ);
       for (const zz of depthPasses(from, z, params.stepdown)) {
-        if (cutOpenPass(cl, path, zz, { clearance, feedPlane: entryPlane(params, from, zz) })) {
+        if (cutOpenPass(cl, path, zz, {
+          clearance, feedPlane: entryPlane(params, from, zz), entry, zEntry: from, params,
+        })) {
           any = true;
-          surface.covered(path, false);
         }
         from = zz;
+      }
+    }
+    return any;
+  };
+  // One finish pass: every profile `allowance` off the part, each taken at the
+  // depths in `laps`, top first. `step` is how much of the wall it takes — how
+  // far back the pass before it ran, which is where it may come down.
+  const emitFinish = (shadow, allowance, laps, step) => {
+    const profiles = selectProfiles(shadow, params.profile ?? 'outer');
+    const raw = offsetLoops(profiles, offsetFor(side, r, allowance), tolerance);
+    const { closed, open } = applyRegionsToPaths(raw, regions, { ...clip, z: params.bottomZ });
+    const leadRoom = lead.type !== 'none' && closed.length ? roomFor(raw) : null;
+    let any = false;
+    for (const loop of orderByProximity(closed, cl.count > 0 ? lastXY(cl) : null)) {
+      for (const zz of laps) {
+        if (cutLoopPass(cl, loop, zz, zz, {
+          clearance, direction, lead, params, tabs: zz < tabTop - 1e-9 ? tabs : null, crossAt,
+          entry, stepIn: step, leadRoom,
+        })) any = true;
+      }
+    }
+    for (const path of open) {
+      for (const zz of laps) {
+        if (cutOpenPass(cl, path, zz, {
+          clearance, feedPlane: entryPlane(params, zz, zz), entry, zEntry: zz, stepIn: step, params,
+        })) any = true;
       }
     }
     return any;
@@ -154,38 +221,35 @@ export function generateContour({
     // avoid/include are depth-invariant, so clipping once at the bottom holds
     // for the whole descent.
     const { closed, open } = applyRegionsToPaths(raw, regions, { ...clip, z: params.bottomZ });
-    surface.beginLevel();
-    // Each closed loop is one continuous descent; mark it covered so the finish
-    // passes below enter it at final depth rather than re-descending it.
+    const leadRoom = lead.type !== 'none' && closed.length ? roomFor(raw) : null;
+    // Each closed loop is one continuous descent.
     for (const loop of orderByProximity(closed, cl.count > 0 ? lastXY(cl) : null)) {
       if (cutLoopColumn(cl, loop, params.topZ, levels, {
-        clearance, direction, lead, params, tabs, tabTop, crossAt,
-      })) { cutAnything = true; surface.covered(loop); }
+        clearance, direction, lead, params, tabs, tabTop, crossAt, entry, leadRoom,
+      })) cutAnything = true;
     }
     // A loop an avoid region has cut open cannot spiral; take it level by level.
     for (const path of open) {
       let from = params.topZ;
       for (const zz of levels) {
-        if (cutOpenPass(cl, path, zz, { clearance, feedPlane: entryPlane(params, from, zz) })) {
+        if (cutOpenPass(cl, path, zz, {
+          clearance, feedPlane: entryPlane(params, from, zz), entry, zEntry: from, params,
+        })) {
           cutAnything = true;
         }
         from = zz;
       }
     }
-    surface.endLevel(params.bottomZ);
   } else {
     levels.forEach((z, i) => {
       finalShadow = perLevel ? silhouette.down(z) : partShadow;
       const isFinal = i === levels.length - 1;
       const cutsIntoTab = z < tabTop - 1e-9;
-      surface.beginLevel();
-      if (emitLevel(finalShadow, stockToLeave, z, isFinal || cutsIntoTab)) cutAnything = true;
-      surface.endLevel(z);
+      const zAbove = i > 0 ? levels[i - 1] : params.topZ;
+      if (emitLevel(finalShadow, stockToLeave, z, isFinal || cutsIntoTab, zAbove)) cutAnything = true;
     });
   }
 
-  // finish passes: peel the remaining allowance off at final depth, so the wall
-  // is cut by a tool that is no longer buried in stock
   // A finishing pass peels off the allowance a roughing pass left. With no
   // allowance there is nothing for it to peel, so it does nothing at all — and
   // did so silently, which reads as a setting that is broken rather than one
@@ -197,16 +261,48 @@ export function generateContour({
       + 'Set a stock allowance for them to take off.');
   }
   if (finishPasses > 0 && stockToLeave > 0 && finalShadow) {
+    // Finish passes peel the allowance off at final depth, so the wall is cut by
+    // a tool that is no longer buried in stock. Each takes what the one before
+    // it left — `step` of the wall, standing the whole height of the cut — which
+    // makes it the one pass in the operation that is *meant* to have metal the
+    // full depth beside it, and it is entered for that: down beside the wall,
+    // not onto it (see cutLoopPass `stepIn`). Entered like any other pass, it
+    // rapided down onto its own allowance: 22mm down the side of the boss.
+    //
+    // And no more of the wall in one lap than the flutes reach. The whole wall
+    // at once put 3mm of the allowance on the shank of a ⌀6 with 20mm of flute,
+    // 23mm down the boss — so a wall taller than the flutes is taken in as few
+    // laps as reach it, the top first.
+    const step = stockToLeave / finishPasses;
+    const laps = finishLaps(params.topZ, params.bottomZ, fluteLengthOf(tool));
     for (let i = 1; i <= finishPasses; i++) {
       const remaining = stockToLeave * (1 - i / finishPasses);
-      // only the very last finish pass carries the tabs — earlier finish
-      // passes are still shaving stock off, not the through-cut
-      surface.beginLevel();
-      emitLevel(finalShadow, remaining, params.bottomZ, true);
-      surface.endLevel(params.bottomZ);
+      if (emitFinish(finalShadow, remaining, laps, step)) cutAnything = true;
+    }
+    if (laps.length > 1) {
+      cl.info(`the finish passes take the wall in ${laps.length} laps: it is `
+        + `${(params.topZ - params.bottomZ).toFixed(1)}mm deep and the cutter has `
+        + `${fluteLengthOf(tool).toFixed(1)}mm of flute — in one lap the shank would rub `
+        + 'the allowance off the top of it.');
     }
   }
 
+  if (leadNotes.gouged > 0 && cutAnything) {
+    cl.info(`the ${lead.type} lead is left off ${plural(leadNotes.gouged, 'pass', 'passes')} `
+      + 'where it would have swung into the part or a clamp — a smaller lead radius keeps it.');
+  }
+  if (entry.dropped > 0 && cutAnything && lead.type !== 'none') {
+    cl.info(`the ${lead.type} lead is left off ${plural(entry.dropped, 'pass', 'passes')} `
+      + 'where it would come down on, or swing through, metal no pass had cut to that '
+      + 'depth — the pass comes in and goes out along its own line instead. Rough the '
+      + 'outside first to keep them.');
+  }
+  if (restarted > 1 && cutAnything) {
+    cl.info(`${plural(restarted, 'loop')} started again from the top of the stock: the `
+      + 'outline at that depth reaches past the one above it, into metal no pass had cut, '
+      + 'and one pass would have taken all of it at once. On a sloped or drafted wall that '
+      + 'is every level — Follow: part cuts the widest outline once, top to bottom.');
+  }
   if (dropped > 0 && cutAnything) {
     cl.info(`${dropped} boundary/boundaries left uncut — a ⌀${tool.diameter} cutter does `
       + 'not fit round them. Use a smaller cutter, or bore them.');
@@ -308,10 +404,20 @@ export function loopExitPoint(loop, lead) {
  *   of one pocket are joined into a spiral instead of being entered one at a
  *   time. `exitAt` at or below `z` means the same thing on the way out: leave
  *   the tool where it is, because the next pass starts from there.
+ * @param options.entry `{ ground, radius, limit, dropped }` — what the
+ *   operation has cut so far (engine/ground.js), asked before the pass comes
+ *   down anywhere or swings a lead through anything, and told what the pass
+ *   cut. Without it the pass takes the caller's word that the ground under it
+ *   stands at `zEntry`.
+ * @param options.stepIn a finish pass: how far the pass before it ran from the
+ *   wall, beyond this one — the line it may come down on when its own start is
+ *   standing in the allowance it is there to take off.
+ * @param options.leadRoom where a lead may take the tool centre at this depth —
+ *   see leadRoomFor. A lead that would leave it is left off.
  */
 export function cutLoopPass(cl, rawLoop, zEntry, z, {
   clearance, direction, lead, params, tabs, crossAt = null, exitAt = null,
-  atDepth = false, runIn = 0,
+  atDepth = false, runIn = 0, entry = null, stepIn = 0, leadRoom = null,
 }) {
   if (rawLoop.length / 2 < 3) return false;
   // Where this pass comes from and goes back to. A pass cannot know what the
@@ -339,10 +445,24 @@ export function cutLoopPass(cl, rawLoop, zEntry, z, {
   // carefully arranged to slide onto this ring got a square step into the
   // corner of the uncut band anyway. Idempotent only holds when both calls are
   // given the same arguments.
-  const loop = orderLoopForEntry(rawLoop, direction, lead,
-    cl.count > 0 ? lastXY(cl) : null, runIn);
-  const passLead = leadOnLoop(loop, resolveLead(rawLoop, lead));
-  const inPts = leadInPoints(loop, passLead);
+  // A pass comes down, and steps onto the wall, where it starts: not on a tab.
+  const loop = startClearOfTabs(orderLoopForEntry(rawLoop, direction, lead,
+    cl.count > 0 ? lastXY(cl) : null, runIn), tabs);
+  const resolved = resolveLead(rawLoop, lead);
+  const passLead = leadOnLoop(loop, resolved);
+  let inPts = leadInPoints(loop, passLead);
+  const rampAngle = params.rampAngle ?? 0;
+  const ramping = rampAngle > 0 && zEntry > z + 1e-9;
+  const entryZ = ramping ? zEntry : z;
+  // A lead swings off the pass into ground beside it, and has to come down
+  // there first — see leadInAllowed for what that ground has to be. Before
+  // that, it has to stay out of the part.
+  if (inPts.length && !leadFits(leadRoom, leadPath(inPts, loop))) {
+    inPts = [];
+  } else if (inPts.length && entry && !leadInAllowed(entry, inPts, loop, zEntry, entryZ)) {
+    inPts = [];
+    entry.dropped++;
+  }
   // The tool only has to *feed* through the material this pass removes: from
   // the level above (already cut away at this XY) down to this one. Feeding
   // from the feed plane instead meant the last pass of a 30mm profile fed 32mm
@@ -359,6 +479,8 @@ export function cutLoopPass(cl, rawLoop, zEntry, z, {
     ? (l, depth) => cutPerimeterWithTabs(cl, l, depth, tabs)
     : (l, depth) => cutPerimeter(cl, l, depth);
 
+  let finished = loop;        // the loop as the lap at depth walked it
+  let across = null;          // where a finish pass came down beside the wall
   if (atDepth && inPts.length === 0) {
     // One stepover across, at depth, and straight on round. The bite is the
     // same one the ring itself takes, so there is nothing to ramp through and
@@ -366,10 +488,30 @@ export function cutLoopPass(cl, rawLoop, zEntry, z, {
     cl.cut(loop[0], loop[1], z);
     walk(loop, z);
   } else if (inPts.length === 0) {
-    arrive(cl, loop[0], loop[1], home);
-    // ramp-in then walk with tabs applied only at final depth
-    cutLoopWithRamp(cl, loop, zEntry, z, params.rampAngle ?? 0,
-      { walkPerimeter: walk, feedPlane });
+    // Down onto the pass itself — onto ground this pass is entered from, which
+    // the caller vouches for and `entry`, where there is one, checks.
+    let plane = feedPlane;
+    const top = entry ? entry.ground.topUnder(loop[0], loop[1], entry.radius) : -Infinity;
+    if (top > zEntry + 1e-9) {
+      // Metal stands under the start higher than that. On a finish pass that is
+      // the allowance it is there for, the full height of the wall: come down
+      // on the line the pass before ran instead, and step across onto the wall
+      // at depth. Anywhere else, or where that line is not clear either, feed
+      // down from above the metal rather than rapid into it.
+      across = stepIn > 0 && !ramping ? besideWall(entry, loop, resolved, stepIn, zEntry) : null;
+      if (!across) plane = Math.min(entryPlane(params, top, z) ?? clearance, home);
+    }
+    if (across) {
+      arrive(cl, across[0], across[1], home);
+      approach(cl, across[0], across[1], z, { clearance: home, feedPlane: plane, positioned: true });
+      cl.cut(loop[0], loop[1], z, FEED.LEAD);
+      walk(loop, z);
+    } else {
+      arrive(cl, loop[0], loop[1], home);
+      // ramp-in then walk with tabs applied only at final depth
+      finished = cutLoopWithRamp(cl, loop, zEntry, z, params.rampAngle ?? 0,
+        { walkPerimeter: walk, feedPlane: plane, lift: tabLift(loop, tabs, z) });
+    }
   } else {
     /**
      * A lead-in is where the pass enters the wall. It is not where the pass
@@ -380,31 +522,192 @@ export function cutLoopPass(cl, rawLoop, zEntry, z, {
      * default lead.
      *
      * So the descent happens the way it does without a lead — round the loop at
-     * the angle asked for — and the lead-in is walked at the level above,
-     * through metal the previous level already took away. The lap at depth that
-     * follows is what finishes the wall, exactly as before.
+     * the angle asked for — and the lead-in is walked at the level above. The
+     * lap at depth that follows is what finishes the wall, exactly as before.
      */
-    const rampAngle = params.rampAngle ?? 0;
-    const ramping = rampAngle > 0 && zEntry > z + 1e-9;
-    const entryZ = ramping ? zEntry : z;
     const [sx, sy] = inPts[0];
     arrive(cl, sx, sy, home);
     approach(cl, sx, sy, entryZ, { clearance: home, feedPlane, positioned: true });
     for (let i = 1; i < inPts.length; i++) cl.cut(inPts[i][0], inPts[i][1], entryZ, FEED.LEAD);
     cl.cut(loop[0], loop[1], entryZ, FEED.LEAD);
+    entry?.ground.sweep(leadPath(inPts, loop), entry.radius, entryZ);
     // The lead-out is taken from the loop the ramp actually finished on: when
     // the descent reaches depth partway round, the closing lap starts and ends
     // there rather than at loop[0], and leading out of the wrong point re-cuts
     // the wall backwards. See cutLoopWithRamp.
-    const finished = ramping
+    finished = ramping
       ? cutLoopWithRamp(cl, loop, zEntry, z, rampAngle,
-        { walkPerimeter: walk, feedPlane, alreadyThere: true })
+        { walkPerimeter: walk, feedPlane, alreadyThere: true, lift: tabLift(loop, tabs, z) })
       : (walk(loop, z), loop);
-    emitLeadOut(cl, finished, z, passLead);
   }
+  if (entry) {
+    if (across) entry.ground.sweep([...across, loop[0], loop[1]], entry.radius, z);
+    recordLap(entry, finished, z, tabs);
+  }
+  if (inPts.length) leadOut(cl, finished, z, passLead, entry, leadRoom);
 
   if (exit != null) cl.rapid(...lastXY(cl), exit);
   return true;
+}
+
+/**
+ * What a lap at `z` leaves: its slot cut down to `z`, except where it rode over
+ * a tab, which is cut only down to the tab's top.
+ */
+function recordLap(entry, loop, z, tabs) {
+  const slot = sweptBy(loop, entry.radius, true);
+  if (!(tabs && tabs.count > 0 && tabs.height > 0)) {
+    entry.ground.cut(slot, z);
+    return;
+  }
+  entry.ground.cut(slot, Math.max(z, tabs.topZ ?? z + tabs.height));
+  for (const span of spansBetweenTabs(loop, tabs)) entry.ground.sweep(span, entry.radius, z);
+}
+
+/**
+ * A lead-out, where it stays out of the part and the ground beside the pass
+ * allows one — straight up out of the slot otherwise. See leadFits and
+ * sweepAllowed.
+ */
+function leadOut(cl, loop, z, passLead, entry, leadRoom) {
+  const out = leadOutPoints(loop, passLead);
+  if (out.length === 0) return;
+  const path = [loop[0], loop[1]];
+  for (const [x, y] of out) path.push(x, y);
+  if (!leadFits(leadRoom, path)) return;
+  if (entry && !sweepAllowed(entry, path, loop, z)) {
+    entry.dropped++;
+    return;
+  }
+  entry?.ground.sweep(path, entry.radius, z);
+  emitLeadOut(cl, loop, z, passLead);
+}
+
+/**
+ * A contour's lead room at one depth: everywhere but the part, round the
+ * outside; inside the offset profile, cutting inside it; none on the line.
+ */
+function contourLeadRoom(raw, side, regions, r, tolerance, stock, notes) {
+  if (side === 'on' || raw.length === 0) return null;
+  if (side !== 'inside') return roomOutside(raw, { stock, regions, radius: r, tolerance, notes });
+  const allowed = regions?.avoid?.length
+    ? diffLoops(raw, offsetLoops(regions.avoid, r, tolerance)) : raw;
+  return leadRoomFor(allowed, notes);
+}
+
+/** A lead-in's points and the loop start it lands on, as one flat path. */
+function leadPath(points, loop) {
+  const out = [];
+  for (const [x, y] of points) out.push(x, y);
+  out.push(loop[0], loop[1]);
+  return out;
+}
+
+/**
+ * Whether a lead-in may be walked: whether the ground beside the pass will take
+ * it.
+ *
+ * A contour cuts a slot down a line, and a lead swings off that line into the
+ * ground beside it — where nothing of this operation has been, unless a lead at
+ * the level above swung through the same place. A single descent down the whole
+ * loop has no leads between the top and the bottom, and the one it led out on
+ * at the bottom swung through stock standing the full height of the cut — 23mm
+ * deep, sideways, with the flutes and then the shank. A finishing lap at the
+ * bottom had the same two arcs.
+ *
+ * Two things have to hold. The tool comes down at the start of the lead at
+ * rapid, to an entry gap above `zEntry`, so nothing may stand under it higher
+ * than that: a lead-in walked a level up, as it is when the pass ramps, sits
+ * over ground the lead before it cut a level higher still — the level above
+ * *that* — and a contour following its outline level by level rapided 1.9mm
+ * into it at every level on the boss. And the lead then swings through ground
+ * that may stand no more than a stepdown and a quarter above where it is
+ * walked, the most one level leaves. What else the job may have cut there — a
+ * roughing pass round the outside — this operation cannot know, so it does not
+ * assume it: the lead is left off, the pass comes in along its own line, and
+ * the operation says so.
+ */
+function leadInAllowed(entry, inPts, loop, zEntry, entryZ) {
+  const { ground, radius } = entry;
+  if (ground.topZ > zEntry + 1e-9 && ground.topUnder(inPts[0][0], inPts[0][1], radius) > zEntry + 1e-9) {
+    return false;
+  }
+  return sweepAllowed(entry, leadPath(inPts, loop), loop, entryZ);
+}
+
+/**
+ * Whether a lead along `path` may be walked at `z` beside a pass along `loop`:
+ * the ground it sweeps, less the slot the pass cuts itself, stands no more than
+ * `entry.limit` above `z`. What a tangent departure leaves between the arc and
+ * the slot is a sliver the edge of the cutter grazes — see ground.js GRAZE.
+ */
+function sweepAllowed(entry, path, loop, z) {
+  const { ground, radius, limit } = entry;
+  // within a level of the top, nothing can stand higher than a level
+  if (ground.topZ <= z + limit + 1e-9) return true;
+  const beside = diffLoops(sweptBy(path, radius), sweptBy(loop, radius, true));
+  return beside.length === 0 || ground.topIn(beside) <= z + limit + 1e-9;
+}
+
+/**
+ * Where a finish pass may come down instead of on its own start: the nearest
+ * point of the line the pass before it ran, `step` further from the wall on the
+ * side the metal is not — if the ground there really is clear down to `z`.
+ */
+function besideWall(entry, loop, resolved, step, z) {
+  // round a boss the pass before ran outside this one; round a hole, inside it
+  const previous = offsetLoops([loop], resolved.materialOutside ? -step : step, 0.001);
+  const near = nearestOnLoops(previous, loop[0], loop[1]);
+  if (!near) return null;
+  return entry.ground.topUnder(near[0], near[1], entry.radius) > z + 1e-9 ? null : near;
+}
+
+/** The nearest point on any of `loops` (closed) to (x, y), or null when there are none. */
+function nearestOnLoops(loops, x, y) {
+  let best = null;
+  let bestD = Infinity;
+  for (const loop of loops) {
+    const n = loop.length / 2;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const ax = loop[i * 2];
+      const ay = loop[i * 2 + 1];
+      const dx = loop[j * 2] - ax;
+      const dy = loop[j * 2 + 1] - ay;
+      const lenSq = dx * dx + dy * dy;
+      let t = lenSq > 0 ? ((x - ax) * dx + (y - ay) * dy) / lenSq : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const px = ax + dx * t;
+      const py = ay + dy * t;
+      const d = Math.hypot(x - px, y - py);
+      if (d < bestD) { bestD = d; best = [px, py]; }
+    }
+  }
+  return best;
+}
+
+/**
+ * The height a pass along `sweep` has to start from: as high as the metal
+ * stands anywhere under it, and never above the top of the cut or below the
+ * pass itself.
+ */
+function entryHeight(ground, sweep, z, topZ) {
+  return Math.max(z, Math.min(topZ, ground.topIn(sweep)));
+}
+
+/**
+ * The depths a finish pass takes the wall at: all of it at the bottom when the
+ * flutes reach the top of it, otherwise as few equal laps as they reach, the
+ * top one first.
+ */
+export function finishLaps(topZ, bottomZ, flute) {
+  const height = topZ - bottomZ;
+  if (!(flute > 0) || height <= flute + 1e-9) return [bottomZ];
+  const n = Math.ceil(height / flute - 1e-9);
+  const laps = [];
+  for (let i = 1; i < n; i++) laps.push(topZ - (height * i) / n);
+  laps.push(bottomZ);
+  return laps;
 }
 
 /**
@@ -457,7 +760,7 @@ function arrive(cl, x, y, home) {
  * @returns whether anything was emitted
  */
 function cutLoopColumn(cl, rawLoop, zTop, passes, {
-  clearance, direction, lead, params, tabs, tabTop, crossAt,
+  clearance, direction, lead, params, tabs, tabTop, crossAt, entry = null, leadRoom = null,
 }) {
   if (rawLoop.length / 2 < 3 || passes.length === 0) return false;
   const zBottom = passes[passes.length - 1];
@@ -466,10 +769,20 @@ function cutLoopColumn(cl, rawLoop, zTop, passes, {
   const home = crossAt != null && crossAt > zBottom + 1e-9
     ? Math.min(crossAt, clearance) : clearance;
   const rampAngle = params.rampAngle ?? 0;
-  const loop0 = orderLoopForEntry(rawLoop, direction, lead,
-    cl.count > 0 ? lastXY(cl) : null, 0);
+  const loop0 = startClearOfTabs(orderLoopForEntry(rawLoop, direction, lead,
+    cl.count > 0 ? lastXY(cl) : null, 0), tabs);
   const passLead = leadOnLoop(loop0, resolveLead(rawLoop, lead));
-  const inPts = leadInPoints(loop0, passLead);
+  let inPts = leadInPoints(loop0, passLead);
+  // walked at the top when the descent ramps, at the first level when it does not
+  const inZ = (params.rampAngle ?? 0) > 0 && zTop > passes[0] + 1e-9 ? zTop : passes[0];
+  if (inPts.length && !leadFits(leadRoom, leadPath(inPts, loop0))) {
+    inPts = [];
+  } else if (inPts.length && entry && !leadInAllowed(entry, inPts, loop0, zTop, inZ)) {
+    inPts = [];
+    entry.dropped++;
+  } else if (inPts.length) {
+    entry?.ground.sweep(leadPath(inPts, loop0), entry.radius, inZ);
+  }
 
   // Tabs apply to any pass cutting into the tab band, exactly as level by level.
   const walkerFor = (z) => (tabs && tabs.count > 0 && tabs.height > 0 && z < tabTop - 1e-9
@@ -478,6 +791,8 @@ function cutLoopColumn(cl, rawLoop, zTop, passes, {
 
   let current = loop0;   // the loop as last walked; the ramp rotates its start
   let from = zTop;
+  // …and so do the ramps down to it: see tabs.js tabLift
+  const liftFor = (l, z) => (walkerUsesTabs(tabs, z, tabTop) ? tabLift(l, tabs, z) : null);
   passes.forEach((z, idx) => {
     const walk = walkerFor(z);
     if (idx === 0) {
@@ -489,7 +804,7 @@ function cutLoopColumn(cl, rawLoop, zTop, passes, {
       if (inPts.length === 0) {
         cl.rapid(loop0[0], loop0[1], home);
         current = cutLoopWithRamp(cl, loop0, from, z, rampAngle,
-          { walkPerimeter: walk, feedPlane });
+          { walkPerimeter: walk, feedPlane, lift: liftFor(loop0, z) });
       } else {
         const ramping = rampAngle > 0 && from > z + 1e-9;
         const entryZ = ramping ? from : z;
@@ -499,7 +814,7 @@ function cutLoopColumn(cl, rawLoop, zTop, passes, {
         cl.cut(loop0[0], loop0[1], entryZ, FEED.LEAD);
         current = ramping
           ? cutLoopWithRamp(cl, loop0, from, z, rampAngle,
-            { walkPerimeter: walk, feedPlane, alreadyThere: true })
+            { walkPerimeter: walk, feedPlane, alreadyThere: true, lift: liftFor(loop0, z) })
           : (walk(loop0, z), loop0);
       }
     } else {
@@ -508,16 +823,30 @@ function cutLoopColumn(cl, rawLoop, zTop, passes, {
       // going round — no lead, no retract, no travel. `alreadyThere` is what
       // tells the ramp not to lift first.
       current = cutLoopWithRamp(cl, current, from, z, rampAngle,
-        { walkPerimeter: walk, alreadyThere: true });
+        { walkPerimeter: walk, alreadyThere: true, lift: liftFor(current, z) });
     }
     from = z;
   });
 
   // Out of the wall once, then up to the travel plane for the move to the next
   // loop (or home, if this was the last).
-  emitLeadOut(cl, current, zBottom, passLead);
+  //
+  // Once is at the bottom, which is the one depth nothing beside the loop has
+  // been cut to: the descent was a single helix, so the only ground cleared at
+  // the bottom is the slot it cut. Swung out of it across a plate bigger than
+  // the part, the arc took the whole depth with the side of the cutter — 23mm
+  // on the step plate turned 30°, past the end of the flutes. Where that is what
+  // it would do, the tool comes straight up out of the slot instead.
+  // what the descent leaves is what its last lap leaves: every lap above it
+  // was cut deeper by the one below, tabs and all
+  if (entry) recordLap(entry, current, zBottom, walkerUsesTabs(tabs, zBottom, tabTop) ? tabs : null);
+  if (inPts.length) leadOut(cl, current, zBottom, passLead, entry, leadRoom);
   cl.rapid(...lastXY(cl), home);
   return true;
+}
+
+function walkerUsesTabs(tabs, z, tabTop) {
+  return !!(tabs && tabs.count > 0 && tabs.height > 0 && z < tabTop - 1e-9);
 }
 
 /**
@@ -570,11 +899,58 @@ function tabConfig(params, tool) {
   };
 }
 
-/** An open span left over after region clipping: plunge in, cut it, retract. */
-export function cutOpenPass(cl, path, z, { clearance, feedPlane = null }) {
+/**
+ * An open span left over after region clipping: plunge in, cut it, retract.
+ *
+ * With `entry`, the plunge is checked against what the operation has cut, the
+ * way a closed pass's is (see cutLoopPass): a finish pass whose span starts in
+ * its own allowance comes down `stepIn` back from the wall, on whichever side
+ * the ground is clear, and steps across; anything else standing under the
+ * start higher than `zEntry` is fed down onto rather than rapided into.
+ */
+export function cutOpenPass(cl, path, z, {
+  clearance, feedPlane = null, entry = null, zEntry = z, stepIn = 0, params = null,
+}) {
   if (path.length < 4) return false;
-  approach(cl, path[0], path[1], z, { clearance, feedPlane });
+  let plane = feedPlane;
+  let across = null;
+  if (entry) {
+    const top = entry.ground.topUnder(path[0], path[1], entry.radius);
+    if (top > zEntry + 1e-9) {
+      across = stepIn > 0 ? besideSpan(entry, path, stepIn, z) : null;
+      if (!across) plane = params ? entryPlane(params, top, z) : null;
+    }
+  }
+  if (across) {
+    approach(cl, across[0], across[1], z, { clearance, feedPlane: plane });
+    cl.cut(path[0], path[1], z, FEED.LEAD);
+  } else {
+    approach(cl, path[0], path[1], z, { clearance, feedPlane: plane });
+  }
   for (let i = 1; i < path.length / 2; i++) cl.cut(path[i * 2], path[i * 2 + 1], z);
+  if (entry) {
+    if (across) entry.ground.sweep([...across, path[0], path[1]], entry.radius, z);
+    entry.ground.sweep(path, entry.radius, z);
+  }
   cl.rapid(...lastXY(cl), clearance);
   return true;
+}
+
+/**
+ * besideWall for a span: `step` off its start, square to its first segment, on
+ * the side where the ground is clear down to `z` — a span keeps no record of
+ * which side of it the part is, and the ground does.
+ */
+function besideSpan(entry, path, step, z) {
+  const [x0, y0, x1, y1] = path;
+  const len = Math.hypot(x1 - x0, y1 - y0);
+  if (!(len > 0)) return null;
+  const nx = -(y1 - y0) / len;
+  const ny = (x1 - x0) / len;
+  for (const s of [1, -1]) {
+    const x = x0 + nx * step * s;
+    const y = y0 + ny * step * s;
+    if (!(entry.ground.topUnder(x, y, entry.radius) > z + 1e-9)) return [x, y];
+  }
+  return null;
 }

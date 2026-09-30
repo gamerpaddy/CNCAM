@@ -31,10 +31,12 @@ import { CLBuilder, FEED, lastXY } from '../cl.js';
 import { plural } from '../text.js';
 import { offsetLoops, unionWithHoles, loopArea } from '../../geom/clipper.js';
 import { silhouetteAbove } from '../../geom/silhouette.js';
-import { orientLoop, leadInPoints, emitLeadOut } from '../leads.js';
+import {
+  orientLoop, leadInPoints, leadOutPoints, emitLeadOut, leadFits, roomOutside,
+} from '../leads.js';
 import { cutPerimeter, orderByProximity } from '../linking.js';
 import { applyRegionsToPaths, regionsActive } from '../regions.js';
-import { approach, entryPlane } from '../heights.js';
+import { approach, entryPlane, holeSurfaceZ } from '../heights.js';
 import { applyCutting } from '../cutting.js';
 import { tipAngleOf } from '../tool-geometry.js';
 import { buildHeightmap } from '../../geom/heightmap.js';
@@ -115,7 +117,9 @@ export function chamferRegionReach(tool, params) {
   };
 }
 
-export function generateChamfer({ mesh, tool, params, regions }) {
+export function generateChamfer({
+  mesh, tool, params, regions, stock = null,
+}) {
   const clearanceZ = params.clearanceHeight;
   const tolerance = params.tolerance ?? 0.01;
   const direction = params.direction ?? 'climb';
@@ -164,7 +168,7 @@ export function generateChamfer({ mesh, tool, params, regions }) {
   const edgePaths = regions?.edgePaths ?? [];
   if (edgePaths.length) {
     return chamferAlongEdges(cl, edgePaths, {
-      mesh, tool, params, width, tipClear, passes, tolerance, clearanceZ,
+      mesh, tool, params, width, tipClear, passes, tolerance, clearanceZ, stock,
     });
   }
 
@@ -200,8 +204,20 @@ export function generateChamfer({ mesh, tool, params, regions }) {
   // The widest the cone gets in this operation, and the standoff every pass
   // shares — the offset does not depend on the width, only the depth does.
   const reach = chamferRegionReach(tool, params);
+  // Where the tool may rapid down to: an entry gap over the edge — or over the
+  // stock, where the stock still stands above the edge. A chamfer takes its
+  // edge to exist, and on a billet nobody has faced yet it does not: the cone
+  // came down at rapid to a millimetre over the part's top, through whatever
+  // was standing on it — 3mm of it with 4mm left on top. See heights.js
+  // holeSurfaceZ, which the holes answer the same question with.
+  const surfaceZ = holeSurfaceZ(edgeZ, stock);
+  unfacedNote(cl, surfaceZ - edgeZ, 'chamfer');
   let cutAnything = false;
   let deepest = edgeZ;
+  // Leads left off because they would have swung into the part or a clamp —
+  // see leads.js leadRoomFor.
+  const leadNotes = { gouged: 0 };
+  const leading = lead.type !== 'none' && lead.radius > 0;
   for (let pass = 1; pass <= passes; pass++) {
     // Each pass cuts a complete, narrower chamfer off the same top edge, so the
     // one after it only has a sliver at the bottom left to take. Stepping the
@@ -214,6 +230,14 @@ export function generateChamfer({ mesh, tool, params, regions }) {
       break;
     }
     deepest = Math.min(deepest, z);
+    // Every lap of this pass stands `g.offset` off an edge, on the side the
+    // edge faces: the part grown by that much is where no lead may go — the
+    // same offset that put the laps where they are, so each lap is on the
+    // boundary of it and a lead into the air beside the edge is inside.
+    const leadRoom = leading
+      ? roomOutside(offsetLoops(shadow, g.offset, tolerance),
+        { regions, radius: reach.cutRadius, tolerance, notes: leadNotes })
+      : null;
     for (const { loop, isHole } of [...outers, ...holes]) {
       // outward for the outline, inward for a hole: the tool always stands in
       // the air the edge faces
@@ -232,12 +256,12 @@ export function generateChamfer({ mesh, tool, params, regions }) {
         tolerance,
         includeGrow: reach.includeGrow,
       });
-      const feedPlane = entryPlane(params, edgeZ, z);
+      const feedPlane = entryPlane(params, surfaceZ, z);
       // nearest first: a chamfer round eight holes visits eight boundaries, and
       // the order they come out of the offsetter in is not where they are
       for (const path of orderByProximity(closed, cl.count > 0 ? lastXY(cl) : null)) {
         if (cutChamferLoop(cl, path, z, {
-          clearanceZ, direction, isHole, lead, feedPlane,
+          clearanceZ, direction, isHole, lead, feedPlane, leadRoom,
         })) cutAnything = true;
       }
       // What survives a region filter is an open span, not a loop — picking one
@@ -277,7 +301,7 @@ export function generateChamfer({ mesh, tool, params, regions }) {
  * @param paths [[x, y, z, …]] in setup space
  */
 function chamferAlongEdges(cl, paths, {
-  mesh, tool, params, width, tipClear, passes, tolerance, clearanceZ,
+  mesh, tool, params, width, tipClear, passes, tolerance, clearanceZ, stock = null,
 }) {
   const map = buildHeightmap(mesh, {
     cellSize: Math.max(0.1, Math.min(0.5, tolerance * 8)),
@@ -332,7 +356,7 @@ function chamferAlongEdges(cl, paths, {
         deepest = Math.min(deepest, tip);
       }
       if (out.length < 2) continue;
-      const feedPlane = entryPlane(params, out[0][2] + g.drop, out[0][2]);
+      const feedPlane = entryPlane(params, holeSurfaceZ(out[0][2] + g.drop, stock), out[0][2]);
       approach(cl, out[0][0], out[0][1], out[0][2], { clearance: clearanceZ, feedPlane });
       for (let k = 1; k < out.length; k++) cl.cut(out[k][0], out[k][1], out[k][2]);
       cl.rapid(...lastXY(cl), clearanceZ);
@@ -437,17 +461,43 @@ function ccw(loop) {
   return out;
 }
 
-/** One chamfer pass round one boundary. @returns whether anything was emitted */
-function cutChamferLoop(cl, rawLoop, z, { clearanceZ, direction, isHole, lead, feedPlane }) {
+/**
+ * Say so when the stock stands above the surface a pass works on.
+ *
+ * The pass comes down from above the stock whatever — that much it can do
+ * without knowing — but what it cuts is at its own Top Z, and if nothing before
+ * it has faced the stock down to there, it cuts through all of it on the way:
+ * with a V bit or a chamfer mill, whose point is the whole of the cutter.
+ */
+export function unfacedNote(cl, above, what) {
+  if (!(above > 0.01)) return;
+  cl.info(`the stock stands ${above.toFixed(2)}mm above Top Z — the ${what} comes down from `
+    + 'above it, but cuts at Top Z, through all of it unless a pass before this one faces '
+    + 'the stock down first');
+}
+
+/**
+ * One chamfer pass round one boundary. Its leads are held to `leadRoom` — see
+ * leads.js leadRoomFor.
+ * @returns whether anything was emitted
+ */
+function cutChamferLoop(cl, rawLoop, z, {
+  clearanceZ, direction, isHole, lead, feedPlane, leadRoom = null,
+}) {
   if (rawLoop.length / 2 < 3) return false;
   const loop = orientLoop(rawLoop, direction, isHole);
-  const inPts = leadInPoints(loop, lead);
+  const leadAt = { ...lead, materialOutside: isHole };
+  let inPts = leadInPoints(loop, leadAt);
+  if (inPts.length && !leadFits(leadRoom, [...inPts.flat(), loop[0], loop[1]])) inPts = [];
   const [sx, sy] = inPts.length ? inPts[0] : [loop[0], loop[1]];
   approach(cl, sx, sy, z, { clearance: clearanceZ, feedPlane });
   for (let i = 1; i < inPts.length; i++) cl.cut(inPts[i][0], inPts[i][1], z, FEED.LEAD);
   if (inPts.length) cl.cut(loop[0], loop[1], z, FEED.LEAD);
   cutPerimeter(cl, loop, z);
-  emitLeadOut(cl, loop, z, lead);
+  const outPts = leadOutPoints(loop, leadAt);
+  if (outPts.length && leadFits(leadRoom, [loop[0], loop[1], ...outPts.flat()])) {
+    emitLeadOut(cl, loop, z, leadAt);
+  }
   cl.rapid(...lastXY(cl), clearanceZ);
   return true;
 }

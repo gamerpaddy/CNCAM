@@ -13,7 +13,9 @@ import {
   INSERT_SHAPES, INSERT_LETTERS, toolPose, effectiveLead, cornerAngleOf,
   insertEngagement, recommendedDepthOfCut, cuttingEdgeLength, polygonCornerAngle,
 } from '../engine/insert.js';
-import { toolSections, latheReachOf, bladeHalfWidth } from '../engine/tool-geometry.js';
+import {
+  toolSections, latheReachOf, bladeHalfWidth, tipLengthOf,
+} from '../engine/tool-geometry.js';
 import { toolFromPreset, allPresets, machineCanHold } from '../doc/tool-library.js';
 import { computeStock, isRoundStock, deriveCylinder } from '../engine/stock.js';
 import { createFixture, chuckLimit } from '../engine/fixtures.js';
@@ -21,7 +23,7 @@ import {
   boreProfile, hasBore, barFromStock, turningProfile, drillOversize,
 } from '../engine/lathe.js';
 import { generateToolpath, TURNING_OPS, toolpathStats } from '../engine/toolpath.js';
-import { FEED, OP, eachMove } from '../engine/cl.js';
+import { CLBuilder, FEED, OP, eachMove } from '../engine/cl.js';
 import { simulateTurning, SimulationPlayback, turnPositionAt } from '../engine/simulate.js';
 import { threadFormDepth, threadInfeed } from '../engine/strategies/turning.js';
 import { createOperation } from '../doc/schema.js';
@@ -1328,8 +1330,10 @@ test('boring and grooving in a tube start inside the hole, and nothing rapids in
   });
   const said = groove.cl.notes.map((n) => n.text).join(' | ');
   assert.ok(/2\.00mm deep to ⌀24\.00/.test(said), `groove: ${said}`);
+  // Anywhere along the tube, that is: the operation starts and finishes at home,
+  // outside the bar and in front of its end, which is where no tool can hit it.
   let widest = 0;
-  eachMove(groove.cl, (op, x) => { widest = Math.max(widest, x); });
+  eachMove(groove.cl, (op, x, y, z) => { if (z - 1.5 < 51) widest = Math.max(widest, x); });
   assert.ok(widest <= 12 + 1e-6, `the blade goes out to X${widest}, past the ⌀24 floor`);
   const { sim, bore: hole, od } = runJob({ radius: 22.5, innerRadius: 6, zMin: 0, zMax: 51 },
     [face, bore, groove]);
@@ -1350,6 +1354,182 @@ test('a boring bar comes into a tube inside the hole that is there', () => {
   const { sim } = runJob({ radius: 22.5, innerRadius: 6, zMin: 0, zMax: 51 }, [bore]);
   assert.eq(sim.rapidCut.count, 0,
     `${sim.rapidCut.count} rapids through metal, ${sim.rapidCut.depth.toFixed(3)}mm deep`);
+});
+
+/** A job's operations with the G0 the post writes between each pair put back in. */
+function withLinks(ops) {
+  const out = [];
+  let from = null;
+  for (const op of ops) {
+    if (!op.cl.count) continue;
+    const d = op.cl.moves;
+    const first = d[0] === OP.DRILL ? [0, d[4]] : [d[1], d[3]];
+    if (from) {
+      const b = new CLBuilder();
+      b.rapid(from[0], 0, from[1]);
+      b.rapid(first[0], 0, first[1]);
+      out.push({ cl: b.finish({ exact: true }), tool: op.tool, link: true });
+    }
+    out.push(op);
+    const o = (op.cl.count - 1) * 8;
+    from = d[o] === OP.DRILL ? [0, d[o + 4]] : [d[o + 1], d[o + 3]];
+  }
+  return out;
+}
+
+test('every lathe operation starts and finishes clear of the bar, so the move between two cannot cross it', () => {
+  // The post writes one straight G0 from where an operation stopped to where the
+  // next one starts, with the turret indexed in between. Each operation used to
+  // stop wherever its last cut left it and start with a rapid straight to its
+  // first: a boring bar stopped in the mouth of its bore and the rougher after
+  // it was dragged across the faced end, 12.7mm deep at rapid; a finishing pass
+  // stopped at the chuck end and a centre drill after it went diagonally
+  // through the whole bar; an internal thread stopped in its hole and the
+  // rougher after it went out through the wall.
+  const part = makeRevolved([[6, 0], [22, 0], [22, 50], [10, 50], [10, 28], [11.5, 28],
+    [11.5, 25], [6, 25], [6, 0]]);
+  const stock = computeStock([part], { kind: 'cylinder', cylinder: deriveCylinder([part]) }, 'turn');
+  const bar = barFromStock(stock, turningProfile(part));
+  const ops = [
+    turnOp('turnFace', 'CNMG 120408 rougher', 1, part, stock),
+    turnOp('turnDrill', '8mm drill', 2, part, stock),
+    turnOp('turnBore', 'S08K CCMT 04 bar ⌀8', 3, part, stock),
+    turnOp('turnGroove', '3mm internal grooving', 4, part, stock,
+      { topZ: 28, bottomZ: 25, grooveRadius: 11.5, grooveInternal: true }),
+    turnOp('turnThread', '16IR AG60 internal thread', 5, part, stock,
+      { topZ: 50, bottomZ: 29, threadInternal: true, threadStartRadius: 10 }),
+    turnOp('turnRough', 'CNMG 120408 rougher', 1, part, stock),
+    turnOp('turnFinish', 'DCMT 070204 finishing', 6, part, stock),
+    turnOp('turnGroove', '2mm grooving tool', 7, part, stock, { topZ: 20, bottomZ: 17, grooveRadius: 20 }),
+    turnOp('turnThread', '16ER AG60 threading', 8, part, stock, { topZ: 50, bottomZ: 35 }),
+    turnOp('turnPart', '3mm parting blade', 9, part, stock),
+  ];
+  for (const { cl, tool: t } of ops) {
+    assert.ok(cl.count > 0, `${t.name} cut nothing: ${cl.notes.map((n) => n.text).join(' | ')}`);
+    // whatever of the tool reaches past the point the CL names
+    const reach = t.type === 'parting' || t.type === 'threading' ? bladeHalfWidth(t) : t.noseRadius ?? 0;
+    const d = cl.moves;
+    const o = (cl.count - 1) * 8;
+    for (const [x, z] of [[d[1], d[3]], [d[o + 1], d[o + 3]]]) {
+      assert.ok(x - reach >= bar.radius + 2 && z - reach >= bar.zMax + 2,
+        `${t.name} starts or finishes at X${x.toFixed(2)} Z${z.toFixed(2)} — `
+        + `not clear of a ⌀${(bar.radius * 2).toFixed(1)} bar ending at Z${bar.zMax}`);
+    }
+  }
+  // …and the whole job, in that order and with every move between two of its
+  // operations, runs without a rapid through metal
+  const { sim } = runJob(bar, withLinks(ops));
+  assert.eq(sim.rapidCut.count, 0,
+    `${sim.rapidCut.count} rapids through metal, ${sim.rapidCut.depth.toFixed(2)}mm deep`);
+});
+
+test('an internal groove at a bored shoulder is fed onto it, not rapided', () => {
+  // A boring bar stops each pass against the groove's far wall with its nose,
+  // leaving a ridge as tall as the nose between passes. The blade used to step
+  // its face onto that wall at rapid — 0.44mm into the ridges.
+  const part = makeRevolved([[6, 0], [22, 0], [22, 50], [10, 50], [10, 28], [11.5, 28],
+    [11.5, 25], [6, 25], [6, 0]]);
+  const stock = computeStock([part], { kind: 'cylinder', cylinder: deriveCylinder([part]) }, 'turn');
+  const bar = barFromStock(stock, turningProfile(part));
+  const groove = turnOp('turnGroove', '3mm internal grooving', 4, part, stock,
+    { topZ: 28, bottomZ: 25, grooveRadius: 11.5, grooveInternal: true });
+  // No rapid brings the blade into the groove's span from outside it: once it
+  // is in there it may back out of a plunge along the path it just cut, and
+  // that is all. `inSpan` is the blade overlapping Z25–28 beyond the ⌀16 the
+  // bar travels down the bore at.
+  const inSpan = (x, z) => x > 8 + 1e-6 && z - 1.5 < 28 - 1e-6 && z + 1.5 > 25 + 1e-6;
+  let was = null;
+  eachMove(groove.cl, (op, x, y, z) => {
+    if (op === OP.RAPID && was && !inSpan(...was)) {
+      assert.ok(!inSpan(x, z), `a rapid to X${x.toFixed(2)} Z${z.toFixed(2)} puts the blade in the groove`);
+    }
+    was = [x, z];
+  });
+  const { sim, bore } = runJob(bar, [
+    turnOp('turnFace', 'CNMG 120408 rougher', 1, part, stock),
+    turnOp('turnDrill', '8mm drill', 2, part, stock),
+    turnOp('turnBore', 'S08K CCMT 04 bar ⌀8', 3, part, stock),
+    groove,
+  ]);
+  assert.eq(sim.rapidCut.count, 0, `${sim.rapidCut.count} rapids through metal`);
+  // and it was simulated in the bore, where it cut the groove
+  assert.ok(Math.abs(bore(26.5) - 11.5) < 0.05, `the groove is ⌀${(2 * bore(26.5)).toFixed(2)}`);
+});
+
+test('boring starts from the hole the drill ahead of it made, not the one it guesses', () => {
+  // With nothing to go on, boring takes the part's narrowest section as the
+  // hole that is already there — ⌀12 on this part. The default drill is the
+  // biggest in the rack that does not oversize the bore, which is rarely the
+  // bore's own size, and from a ⌀10 hole the first pass took the whole
+  // difference in one bite as well as its own 0.8mm.
+  const part = makeRevolved([[6, 0], [22, 0], [22, 50], [10, 50], [10, 28], [11.5, 28],
+    [11.5, 25], [6, 25], [6, 0]]);
+  const stock = computeStock([part], { kind: 'cylinder', cylinder: deriveCylinder([part]) }, 'turn');
+  const bar = barFromStock(stock, turningProfile(part));
+  const face = turnOp('turnFace', 'CNMG 120408 rougher', 1, part, stock);
+  const drillTool = tool('10mm drill', 2);
+  const drillParams = { topZ: 50, bottomZ: -5 };
+  const drill = turnOp('turnDrill', '10mm drill', 2, part, stock, drillParams);
+  const earlier = [{ type: 'turnDrill', tool: drillTool, params: { ...drill.cl && drillParams } }];
+  const boreTool = tool('S08K CCMT 04 bar ⌀8', 3);
+  const bore = (given) => {
+    const op = createOperation('turnBore');
+    Object.assign(op.params, defaultParamsFor('turnBore', {
+      stock, modelBounds: { min: [0, 0, 0], max: [0, 0, 50] }, tool: boreTool,
+    }), { bottomZ: 0 });
+    return { cl: generateToolpath({
+      type: 'turnBore', params: op.params, tool: boreTool, stock, mesh: part, fixtures: [], earlier: given,
+    }), tool: boreTool };
+  };
+  const heaviest = (ops) => {
+    let deepest = 0;
+    const sim = simulateTurning({ bar, ops, samples: 3000 });
+    // the bore's own passes, each walked along the bar: how far the hole grows
+    const from = sim.opEnds[ops.length - 2];
+    for (let s = from; s < sim.stepCount; s++) deepest = Math.max(deepest, sim.stepDepth[s] ?? 0);
+    return { deepest, sim };
+  };
+  const told = heaviest([face, drill, bore(earlier)]);
+  assert.eq(told.sim.rapidCut.count, 0, `${told.sim.rapidCut.count} rapids through metal`);
+  assert.ok(told.deepest <= 0.8 + 0.05, `told of the ⌀10 hole, the deepest pass is ${told.deepest.toFixed(2)}mm`);
+  const guessed = heaviest([face, drill, bore(undefined)]);
+  assert.ok(guessed.deepest > 1.2, `guessing ⌀12 it was ${guessed.deepest.toFixed(2)}mm — the harness has lost its point`);
+
+  // A bar that does not fit the hole that is really there is refused, not
+  // driven into it: this one needs ⌀10, and a ⌀8 drill ahead of it is not that.
+  const narrow = bore([{ type: 'turnDrill', tool: tool('8mm drill', 4), params: drillParams }]);
+  assert.eq(narrow.cl.count, 0, 'it bores through a hole it does not fit');
+  assert.ok(narrow.cl.notes.some((n) => /needs a ⌀10 hole/.test(n.text)), 'and says why');
+
+  // …and it stops where the drilled hole stops being full size
+  const short = bore([{ type: 'turnDrill', tool: drillTool, params: { topZ: 50, bottomZ: 30 } }]);
+  let lowest = Infinity;
+  eachMove(short.cl, (op, x, y, z) => { if (op === OP.LINE) lowest = Math.min(lowest, z); });
+  assert.ok(lowest >= 30 + tipLengthOf(drillTool) - 1e-6,
+    `it bores to Z${lowest.toFixed(2)}, below the full diameter of a hole drilled to Z30`);
+  assert.ok(short.cl.notes.some((n) => /cannot cut into solid/.test(n.text)), 'and says so');
+});
+
+test('a centre drill starts feeding in front of an unfaced bar, not inside it', () => {
+  // Its R plane was measured from the part's end: with the default millimetre
+  // left on the bar to face, that is exactly the end of the bar, and with any
+  // more it is inside it — and a drill rapids to R.
+  const part = makeRevolved([[3, 0], [15, 0], [15, 60], [3, 60], [3, 0]]);
+  for (const extra of [1, 4]) {
+    const stock = computeStock([part], {
+      kind: 'cylinder', cylinder: { ...deriveCylinder([part]), offset: [0, 0, extra] },
+    }, 'turn');
+    const bar = barFromStock(stock, turningProfile(part));
+    const drill = turnOp('turnDrill', '6mm drill', 1, part, stock);
+    let r = null;
+    eachMove(drill.cl, (op, x, y, z, i, j, k, feed, n) => { if (op === OP.DRILL) r = n; });
+    assert.ok(r != null, 'it drills');
+    const retract = drill.cl.moves[r * 8 + 4];
+    assert.ok(retract >= bar.zMax + 1 - 1e-6,
+      `R is Z${retract.toFixed(2)} on a bar ending at Z${bar.zMax.toFixed(2)}`);
+    const { sim } = runJob(bar, [drill]);
+    assert.eq(sim.rapidCut.count, 0, `${sim.rapidCut.count} rapids through metal with ${extra}mm to face`);
+  }
 });
 
 test('an internal thread is simulated in the bore, not on the outside', () => {

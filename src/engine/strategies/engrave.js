@@ -20,9 +20,9 @@ import { depthPasses } from '../stock.js';
 import { cutPerimeter, orderByProximity } from '../linking.js';
 import { orientLoop } from '../leads.js';
 import { applyRegionsToPaths } from '../regions.js';
-import { approach, entryPlane } from '../heights.js';
+import { approach, entryPlane, holeSurfaceZ } from '../heights.js';
 import { applyCutting } from '../cutting.js';
-import { splitBoundaries } from './chamfer.js';
+import { splitBoundaries, unfacedNote } from './chamfer.js';
 import { buildHeightmap, buildToolKernel, dropCutter } from '../../geom/heightmap.js';
 
 /** How deep a mark is when nobody has said. Deep enough to see, shallow enough to be a mark. */
@@ -77,7 +77,9 @@ export function grooveGeometry(tool) {
  *   part's own outline, which is what makes engraving a logo, a part number or
  *   a scribed fold line possible at all: none of them exist in the solid.
  */
-export function generateEngrave({ mesh, tool, params, regions, drawing }) {
+export function generateEngrave({
+  mesh, tool, params, regions, drawing, stock = null,
+}) {
   const clearanceZ = params.clearanceHeight;
   const tolerance = params.tolerance ?? 0.01;
   const direction = params.direction ?? 'climb';
@@ -183,7 +185,10 @@ export function generateEngrave({ mesh, tool, params, regions, drawing }) {
   const bridge = Math.max(tool.diameter, followStep * 2);
 
   let cutAnything = false;
-  let zEntry = surfaceZ;
+  // The first level comes down from over the stock where the stock stands
+  // above the surface — see chamfer.js, which asks the same question.
+  let zEntry = holeSurfaceZ(surfaceZ, stock);
+  unfacedNote(cl, zEntry - surfaceZ, 'engraving');
   for (let level = 0; level < levels.length; level++) {
     const z = levels[level];
     let cutHere = false;

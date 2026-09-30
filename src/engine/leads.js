@@ -7,7 +7,9 @@
 // because CL data is linear-only for now; the post sees ordinary moves.
 
 import { FEED } from './cl.js';
-import { loopArea } from '../geom/clipper.js';
+import {
+  loopArea, offsetLoops, diffLoops, clipOpenPaths, loopsBounds,
+} from '../geom/clipper.js';
 
 const LEAD_SEGMENTS = 8;
 
@@ -213,4 +215,59 @@ export function emitLeadOut(cl, loop, z, options) {
   const pts = leadOutPoints(loop, options);
   for (const [x, y] of pts) cl.cut(x, y, z, FEED.LEAD);
   return pts.length > 0;
+}
+
+/**
+ * Where a lead may take the tool centre at one depth — contour.js cutLoopPass
+ * `leadRoom`, and a chamfer's lap.
+ *
+ * A lead is an arc or a line off the pass, planned from the pass alone: it
+ * knows which side of the pass the air is and nothing about what else is
+ * there. Swung round a concave corner, or across a pocket narrower than
+ * itself, it reaches the next wall — on the step plate a clearing pass with a
+ * 12mm lead led out round the corner of the part it was clearing and 6.7mm into
+ * it. So a lead is held to the region the strategy's own passes are confined
+ * to at that depth, and left off where it would leave it.
+ *
+ * @param allowed the tool-centre region, clamps taken out
+ * @param notes `{ gouged }`, counted up for the strategy's note
+ */
+export function leadRoomFor(allowed, notes) {
+  return { loops: offsetLoops(allowed, LEAD_SLACK, 0.002), notes };
+}
+
+/**
+ * How far outside its room a lead may stray: a line's width, for a tangent lead
+ * that runs on along the pass's own edge and so lies on the room's boundary.
+ */
+const LEAD_SLACK = 0.01;
+
+/** Whether a lead along `path` stays in `room` — counted against it when not. */
+export function leadFits(room, path) {
+  if (!room) return true;
+  for (const piece of clipOpenPaths([path], room.loops, 'difference')) {
+    let length = 0;
+    for (let i = 2; i < piece.length; i += 2) {
+      length += Math.hypot(piece[i] - piece[i - 2], piece[i + 1] - piece[i - 1]);
+    }
+    if (length > 1e-3) {
+      if (room.notes) room.notes.gouged++;
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The lead room everywhere but inside `keepout` (tool-centre loops, holes and
+ * all) and the clamps — for a pass that runs round the outside of the part.
+ */
+export function roomOutside(keepout, { stock = null, regions = null, radius, tolerance, notes }) {
+  const b = loopsBounds(stock ? [...keepout, [stock.min[0], stock.min[1], stock.max[0], stock.max[1]]] : keepout);
+  const far = 1000;
+  const box = [b.min[0] - far, b.min[1] - far, b.max[0] + far, b.min[1] - far,
+    b.max[0] + far, b.max[1] + far, b.min[0] - far, b.max[1] + far];
+  let allowed = diffLoops([box], keepout);
+  if (regions?.avoid?.length) allowed = diffLoops(allowed, offsetLoops(regions.avoid, radius, tolerance));
+  return leadRoomFor(allowed, notes);
 }

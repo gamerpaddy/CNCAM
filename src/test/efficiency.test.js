@@ -28,6 +28,20 @@ function moves(cl) {
   return out;
 }
 
+/**
+ * How often a lathe program goes back out to the clearance radius between its
+ * first cut and its last. Every operation starts and finishes there, so those
+ * two visits are the program coming from and going home; one in between is a
+ * pass going the long way round.
+ */
+function clearanceVisitsBetweenCuts(cl, clearX) {
+  const all = moves(cl);
+  const cuts = all.map((m, i) => (m.op === OP.RAPID ? -1 : i)).filter((i) => i >= 0);
+  if (cuts.length === 0) return 0;
+  return all.slice(cuts[0], cuts[cuts.length - 1] + 1)
+    .filter((m) => m.x >= clearX - 1e-6).length;
+}
+
 /** How far the tool travels at rapid, which is the cost being attacked. */
 function rapidDistance(cl) {
   let sum = 0;
@@ -408,19 +422,21 @@ test('roughing passes do not go back to the clearance radius between them', () =
     },
   });
 
-  // The tool has to reach the clearance radius twice: once on the way in and
-  // once on the way home. Anything in between is a pass paying for the full
-  // radial distance out and back for no reason.
-  let atClear = 0;
-  for (const m of moves(cl)) {
-    if (m.x >= clearanceX - 1e-6) atClear++;
-  }
-  assert.eq(atClear, 2, 'in at the start, out at the end, and never in between');
+  // The tool starts and finishes at the clearance radius, and between its first
+  // cut and its last it never goes back out there: that would be a pass paying
+  // for the full radial distance out and back for no reason.
+  assert.eq(clearanceVisitsBetweenCuts(cl, clearanceX), 0,
+    'in at the start, out at the end, and never in between');
+  const all = moves(cl);
+  assert.ok(all[0].x >= clearanceX - 1e-6 && all[all.length - 1].x >= clearanceX - 1e-6,
+    'it starts and finishes at the clearance radius');
 
-  // And the return travel stays just off the surface the pass has cut.
+  // And the return travel stays just off the surface the pass has cut — the
+  // travel between passes, that is, not the way in from home and back to it.
+  const cuts = all.map((m, i) => (m.op === OP.RAPID ? -1 : i)).filter((i) => i >= 0);
   let prev = null;
   let worst = 0;
-  for (const m of moves(cl)) {
+  for (const m of all.slice(cuts[0], cuts[cuts.length - 1] + 1)) {
     if (prev && m.op === OP.RAPID && Math.abs(m.z - prev.z) > 1) {
       worst = Math.max(worst, m.x);
     }
@@ -453,9 +469,8 @@ test('threading does not go home between passes', () => {
   // Fifteen passes that each go home pay 14mm of radial travel twice over,
   // fifteen times, to return to a groove the tool is standing in.
   const clearX = 22;
-  let atClear = 0;
-  for (const m of moves(cl)) if (m.x >= clearX - 1e-6) atClear++;
-  assert.eq(atClear, 2, 'in at the start, out at the end, and never in between');
+  assert.eq(clearanceVisitsBetweenCuts(cl, clearX), 0,
+    'in at the start, out at the end, and never in between');
 
   assert.ok(rapidDistance(cl) < 400,
     `${Math.round(rapidDistance(cl))}mm of rapid; it was 692 when every pass went home`);

@@ -132,36 +132,63 @@ export function makePocketBlock({ size = 40, pocketSize = 20, height = 10, depth
     max: [inset + pocketSize, inset + pocketSize],
   };
   const floorZ = height - depth;
+  const soup = pocketedBoxSoup([0, 0, 0], [size, size, height], pocket, floorZ);
+  return { mesh: meshFromSoup(new Float32Array(soup)), pocket, top: height, floorZ };
+}
+
+/**
+ * A plate with a pocket in it, and a boss standing on the plate with a pocket
+ * of its own: two pockets whose mouths are at different heights.
+ *
+ * The pair is the point. The boss's pocket is cut first, from the top; the
+ * plate's is a pocket only below the plate's top face, and until then the
+ * billet stands over it as high as it stands anywhere — nothing about the
+ * boss's pocket having been cut says anything about the metal over this one.
+ *
+ * @returns { mesh, boss, plate } — each pocket as { min: [x,y], max: [x,y], floorZ }
+ */
+export function makeTwoPockets() {
+  const plate = { min: [40, 10], max: [54, 30], floorZ: 4 };
+  const boss = { min: [10, 12], max: [26, 28], floorZ: 14 };
+  const soup = [
+    ...pocketedBoxSoup([0, 0, 0], [60, 40, 10], plate, plate.floorZ),
+    ...pocketedBoxSoup([4, 6, 10], [32, 34, 20], boss, boss.floorZ),
+  ];
+  return { mesh: meshFromSoup(new Float32Array(soup)), boss, plate };
+}
+
+/**
+ * A box from `min` to `max` with a rectangular pocket sunk into its top down to
+ * `floorZ`, as a flat vertex array.
+ *
+ * Every face wound so its normal points out of the *material* — which for the
+ * pocket walls means into the pocket, because the metal is on the outside of
+ * them. See boxSoup for why that is not decoration: a slice reads the winding
+ * to tell an outer from a hole, and this block sliced above its floor came
+ * back with both loops the same way round, so the pocket vanished into the
+ * fill and the slice measured 1600mm² where the part has 1200.
+ */
+function pocketedBoxSoup([x0, y0, z0], [x1, y1, z1], { min: [px0, py0], max: [px1, py1] }, floorZ) {
   const q = (a, b, c, e) => [...a, ...b, ...c, ...a, ...c, ...e];
   const v = (x, y, z) => [x, y, z];
-  const [px0, py0] = pocket.min;
-  const [px1, py1] = pocket.max;
-
-  // Every face wound so its normal points out of the *material* — which for the
-  // pocket walls means into the pocket, because the metal is on the outside of
-  // them. See boxSoup for why that is not decoration: a slice reads the winding
-  // to tell an outer from a hole, and this block sliced above its floor came
-  // back with both loops the same way round, so the pocket vanished into the
-  // fill and the slice measured 1600mm² where the part has 1200.
-  const soup = [
-    ...q(v(0, 0, 0), v(0, size, 0), v(size, size, 0), v(size, 0, 0)),        // base, −Z
-    ...q(v(0, 0, 0), v(size, 0, 0), v(size, 0, height), v(0, 0, height)),    // outer walls
-    ...q(v(0, size, 0), v(0, size, height), v(size, size, height), v(size, size, 0)),
-    ...q(v(0, 0, 0), v(0, 0, height), v(0, size, height), v(0, size, 0)),
-    ...q(v(size, 0, 0), v(size, size, 0), v(size, size, height), v(size, 0, height)),
+  return [
+    ...q(v(x0, y0, z0), v(x0, y1, z0), v(x1, y1, z0), v(x1, y0, z0)),        // base, −Z
+    ...q(v(x0, y0, z0), v(x1, y0, z0), v(x1, y0, z1), v(x0, y0, z1)),        // outer walls
+    ...q(v(x0, y1, z0), v(x0, y1, z1), v(x1, y1, z1), v(x1, y1, z0)),
+    ...q(v(x0, y0, z0), v(x0, y0, z1), v(x0, y1, z1), v(x0, y1, z0)),
+    ...q(v(x1, y0, z0), v(x1, y1, z0), v(x1, y1, z1), v(x1, y0, z1)),
     // top face as four strips around the pocket mouth
-    ...q(v(0, 0, height), v(size, 0, height), v(size, py0, height), v(0, py0, height)),
-    ...q(v(0, py1, height), v(size, py1, height), v(size, size, height), v(0, size, height)),
-    ...q(v(0, py0, height), v(px0, py0, height), v(px0, py1, height), v(0, py1, height)),
-    ...q(v(px1, py0, height), v(size, py0, height), v(size, py1, height), v(px1, py1, height)),
+    ...q(v(x0, y0, z1), v(x1, y0, z1), v(x1, py0, z1), v(x0, py0, z1)),
+    ...q(v(x0, py1, z1), v(x1, py1, z1), v(x1, y1, z1), v(x0, y1, z1)),
+    ...q(v(x0, py0, z1), v(px0, py0, z1), v(px0, py1, z1), v(x0, py1, z1)),
+    ...q(v(px1, py0, z1), v(x1, py0, z1), v(x1, py1, z1), v(px1, py1, z1)),
     // pocket walls and floor
-    ...q(v(px0, py0, floorZ), v(px0, py0, height), v(px1, py0, height), v(px1, py0, floorZ)),
-    ...q(v(px0, py1, floorZ), v(px1, py1, floorZ), v(px1, py1, height), v(px0, py1, height)),
-    ...q(v(px0, py0, floorZ), v(px0, py1, floorZ), v(px0, py1, height), v(px0, py0, height)),
-    ...q(v(px1, py0, floorZ), v(px1, py0, height), v(px1, py1, height), v(px1, py1, floorZ)),
+    ...q(v(px0, py0, floorZ), v(px0, py0, z1), v(px1, py0, z1), v(px1, py0, floorZ)),
+    ...q(v(px0, py1, floorZ), v(px1, py1, floorZ), v(px1, py1, z1), v(px0, py1, z1)),
+    ...q(v(px0, py0, floorZ), v(px0, py1, floorZ), v(px0, py1, z1), v(px0, py0, z1)),
+    ...q(v(px1, py0, floorZ), v(px1, py0, z1), v(px1, py1, z1), v(px1, py1, floorZ)),
     ...q(v(px0, py0, floorZ), v(px1, py0, floorZ), v(px1, py1, floorZ), v(px0, py1, floorZ)),
   ];
-  return { mesh: meshFromSoup(new Float32Array(soup)), pocket, top: height, floorZ };
 }
 
 /**

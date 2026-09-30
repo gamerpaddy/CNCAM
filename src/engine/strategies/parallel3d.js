@@ -29,9 +29,16 @@ import { silhouetteAbove } from '../../geom/silhouette.js';
 import { applyRegionsToArea, regionsActive, regionRefusal } from '../regions.js';
 import { pointInLoops } from '../../geom/inside.js';
 import { applyCutting } from '../cutting.js';
-import { approach, entryPlane, entryGapOf } from '../heights.js';
+import {
+  approach, entryPlane, entryGapOf, clearOfRoughing, roughingNote,
+} from '../heights.js';
 
-export function generateParallel3d({ mesh, tool, params, stock, regions }) {
+export function generateParallel3d({
+  mesh, tool, params: given, stock, regions, earlier = null,
+}) {
+  // clear of the steps the roughing ahead of this leaves — see heights.js
+  const clear = clearOfRoughing(given, earlier);
+  const { params } = clear;
   const r = tool.diameter / 2;
   const step = Math.max(0.05, (params.stepover ?? 0.25) * tool.diameter);
   const tolerance = params.tolerance ?? 0.01;
@@ -45,6 +52,7 @@ export function generateParallel3d({ mesh, tool, params, stock, regions }) {
   const cl = new CLBuilder().simplify(mergeTolerance(tolerance));
   cl.toolChange(tool.number);
   applyCutting(cl, { params }, tool);
+  roughingNote(cl, clear, tool);
 
   // grid fine enough that stepover and tolerance are both resolved, and the
   // heightmap is padded by the tool radius so the kernel never runs off the edge

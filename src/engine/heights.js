@@ -133,6 +133,99 @@ export function entryGapOf(params) {
   return Number.isFinite(gap) && gap >= 0 ? gap : DEFAULT_ENTRY_GAP;
 }
 
+/** Passes that clear an area level by level, leaving a staircase on a slope. */
+const ROUGHING = new Set(['clear2d', 'adaptive', 'pocket']);
+
+/**
+ * How far above the finished surface the passes ahead of an operation may have
+ * left metal standing.
+ *
+ * A roughing pass takes an area down a level at a time, so on a slope it
+ * leaves a step between each pair of levels — as tall as its stepdown, with its
+ * allowance on top. That is the most there can be, and a finishing pass whose
+ * entries and links come closer to the surface than that meets the steps at
+ * rapid.
+ *
+ * @param earlier the passes ahead, in order: [{ type, params, enabled? }]
+ */
+export function roughingLeftover(earlier) {
+  let most = 0;
+  for (const previous of earlier ?? []) {
+    if (previous.enabled === false || !ROUGHING.has(previous.type)) continue;
+    const q = previous.params ?? {};
+    most = Math.max(most, (q.stepdown ?? 0) + Math.max(0, q.stockToLeave ?? 0));
+  }
+  return most;
+}
+
+/** An entry gap that clears `leftover`, with half a millimetre to spare. */
+export function suggestedEntryGap(leftover) {
+  return Math.ceil((leftover + 0.5) * 2) / 2;
+}
+
+/**
+ * A finishing pass's settings with its entry gap clear of the roughing ahead
+ * of it — only ever raised.
+ *
+ * A finishing pass takes the part's surface as all there is: it rapids down to
+ * an entry gap over it and links across at that height. Adding one after a
+ * roughing pass raises the gap to clear the steps that pass leaves, but only
+ * then: a roughing pass added afterwards, or one whose stepdown was raised, or
+ * a gap typed back down, left 1mm under a 12mm staircase — a rapid 5.4mm into
+ * it on the sloped part, after the default adaptive clear. The panel said so;
+ * the program did it anyway. So the pass makes sure itself.
+ *
+ * @returns { params, leftover, raisedFrom } — `raisedFrom` null when the gap
+ *   asked for already clears the steps
+ */
+export function clearOfRoughing(params, earlier) {
+  const leftover = roughingLeftover(earlier);
+  const gap = entryGapOf(params);
+  if (!(leftover > 0) || gap > leftover) return { params, leftover, raisedFrom: null };
+  return {
+    params: { ...params, entryGap: suggestedEntryGap(leftover) },
+    leftover,
+    raisedFrom: gap,
+  };
+}
+
+/**
+ * Say that the entry gap was raised, and why — see clearOfRoughing — and warn
+ * when the steps are taller than `tool` may take at once (stepsTooTallFor).
+ */
+export function roughingNote(cl, { params, leftover, raisedFrom }, tool) {
+  if (raisedFrom != null) {
+    cl.info(`entering and linking ${params.entryGap}mm above the surface rather than `
+      + `${raisedFrom}mm: the roughing before this leaves steps up to `
+      + `${Math.round(leftover * 1000) / 1000}mm above it, and a rapid any lower runs into them`);
+  }
+  const tall = stepsTooTallFor(leftover, tool);
+  if (tall) cl.warn(tall);
+}
+
+/**
+ * What to say when the steps the roughing ahead leaves are taller than `tool`
+ * may take at once — null when they are not. `leftover` is roughingLeftover's.
+ *
+ * A finishing pass meets the staircase a Z-level rough leaves on a slope one
+ * step at a time as it comes down, and where the slope is shallow the pass
+ * above ran too far away to have touched the step below it: it takes the step
+ * whole. Measured with the default adaptive, a 12mm stepdown, ahead of a ⌀6
+ * ball: waterline took 5.4mm at once on the clamp part and 6.6mm on the sloped
+ * one, and parallel finishing up to 10.6mm; after a 3mm rough both stayed under
+ * 3mm, and after a 1mm rough under one. Deeper than the cutter's radius the
+ * whole width of it is in the cut — slotting, with a finishing tool.
+ */
+export function stepsTooTallFor(leftover, tool) {
+  const radius = (tool?.diameter ?? 0) / 2;
+  if (!(radius > 0) || !(leftover > radius + 1e-9)) return null;
+  const mm = (v) => Math.round(v * 1000) / 1000;
+  return `the roughing before this leaves steps up to ${mm(leftover)}mm tall on the slopes, and `
+    + `this pass meets each one whole where a slope is shallow — up to ${mm(leftover)}mm at once, `
+    + `with the ⌀${tool.diameter} cutter buried across its width. Rough with a stepdown and `
+    + `allowance that come to no more than ${mm(radius)}mm, half this cutter, before finishing with it.`;
+}
+
 /**
  * The top of the material a hole goes down through: the hole's own top, or the
  * billet's where it stands higher.

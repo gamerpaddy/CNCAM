@@ -8,7 +8,7 @@
 // pass that takes the stepover it was set and one that slots at full width.
 
 import { CLBuilder, FEED, lastXY } from '../cl.js';
-import { pluralEs } from '../text.js';
+import { plural, pluralEs } from '../text.js';
 import { concentricRings, coreEntry } from '../rings.js';
 import { cutSpanWithRamp } from '../linking.js';
 import { mergeTolerance } from '../simplify.js';
@@ -19,9 +19,12 @@ import { SilhouetteStack } from '../../geom/silhouette.js';
 import { depthLevelsFor, depthRefusal, stockOutline } from '../stock.js';
 import { applyRegionsToArea, regionRefusal } from '../regions.js';
 import { loopBorderedBy, pointInLoops, distanceToLoops } from '../../geom/inside.js';
-import { cutLoopPass } from './contour.js';
+import { cutLoopPass, finishLaps } from './contour.js';
+import { roomOutside } from '../leads.js';
 import { applyCutting } from '../cutting.js';
 import { crossingPlane, goHome, entryPlane } from '../heights.js';
+import { Ground } from '../ground.js';
+import { fluteLengthOf } from '../tool-geometry.js';
 
 const MAX_PASSES = 500;
 
@@ -131,6 +134,15 @@ export function generateClear({
   let zEntry = params.topZ;
   let cutAnything = false;
   let finalShadow = null;
+  // What each level cleared, for where the finish passes may come down — see
+  // engine/ground.js.
+  const ground = new Ground({ stock, topZ: params.topZ });
+  // Leads left off because they would have swung into the part or a clamp —
+  // see contour.js leadRoomFor. A wall ring's lead swings out over the ground
+  // the level has cleared, or off the billet, and nowhere else.
+  const leadNotes = { gouged: 0 };
+  const roomFor = (keepout) => roomOutside(keepout, { stock, regions, radius: r, tolerance, notes: leadNotes });
+  const leading = (lead.type ?? 'none') !== 'none' && lead.radius > 0;
   const levels = depthLevelsFor(params, mesh, tool);
   for (const z of levels) {
     finalShadow = silhouette.down(z);
@@ -141,6 +153,7 @@ export function generateClear({
     const keepout = offsetLoops(finalShadow, r + (params.stockToLeave ?? 0), tolerance);
     const region = regionAt(finalShadow, params.stockToLeave ?? 0, z);
     if (region.length === 0) continue;
+    const leadRoom = leading ? roomFor(keepout) : null;
 
     let cutHere = false;
     // One family of concentric passes per connected piece of the region. Kept
@@ -184,7 +197,7 @@ export function generateClear({
         // the interior passes — ramp those in along the path instead
         const cut = closed
           ? cutLoopPass(cl, loop, zEntry, z, {
-            clearance, direction, params, crossAt,
+            clearance, direction, params, crossAt, leadRoom,
             lead: ringSide(loop, k === 0 ? lead : { type: 'none', radius: 0 }, keepout),
           })
           : cutSpanPass(cl, loop, zEntry, z, {
@@ -197,7 +210,11 @@ export function generateClear({
         if (cut) { cutHere = true; done.push({ loop, closed }); }
       }
     }
-    if (cutHere) { cutAnything = true; zEntry = z; }
+    if (cutHere) {
+      cutAnything = true;
+      zEntry = z;
+      ground.cut(offsetLoops(region, r, tolerance), z);
+    }
   }
 
   // Finish passes: walk the wall again at final depth with progressively less
@@ -216,9 +233,17 @@ export function generateClear({
       + 'Set a stock allowance for them to take off.');
   }
   if (finishPasses > 0 && (params.stockToLeave ?? 0) > 0 && finalShadow) {
+    // Each takes what the pass before it left, standing the whole height of the
+    // wall, so it comes down beside the wall rather than onto it — onto it was a
+    // rapid 9mm down the allowance on the boss — and takes it in laps the
+    // flutes reach. The same pass as a contour's finish: see contour.js.
+    const entry = { ground, radius: r, limit: 1.25 * Math.max(0.05, params.stepdown ?? 1), dropped: 0 };
+    const each = params.stockToLeave / finishPasses;
+    const laps = finishLaps(params.topZ, params.bottomZ, fluteLengthOf(tool));
     for (let i = 1; i <= finishPasses; i++) {
       const remaining = params.stockToLeave * (1 - i / finishPasses);
       const keepout = offsetLoops(finalShadow, r + remaining, tolerance);
+      const leadRoom = leading ? roomFor(keepout) : null;
       for (const loop of regionAt(finalShadow, remaining)) {
         // The region's boundary is the part on one side and the stock edge on
         // the other, and only one of them is a wall. Re-cutting the stock edge
@@ -226,13 +251,20 @@ export function generateClear({
         // 209mm of cutting feed per finish pass on a 46mm billet, taking off
         // nothing. The allowance stands against the part; peel it there.
         if (onStockEdge(loop, outer)) continue;
-        if (cutLoopPass(cl, loop, params.bottomZ, params.bottomZ, {
-          clearance, direction, params, lead: ringSide(loop, lead, keepout), crossAt,
-        })) cutAnything = true;
+        for (const zz of laps) {
+          if (cutLoopPass(cl, loop, zz, zz, {
+            clearance, direction, params, lead: ringSide(loop, lead, keepout), crossAt,
+            entry, stepIn: each, leadRoom,
+          })) cutAnything = true;
+        }
       }
     }
   }
 
+  if (leadNotes.gouged > 0 && cutAnything) {
+    cl.info(`the ${lead.type} lead is left off ${plural(leadNotes.gouged, 'pass', 'passes')} `
+      + 'where it would have swung into the part or a clamp — a smaller lead radius keeps it.');
+  }
   if (!cutAnything) {
     // see engine/regions.js regionRefusal: a picked face that leaves the cutter
     // nowhere to go is not a heights problem, and saying it is wastes the user's
@@ -334,13 +366,82 @@ function orderRings(rings, airOutside, sides, step) {
   // the *part* side is the wall, and it is the one pass that must not be missed.
   // A piece bounded entirely by the stock edge always has something further in —
   // a region no wider than the cutter would need a billet narrower than nothing.
+  //
+  // …and only where it *is* the stock edge. A ring is called air-side when it
+  // is nearer the stock edge than the part, and a ring that is mostly one side
+  // is taken whole, so the outermost one runs for a stretch along a clamp's
+  // keep-out, or a keep-out or the edge of a pick — inside the billet, with a
+  // strip of stock beyond it that no other ring reaches. Dropped as "tangent to
+  // the stock", that strip stood at every level, and the level where the part
+  // came out close enough for a wall ring to reach it cut it in one pass the
+  // whole height of the billet: 24mm deep at the full width of a ⌀6, on the
+  // clamp part in a pair of vise jaws, and 12mm beside a single toe clamp six
+  // millimetres long on a stepped block. The stretches off the edge are cut, and
+  // cut last, with the walls: by then the rings inside them have gone and they
+  // take the strip and a stepover.
   const outermost = air.length > 0 ? Math.min(...air.map((pass) => pass.k)) : -1;
   const nothingElse = part.length === 0 && air.every((pass) => pass.k === outermost);
-  for (const pass of air) if (nothingElse || pass.k > outermost) out.push(pass);
+  for (const pass of air) {
+    if (nothingElse || pass.k > outermost) { out.push(pass); continue; }
+    for (const run of offEdgeRuns(pass.loop, pass.closed, sides.air)) {
+      part.push({ loop: run.path, k: pass.k, closed: run.closed });
+    }
+  }
   // …then back out to the part, finishing on the wall it leaves to size
   part.sort((a, b) => b.k - a.k);
   for (const pass of part) out.push(pass);
   return out;
+}
+
+/**
+ * The stretches of a path that are not on the stock edge.
+ *
+ * The region's boundary runs exactly along the billet's edge wherever the
+ * billet bounds it — the region is cut from `stockOutline` grown by the
+ * cutter, and the clipper keeps its coordinates to 10nm — so the test is a
+ * distance of next to nothing. Each stretch keeps the on-edge point at either
+ * end of it, so that it reaches the edge instead of stopping a segment short.
+ *
+ * @returns [{ path, closed }] — the whole path when none of it is the edge,
+ *   nothing when all of it is
+ */
+function offEdgeRuns(path, closed, edge, eps = 1e-4) {
+  const n = path.length / 2;
+  if (n < 2) return [];
+  const on = new Array(n);
+  let any = false;
+  let all = true;
+  for (let i = 0; i < n; i++) {
+    on[i] = distanceToLoops(edge, path[i * 2], path[i * 2 + 1]) <= eps;
+    if (on[i]) any = true; else all = false;
+  }
+  if (!any) return [{ path, closed }];
+  if (all) return [];
+  const runs = [];
+  const point = (i) => [path[i * 2], path[i * 2 + 1]];
+  // Walked from an on-edge point, so a closed path's wrap is not a stretch of
+  // its own, and back round to that point, which ends the last stretch; an
+  // open one is walked as it is.
+  const first = closed ? on.indexOf(true) : 0;
+  const steps = closed ? n + 1 : n;
+  let run = null;
+  for (let s = 0; s < steps; s++) {
+    const i = (first + s) % n;
+    if (!on[i]) {
+      if (!run) {
+        run = [];
+        const before = closed ? (i + n - 1) % n : i - 1;
+        if (before >= 0) run.push(...point(before));
+      }
+      run.push(...point(i));
+    } else if (run) {
+      run.push(...point(i));
+      runs.push(run);
+      run = null;
+    }
+  }
+  if (run) runs.push(run);
+  return runs.filter((r) => r.length >= 4).map((r) => ({ path: r, closed: false }));
 }
 
 /**

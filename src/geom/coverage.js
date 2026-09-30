@@ -70,6 +70,30 @@ export function rasterizeLoops(loops, grid) {
   return mask;
 }
 
+/**
+ * Set every cell of `mask` that one of `paths` (open polylines) runs through,
+ * and return it — sampled at half a cell, so every cell a path crosses holds a
+ * sample of it, or is beside one and comes in with a dilation.
+ */
+export function markPaths(mask, paths, { min, width, height, cellSize }) {
+  const step = cellSize / 2;
+  for (const path of paths) {
+    for (let i = 2; i + 1 < path.length; i += 2) {
+      const ax = path[i - 2];
+      const ay = path[i - 1];
+      const dx = path[i] - ax;
+      const dy = path[i + 1] - ay;
+      const pieces = Math.max(1, Math.ceil(Math.hypot(dx, dy) / step));
+      for (let q = 0; q <= pieces; q++) {
+        const ci = Math.round((ax + (dx * q) / pieces - min[0]) / cellSize);
+        const cj = Math.round((ay + (dy * q) / pieces - min[1]) / cellSize);
+        if (ci >= 0 && cj >= 0 && ci < width && cj < height) mask[cj * width + ci] = 1;
+      }
+    }
+  }
+  return mask;
+}
+
 /** 3x3 max filter — grows a mask by one cell. */
 export function dilateMask(mask, { width, height }) {
   return filter3x3(mask, width, height, Math.max, 0);
@@ -99,6 +123,64 @@ function filter3x3(mask, width, height, pick, edge) {
     }
   }
   return out;
+}
+
+/**
+ * Every cell whose centre is within `distance` of the centre of a set cell of
+ * `mask` — how far a cutter whose centre may stand anywhere in `mask` reaches.
+ *
+ * Exact at the cells, not approximately: the question it answers is whether a
+ * cutter *could* touch a cell, and a transform that runs long on the diagonals
+ * says yes about the stock in an inside corner that no round cutter gets into.
+ * A disc is stamped from each set cell on the edge of the mask — the interior's
+ * discs are inside those and the mask itself.
+ */
+export function reachMask(mask, { width, height, cellSize }, distance) {
+  const out = mask.slice();
+  const reach = Math.max(0, Math.floor(distance / cellSize + 1e-9));
+  const disc = [];
+  for (let dj = -reach; dj <= reach; dj++) {
+    for (let di = -reach; di <= reach; di++) {
+      if (Math.hypot(di, dj) * cellSize <= distance + 1e-9) disc.push(di, dj);
+    }
+  }
+  for (let j = 0; j < height; j++) {
+    for (let i = 0; i < width; i++) {
+      const k = j * width + i;
+      if (!mask[k]) continue;
+      const edge = i === 0 || j === 0 || i === width - 1 || j === height - 1
+        || !mask[k - 1] || !mask[k + 1] || !mask[k - width] || !mask[k + width];
+      if (!edge) continue;
+      for (let n = 0; n < disc.length; n += 2) {
+        const ii = i + disc[n];
+        const jj = j + disc[n + 1];
+        if (ii >= 0 && jj >= 0 && ii < width && jj < height) out[jj * width + ii] = 1;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The set cells of a mask as closed loops: one square per cell, a cell wide,
+ * merged along each row. Handed to the clipper, which unions them.
+ */
+export function cellLoops(mask, { min, width, height, cellSize }) {
+  const loops = [];
+  const h = cellSize / 2;
+  for (let j = 0; j < height; j++) {
+    const y = min[1] + j * cellSize;
+    let i = 0;
+    while (i < width) {
+      if (!mask[j * width + i]) { i++; continue; }
+      const start = i;
+      while (i < width && mask[j * width + i]) i++;
+      const x0 = min[0] + start * cellSize - h;
+      const x1 = min[0] + (i - 1) * cellSize + h;
+      loops.push([x0, y - h, x1, y - h, x1, y + h, x0, y + h]);
+    }
+  }
+  return loops;
 }
 
 /**
@@ -139,10 +221,28 @@ export function widthFromFraction(radius, fraction) {
  * @param radius   cutter radius
  */
 export class ClearingMap {
-  constructor({ material, allowed, radius, cellSize, bounds }) {
+  /**
+   * @param edges the edge of the billet where it has material inside it, as
+   *   open polylines. A raster of cell centres cannot see material narrower
+   *   than a cell — there is no centre in it, and dilating nothing is still
+   *   nothing — and that is the strip of billet a part placed with a
+   *   millimetre to spare leaves: 0.7mm once the allowance is off it, under a
+   *   0.8mm cell at a 0.4xD bite. Adaptive saw air there, never ran its wall
+   *   pass along it, and left it the full height of the billet until a level
+   *   low enough took it in one cut — 22.7mm deep with 20mm of flute, on the
+   *   sloped part between vise jaws. The cells the edge runs through are
+   *   material, and that makes the strip a cell wide at least — added after
+   *   the dilation, not before it. Along an ordinary edge the dilation has
+   *   those cells already; dilated themselves, they moved the whole billet
+   *   edge half a cell out, every peel's first ring read heavier than the one
+   *   bite it is spaced to take, and the pass fell back on opening the level
+   *   from the inside: the clamp part's program grew from 3608 moves to 19490.
+   */
+  constructor({ material, allowed, radius, cellSize, bounds, edges = null }) {
     this.radius = radius;
     this.grid = makeGrid(bounds, cellSize, radius + 4 * cellSize);
     this.uncut = dilateMask(rasterizeLoops(material, this.grid), this.grid);
+    if (edges?.length) markPaths(this.uncut, edges, this.grid);
     // Two readings of the same region, biased opposite ways, because two
     // different questions are asked of it.
     //

@@ -9,21 +9,25 @@
 // means an unpicked pocket operation still does the obvious thing.
 
 import { CLBuilder } from '../cl.js';
-import { pluralEs } from '../text.js';
+import { plural, pluralEs } from '../text.js';
 import { concentricRings, coreEntry } from '../rings.js';
 import { mergeTolerance } from '../simplify.js';
 import {
-  offsetLoops, offsetNormalized, enclosedVoids, diffLoops, loopArea,
+  offsetLoops, offsetNormalized, enclosedVoids, diffLoops, loopArea, intersectLoops,
+  unionWithHoles, unionLoops,
 } from '../../geom/clipper.js';
 import { SilhouetteStack } from '../../geom/silhouette.js';
-import { depthLevelsFor } from '../stock.js';
+import { depthLevelsFor, depthPasses } from '../stock.js';
 import { applyRegionsToArea } from '../regions.js';
 import {
-  cutLoopPass, orderLoopForEntry, loopEntryPoint, loopExitPoint, resolveLead,
+  cutLoopPass, orderLoopForEntry, loopEntryPoint, loopExitPoint, resolveLead, finishLaps,
 } from './contour.js';
+import { leadRoomFor } from '../leads.js';
 import { pointInLoops, loopEnclosesAny } from '../../geom/inside.js';
 import { applyCutting } from '../cutting.js';
 import { crossingPlane, goHome, entryGapOf } from '../heights.js';
+import { Ground, sweptBy } from '../ground.js';
+import { fluteLengthOf } from '../tool-geometry.js';
 
 const MAX_PASSES = 500;
 
@@ -47,7 +51,6 @@ export function generatePocket({
   const silhouette = new SilhouetteStack(mesh, { tolerance });
   let cutAnything = false;
   let sawRegion = false;      // a pocket existed, even if the tool would not fit
-  let lastShadow = null;      // silhouette at final depth, for the finish passes
 
   // Every level first, each carrying the area the level *above* it emptied.
   //
@@ -76,7 +79,6 @@ export function generatePocket({
     // one millimetre inside the billet and then ramped a stepdown through 3mm
     // of standing stock — a full-width cut at three times the depth asked for.
     if (found.area.length) { clearedAbove = found.area; zEntry = z; }
-    lastShadow = shadow;
   }
 
   // The highest the tool is ever asked to travel between passes. `crossAt` is
@@ -105,11 +107,92 @@ export function generatePocket({
   // *leaves* at as well as the one it arrives at, and that belongs to the move
   // to the pass after it. See waterline for the same two-phase shape.
   const passes = [];
+  // Leads left off because they would have reached across the pocket into its
+  // other wall — see contour.js leadRoomFor. A wall's lead curls into the pocket
+  // and has to stay there.
+  const leadNotes = { gouged: 0 };
+  const roomAt = new Map();   // level → its lead room, built when a lead asks
+  const roomOf = (level) => {
+    if (!roomAt.has(level)) roomAt.set(level, leadRoomFor(level.area, leadNotes));
+    return roomAt.get(level);
+  };
   let from = null;            // where the previous pass finishes
   let fromZ = params.topZ;
   let slotLength = 0;         // how far the tool runs full width opening levels
+
+  /**
+   * One pocket's rings at `z`, entered from `above` — how high the pocket's
+   * own metal stands, which the loop below asks the ground.
+   *
+   * @param onLevel whether `z` is the level itself, rather than a step down to
+   *   it: only the level's own floor is ground the level above cleared, and so
+   *   only there may a link fly low over it
+   */
+  const planPocket = (level, found, above, z, onLevel) => {
+    const { area, shadow } = level;
+    const group = entryRings(found, {
+      depth: above - z, rampAngle: params.rampAngle ?? 0, radius: r, tolerance, area,
+    });
+    // The first pass of a group opens the level, and there is nowhere for the
+    // chip to go while it does — see `pocketGroups`. How far it runs like
+    // that is worth knowing, so it is added up rather than left to be found
+    // in the metal.
+    if (group.length) slotLength += perimeterOf(group[0].loop);
+    let entered = false;
+    for (const { loop, isWall } of group) {
+      // Only the wall pass gets a lead — an inner ring is cutting stock, not
+      // a surface. Which side the metal is on is a separate question and both
+      // passes need it, because it also decides which way round climb milling
+      // runs. See pocketSide.
+      const passLead = pocketSide(loop, isWall ? lead : { type: 'none', radius: 0 }, shadow);
+      // Already down and stepping across from the ring beside this one — see
+      // the note on `atDepth` below, and engine/linking.js startNearestSlide
+      // for why the step is spread along the loop rather than taken square.
+      const slide = entered && !hasLead(passLead);
+      const runIn = slide ? 2 * tool.diameter : 0;
+      const ready = orderLoopForEntry(loop, direction, resolveLead(loop, passLead),
+        from, runIn);
+      const entry = loopEntryPoint(ready, passLead);
+      // One entry per pocket per level, and the rest is a spiral.
+      //
+      // Every ring was entered on its own: lift, traverse, and ramp a whole
+      // stepdown down into the next ring out — which reads at the machine as
+      // the tool pecking its way outward, and is what "it ramps down again on
+      // every step outwards" is. There is nothing to ramp through. Two
+      // concentric rings are one stepover apart, the tool is already at depth,
+      // and stepping across is the same bite the ring itself takes. So the
+      // first ring of a pocket descends and the rest are joined at depth.
+      const atDepth = slide;
+      passes.push({
+        z,
+        // nothing to descend through: the tool is already down here
+        zEntry: atDepth ? z : above,
+        loop: ready,
+        lead: passLead,
+        atDepth,
+        runIn,
+        link: atDepth ? null : onLevel ? linkFor(level, from, entry) : ceiling,
+        room: hasLead(passLead) ? roomOf(level) : null,
+      });
+      from = loopExitPoint(ready, passLead);
+      fromZ = z;
+      entered = true;
+    }
+  };
+
+  // What has been cut so far, pocket by pocket — see engine/ground.js.
+  //
+  // A level was entered from one height for the whole of it — the last level
+  // that cut anything. But a pocket is only a pocket where the part closes round
+  // it, and the part does not close round every pocket at the same depth: the
+  // step plate's pocket is open at the top face and enclosed a millimetre under
+  // it, so its first level was entered from the top of the stock and took two
+  // stepdowns at once, and a pocket that opens below another is entered from
+  // the other one's floor, rapiding down into its own uncut metal. So each
+  // pocket asks how high its own metal stands, and steps down from there.
+  const ground = new Ground({ stock, topZ: params.topZ });
   for (const level of levels) {
-    const { z, zEntry: above, area, shadow } = level;
+    const { z, area } = level;
     if (area.length === 0) continue;
 
     // Concentric passes inward from the pocket wall, spaced to divide the
@@ -127,52 +210,12 @@ export function generatePocket({
     // the pocket that contains them costs nothing and the tool finishes what it
     // is in before it goes anywhere.
     for (const found of pocketGroups(rings, area, from)) {
-      const group = entryRings(found, {
-        depth: above - z, rampAngle: params.rampAngle ?? 0, radius: r, tolerance, area,
-      });
-      // The first pass of a group opens the level, and there is nowhere for the
-      // chip to go while it does — see `pocketGroups`. How far it runs like
-      // that is worth knowing, so it is added up rather than left to be found
-      // in the metal.
-      if (group.length) slotLength += perimeterOf(group[0].loop);
-      let entered = false;
-      for (const { loop, isWall } of group) {
-        // Only the wall pass gets a lead — an inner ring is cutting stock, not
-        // a surface. Which side the metal is on is a separate question and both
-        // passes need it, because it also decides which way round climb milling
-        // runs. See pocketSide.
-        const passLead = pocketSide(loop, isWall ? lead : { type: 'none', radius: 0 }, shadow);
-        // Already down and stepping across from the ring beside this one — see
-        // the note on `atDepth` below, and engine/linking.js startNearestSlide
-        // for why the step is spread along the loop rather than taken square.
-        const slide = entered && !hasLead(passLead);
-        const runIn = slide ? 2 * tool.diameter : 0;
-        const ready = orderLoopForEntry(loop, direction, resolveLead(loop, passLead),
-          from, runIn);
-        const entry = loopEntryPoint(ready, passLead);
-        // One entry per pocket per level, and the rest is a spiral.
-        //
-        // Every ring was entered on its own: lift, traverse, and ramp a whole
-        // stepdown down into the next ring out — which reads at the machine as
-        // the tool pecking its way outward, and is what "it ramps down again on
-        // every step outwards" is. There is nothing to ramp through. Two
-        // concentric rings are one stepover apart, the tool is already at depth,
-        // and stepping across is the same bite the ring itself takes. So the
-        // first ring of a pocket descends and the rest are joined at depth.
-        const atDepth = slide;
-        passes.push({
-          z,
-          // nothing to descend through: the tool is already down here
-          zEntry: atDepth ? z : above,
-          loop: ready,
-          lead: passLead,
-          atDepth,
-          runIn,
-          link: atDepth ? null : linkFor(level, from, entry),
-        });
-        from = loopExitPoint(ready, passLead);
-        fromZ = z;
-        entered = true;
+      const swept = unionLoops(found.flatMap(({ loop }) => sweptBy(loop, r, true)));
+      let above = Math.max(z, Math.min(params.topZ, ground.topIn(swept)));
+      for (const zz of depthPasses(above, z, params.stepdown)) {
+        planPocket(level, found, above, zz, zz <= z + 1e-9);
+        ground.cut(swept, zz);
+        above = zz;
       }
     }
   }
@@ -185,6 +228,7 @@ export function generatePocket({
       direction,
       params,
       lead: p.lead,
+      leadRoom: p.room,
       atDepth: p.atDepth,
       runIn: p.runIn,
       // arrive over this pass at the height that clears what is between here
@@ -211,19 +255,46 @@ export function generatePocket({
       + 'they would re-cut the wall the roughing passes already left to size. '
       + 'Set a stock allowance for them to take off.');
   }
-  if (finishPasses > 0 && stockToLeave > 0 && lastShadow) {
+  if (finishPasses > 0 && stockToLeave > 0) {
+    // Each pocket is finished on its own floor. They were finished at Bottom Z
+    // with the outline the *last level* had — and Bottom Z is the bottom of the
+    // stock unless somebody moved it, so on any blind pocket the last level is
+    // solid part, there was no pocket in it to finish, and the finish passes
+    // were dropped without a word, the allowance left on every wall.
+    //
+    // Each takes what the pass before it left, standing the full height of the
+    // wall, and comes down beside it rather than onto it, in laps the flutes
+    // reach — the same pass as a contour's finish (see contour.js). What the
+    // levels cleared is what says where beside it is clear.
+    const entry = { ground, radius: r, limit: 1.25 * Math.max(0.05, params.stepdown ?? 1), dropped: 0 };
+    const each = stockToLeave / finishPasses;
     for (let i = 1; i <= finishPasses; i++) {
       const remaining = stockToLeave * (1 - i / finishPasses);
-      const pass = pocketArea(lastShadow, regions,
-        { radius: r, tolerance, stockToLeave: remaining, z: params.bottomZ, minClearedWidth: step });
-      for (const loop of pass.area) {
-        if (cutLoopPass(cl, loop, params.bottomZ, params.bottomZ, {
-          clearance, direction, params, lead: pocketSide(loop, lead, lastShadow), crossAt,
-        })) cutAnything = true;
+      for (const { z, shadow, ends } of pocketFloors(levels)) {
+        const pass = pocketArea(shadow, regions,
+          { radius: r, tolerance, stockToLeave: remaining, z, minClearedWidth: step });
+        const leadRoom = hasLead(lead) ? leadRoomFor(pass.area, leadNotes) : null;
+        for (const piece of unionWithHoles(pass.area)) {
+          const loops = [piece.outer, ...piece.holes];
+          // a pocket that goes on down is finished on the floor it reaches
+          if (intersectLoops(loops, ends).length === 0) continue;
+          for (const loop of loops) {
+            for (const zz of finishLaps(params.topZ, z, fluteLengthOf(tool))) {
+              if (cutLoopPass(cl, loop, zz, zz, {
+                clearance, direction, params, lead: pocketSide(loop, lead, shadow), crossAt,
+                entry, stepIn: each, leadRoom,
+              })) cutAnything = true;
+            }
+          }
+        }
       }
     }
   }
 
+  if (leadNotes.gouged > 0 && cutAnything) {
+    cl.info(`the ${lead.type} lead is left off ${plural(leadNotes.gouged, 'pass', 'passes')} `
+      + 'where it would have reached across the pocket into a wall — a smaller lead radius keeps it.');
+  }
   if (!cutAnything) {
     // "nothing here" and "nothing this tool can reach" are very different
     // problems, and only one of them is fixed by picking a smaller cutter
@@ -246,6 +317,33 @@ export function generatePocket({
   }
   goHome(cl, clearance);
   return cl.finish();
+}
+
+/**
+ * Where each pocket bottoms out: for every level, the pieces of its area the
+ * level below does not carry on — the pockets whose floor that level is.
+ *
+ * A pocket's area only shrinks going down, but not every pocket reaches the
+ * same depth, and one can open up below a level where there was none: so the
+ * question is asked piece by piece, of the very next level.
+ *
+ * @returns [{ z, shadow, ends }] — `ends` the area loops that stop here
+ */
+function pocketFloors(levels) {
+  const floors = [];
+  for (let k = 0; k < levels.length; k++) {
+    const { z, area, shadow } = levels[k];
+    if (area.length === 0) continue;
+    const below = levels[k + 1]?.area ?? [];
+    const ends = [];
+    for (const piece of unionWithHoles(area)) {
+      const loops = [piece.outer, ...piece.holes];
+      if (below.length && intersectLoops(loops, below).length > 0) continue;
+      ends.push(...loops);
+    }
+    if (ends.length) floors.push({ z, shadow, ends });
+  }
+  return floors;
 }
 
 /**

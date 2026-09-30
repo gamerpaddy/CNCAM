@@ -1334,6 +1334,79 @@ test('a rest-machining pass goes out of date when the pass it follows does', () 
     'a pass above is not affected by the one below it');
 });
 
+test('a bore goes out of date when the drill ahead of it changes', () => {
+  // Boring starts from the hole the drill before it made (see
+  // engine/strategies/turning.js drilledHole), so a bigger drill changes the
+  // bore without a single setting on the bore changing.
+  const doc = new Document();
+  const setup = createSetup('Lathe', 'turn');
+  doc.addSetup(setup);
+  const small = { ...createTool('drill'), diameter: 8, number: 1 };
+  const big = { ...createTool('drill'), diameter: 10, number: 2 };
+  doc.addTool(small);
+  doc.addTool(big);
+  const drill = createOperation('turnDrill');
+  drill.toolId = small.id;
+  doc.addOperation(setup, drill);
+  const bore = createOperation('turnBore');
+  doc.addOperation(setup, bore);
+  const before = opFingerprint(doc, bore, setup);
+  doc.updateItem(drill, { toolId: big.id }, 'tool');
+  assert.ok(opFingerprint(doc, bore, setup) !== before, 'a ⌀10 hole is not a ⌀8 hole');
+  doc.undo();
+  assert.eq(opFingerprint(doc, bore, setup), before, 'and back');
+  // and the drill, which reads nothing ahead of it, does not acquire the bore
+  const drillBefore = opFingerprint(doc, drill, setup);
+  doc.updateItem(bore.params, { stepdown: 0.5 }, 'stepdown');
+  assert.eq(opFingerprint(doc, drill, setup), drillBefore, 'the drill is not the bore');
+});
+
+test('a finishing pass is out of date when the roughing ahead of it changes', () => {
+  // It enters and links clear of the steps the roughing leaves (heights.js
+  // clearOfRoughing), so a deeper stepdown ahead of it is a different program
+  // with not one of its own settings changed — and the one left standing from
+  // before enters inside the taller steps.
+  const doc = new Document();
+  doc.addModel(createModel('part'), makeBox(40, 40, 10));
+  const flat = toolFor('flat', 6);
+  const ball = toolFor('ball', 6);
+  ball.number = 2;
+  doc.addTool(flat);
+  doc.addTool(ball);
+  const setup = createSetup('Setup 1');
+  doc.addSetup(setup);
+  const rough = createOperation('adaptive');
+  rough.toolId = flat.id;
+  rough.params.stepdown = 3;
+  doc.addOperation(setup, rough);
+  for (const type of ['waterline', 'parallel3d']) {
+    const finish = createOperation(type);
+    finish.toolId = ball.id;
+    doc.addOperation(setup, finish);
+    const before = opFingerprint(doc, finish, setup);
+    doc.updateItem(rough.params, { stepdown: 12 }, 'stepdown');
+    assert.ok(opFingerprint(doc, finish, setup) !== before, `${type}: a deeper rough ahead is a change`);
+    doc.undo();
+    assert.eq(opFingerprint(doc, finish, setup), before, `${type}: and putting it back is not`);
+  }
+});
+
+test('a centre drill for a hole right through the part goes right through it', () => {
+  // A drill leaves its point at the depth it is sent to, and its full diameter
+  // stops a point's length short of that. A through bore drilled to its own end
+  // was left with the last couple of millimetres a cone, and a boring bar
+  // cannot open a cone — so boring stopped short of the end of the part.
+  const drill = { ...createTool('drill'), diameter: 10, tipAngle: 118 };
+  const stock = { kind: 'cylinder', min: [-16, -16, -20], max: [16, 16, 61] };
+  const modelBounds = { min: [-15, -15, 0], max: [15, 15, 60] };
+  const through = defaultParamsFor('turnDrill', { stock, modelBounds, tool: drill, boreBottomZ: 0 });
+  assert.ok(through.bottomZ <= -tipLengthOf(drill) - 0.5 + 1e-3,
+    `a through bore is drilled to Z${through.bottomZ}`);
+  // A blind one keeps its point where the drawing puts the bottom of the hole.
+  const blind = defaultParamsFor('turnDrill', { stock, modelBounds, tool: drill, boreBottomZ: 30 });
+  assert.eq(blind.bottomZ, 30, 'a blind bore is drilled to its bottom');
+});
+
 test('the panel says so before Generate when the cutter has no side', () => {
   // The message exists in engine/tool-match.js; this is the wire from it to the
   // place a user reads it. Without the wire, a pocket holding a tap generates a
@@ -1503,12 +1576,46 @@ test('a finishing pass is told when its entries would run into the roughing step
   finish.params.entryGap = 1;
   doc.addOperation(setup, finish);
   assert.close(roughingLeftover(setup, finish), 3.3, 1e-9, 'a stepdown and the allowance on top of it');
-  assert.ok(opPreflight(doc, finish).some((n) => /steps up to 3\.3mm/.test(n)),
+  assert.ok(opPreflight(doc, finish).some((n) => /steps up to 3\.3mm.*Entry gap/.test(n)),
     'the pass says its gap is inside the steps');
   doc.updateItem(finish.params, { entryGap: suggestedEntryGap(3.3) }, 'gap');
   assert.eq(finish.params.entryGap, 4, 'the suggestion clears them with room to spare');
-  assert.ok(!opPreflight(doc, finish).some((n) => /steps up to/.test(n)), 'and then says nothing');
+  assert.ok(!opPreflight(doc, finish).some((n) => /Entry gap/.test(n)), 'and then says nothing');
   // a finishing pass *before* the roughing has nothing of it to clear
   doc.updateItem(rough, { enabled: false }, 'off');
   assert.eq(roughingLeftover(setup, finish), 0, 'a disabled roughing pass leaves nothing');
+});
+
+test('a finishing pass is told when the roughing steps are taller than its cutter may take at once', () => {
+  // Where a slope is shallow a finishing pass meets each step of the roughing's
+  // staircase whole. With the default adaptive ahead of a ⌀6 ball, waterline
+  // took 5.4mm at once on the clamp part and parallel finishing 10.6mm on the
+  // sloped one, the ball buried across its width.
+  const doc = new Document();
+  doc.addModel(createModel('part'), makeBox(40, 40, 10));
+  const flat = toolFor('flat', 6);
+  const ball = toolFor('ball', 6);
+  ball.number = 2;
+  doc.addTool(flat);
+  doc.addTool(ball);
+  const setup = createSetup('Setup 1');
+  doc.addSetup(setup);
+  const rough = createOperation('adaptive');
+  rough.toolId = flat.id;
+  rough.params.stepdown = 12;
+  rough.params.stockToLeave = 0.3;
+  doc.addOperation(setup, rough);
+  const finish = createOperation('parallel3d');
+  finish.toolId = ball.id;
+  doc.addOperation(setup, finish);
+  const tall = (n) => /buried across its width/.test(n);
+  const said = opPreflight(doc, finish).find(tall);
+  assert.ok(said, 'a 12mm stepdown is more than a ⌀6 ball may meet at once');
+  assert.ok(/up to 12\.3mm at once/.test(said) && /no more than 3mm/.test(said),
+    `and it says how much, and what would do: ${said}`);
+  doc.updateItem(rough.params, { stepdown: 2.5 }, 'stepdown');
+  assert.ok(!opPreflight(doc, finish).some(tall), 'steps no taller than its radius are not');
+  doc.updateItem(rough.params, { stepdown: 12 }, 'stepdown');
+  doc.updateItem(rough, { enabled: false }, 'off');
+  assert.ok(!opPreflight(doc, finish).some(tall), 'nor are the steps of a pass that does not run');
 });
