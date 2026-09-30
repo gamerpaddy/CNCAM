@@ -25,6 +25,7 @@ import {
 import { generateToolpath, TURNING_OPS, toolpathStats } from '../engine/toolpath.js';
 import { CLBuilder, FEED, OP, eachMove } from '../engine/cl.js';
 import { simulateTurning, SimulationPlayback, turnPositionAt } from '../engine/simulate.js';
+import { threadCutFinding } from '../engine/backplot.js';
 import { threadFormDepth, threadInfeed } from '../engine/strategies/turning.js';
 import { createOperation } from '../doc/schema.js';
 import { defaultParamsFor } from '../engine/op-defaults.js';
@@ -1421,6 +1422,72 @@ test('every lathe operation starts and finishes clear of the bar, so the move be
   const { sim } = runJob(bar, withLinks(ops));
   assert.eq(sim.rapidCut.count, 0,
     `${sim.rapidCut.count} rapids through metal, ${sim.rapidCut.depth.toFixed(2)}mm deep`);
+  // …and its two threads are cut in the bore and the neck the operations before
+  // them left for them
+  assert.eq(sim.threadCut.count, 0,
+    `${sim.threadCut.count} threading passes take more than a thread, `
+    + `${sim.threadCut.depth.toFixed(2)}mm at the worst`);
+  assert.eq(threadCutFinding(sim, ops), null, 'and there is nothing to report');
+});
+
+test('a thread cut before the metal it is cut in is taken away is reported', () => {
+  // The path of a thread is a perfectly good thread whatever is under it, so
+  // put ahead of the boring it is a synchronised feed through six millimetres
+  // of steel, no rapid anywhere, and the file reads the same as the right one.
+  // It is the simulation that knows what the insert meets.
+  const part = makeRevolved([[6, 0], [22, 0], [22, 50], [10, 50], [10, 28], [11.5, 28],
+    [11.5, 25], [6, 25], [6, 0]]);
+  const stock = computeStock([part], { kind: 'cylinder', cylinder: deriveCylinder([part]) }, 'turn');
+  const bar = barFromStock(stock, turningProfile(part));
+  const make = (order) => order.map((kind, i) => {
+    const number = i + 1;
+    let op;
+    if (kind === 'face') op = turnOp('turnFace', 'CNMG 120408 rougher', number, part, stock);
+    else if (kind === 'drill') op = turnOp('turnDrill', '8mm drill', number, part, stock);
+    else if (kind === 'bore') op = turnOp('turnBore', 'S08K CCMT 04 bar ⌀8', number, part, stock);
+    else {
+      op = turnOp('turnThread', '16IR AG60 internal thread', number, part, stock,
+        { topZ: 50, bottomZ: 29, threadInternal: true, threadStartRadius: 10 });
+    }
+    return { ...op, name: kind === 'thread' ? 'Internal thread' : kind };
+  });
+  const wrong = withLinks(make(['face', 'drill', 'thread']));
+  const { sim } = runJob(bar, wrong);
+  assert.eq(sim.rapidCut.count, 0, 'no rapid is involved, which is the point');
+  assert.ok(sim.threadCut.count > 0, 'a pass takes more than a thread');
+  assert.ok(sim.threadCut.depth > 3, `and a great deal more: ${sim.threadCut.depth.toFixed(2)}mm`);
+  const found = threadCutFinding(sim, wrong);
+  assert.ok(found, 'reported');
+  assert.eq(found.level, 'warn', 'as a warning');
+  assert.ok(/threading pass in Internal thread/.test(found.text), `in the operation: ${found?.text}`);
+  assert.ok(/1\.5mm pitch/.test(found.text), `at its pitch: ${found?.text}`);
+  assert.ok(/order of the operations/.test(found.text), `and says what to look at: ${found?.text}`);
+
+  const right = withLinks(make(['face', 'drill', 'bore', 'thread']));
+  const clean = runJob(bar, right).sim;
+  assert.eq(clean.threadCut.count, 0, 'bored first, every pass is a thread');
+  assert.eq(threadCutFinding(clean, right), null, 'and there is nothing to say');
+});
+
+test('and an outside thread on a shaft that was never turned down to it', () => {
+  const shaftPart = makeShaft({ bigDiameter: 40, smallDiameter: 24, length: 60, stepAt: 25 }).mesh;
+  const stock = computeStock([shaftPart], { kind: 'cylinder', cylinder: deriveCylinder([shaftPart]) }, 'turn');
+  const bar = barFromStock(stock, turningProfile(shaftPart));
+  const build = (withTurning) => {
+    const ops = [turnOp('turnFace', 'CNMG 120408 rougher', 1, shaftPart, stock)];
+    if (withTurning) {
+      ops.push(turnOp('turnRough', 'CNMG 120408 rougher', 1, shaftPart, stock));
+      ops.push(turnOp('turnFinish', 'DCMT 070204 finishing', 2, shaftPart, stock));
+    }
+    ops.push(turnOp('turnThread', '16ER AG60 threading', 3, shaftPart, stock, { topZ: 60, bottomZ: 36 }));
+    return ops;
+  };
+  const wrong = runJob(bar, withLinks(build(false))).sim;
+  assert.ok(wrong.threadCut.count > 0, 'a ⌀24 thread cut into a ⌀40 bar');
+  assert.ok(wrong.threadCut.depth > 6, `is ${wrong.threadCut.depth.toFixed(2)}mm deep in a pass`);
+  const right = runJob(bar, withLinks(build(true))).sim;
+  assert.eq(right.threadCut.count, 0,
+    `turned down first, no pass takes more than a thread (${right.threadCut.depth.toFixed(2)}mm)`);
 });
 
 test('an internal groove at a bored shoulder is fed onto it, not rapided', () => {

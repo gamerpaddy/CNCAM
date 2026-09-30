@@ -198,6 +198,35 @@ function bodyTouch(heights, mask, grid, at, body, stockTop) {
   return worst > BODY_EPS ? { depth: worst, kind } : null;
 }
 
+/**
+ * How much of a tap's disc was metal when it arrived at the bottom of its cycle.
+ *
+ * A tap follows a hole. Its tip is a taper that starts it in one, and what it
+ * cuts is the last few tenths on the wall of a hole drilled to the tapping size;
+ * the middle of it, the part that would have to cut, is a flat a few tenths
+ * smaller than the thread. Where the tapping drill was, that flat drops through
+ * air and the count here is nothing. Where nothing was drilled - or the drill
+ * stopped short and the tap has run out of hole - it comes down on metal, and
+ * the count is the whole of the flat: three fifths of the disc, whatever the
+ * size of the tap. A tap that has been through that has not cut a thread.
+ *
+ * Judged on the swath, which is what `cut` counts for a plunge: the cells the
+ * tap brought down to its own tip plane. A ring of tap-drill wall does not
+ * reach it, because the taper stands the flank above the tip there.
+ */
+const TAP_IN_SOLID = 0.5;
+function countTap(tapCut, took, radius, cellSize, step) {
+  // a disc of a handful of cells cannot be told from the ring of it
+  if (!(radius >= 2.5 * cellSize)) return;
+  const share = took.swath / (Math.PI * radius * radius);
+  if (share < TAP_IN_SOLID) return;
+  tapCut.count++;
+  if (share > tapCut.share) {
+    tapCut.share = share;
+    tapCut.step = step;
+  }
+}
+
 /** Add one step's collision, if it had one, to the tally. */
 function countBody(bodyCut, touch, step) {
   if (!touch) return;
@@ -334,6 +363,8 @@ export function simulateRemoval({
   // which the sweep above is about, but the shank or the holder above them,
   // wider than the slot, coming down on the wall beside it. See `bodyTouch`.
   const bodyCut = { count: 0, depth: 0, step: -1, kind: null };
+  // A tap that arrives in metal instead of in a hole. See `countTap`.
+  const tapCut = { count: 0, share: 0, step: -1 };
   for (const { cl, tool } of ops) {
     // the profile *and* the radius it covers, from one builder, so the sweep and
     // the shape it sweeps with can never disagree about how wide the cutter is
@@ -382,6 +413,7 @@ export function simulateRemoval({
         const took = cut(heights, mask, log, step, grid,
           [x, y, retractZ], [x, y, zBottom], cutter, stockTop, columns);
         if (body.length) countBody(bodyCut, bodyTouch(heights, mask, grid, [x, y, zBottom], body, stockTop), step);
+        if (tool?.type === 'tap') countTap(tapCut, took, radius, cellSize, step);
         // a hole is full width by definition and travels no distance across the
         // floor, so there is no radial width to report — only how deep it went
         load.push(2 * radius, took.depth, radius, false);
@@ -465,6 +497,7 @@ export function simulateRemoval({
     ...load.trimmed(opEnds),
     rapidCut,
     bodyCut,
+    tapCut,
     totalSeconds: seconds,
     truncated,
   };
@@ -817,6 +850,9 @@ export function simulateTurning({
   // one finding that could stop somebody pressing cycle start was the one a
   // turning job could never produce. See backplot.js rapidCutFinding.
   const rapidCut = { count: 0, depth: 0, step: -1 };
+  // A threading pass that took more than a whole thread in one cut. See
+  // backplot.js threadCutFinding.
+  const threadCut = { count: 0, depth: 0, pitch: 0, step: -1 };
   ops.forEach(({ cl, tool }, opIndex) => {
     // The insert's nose is what actually touches the work, and it is why a
     // sharp internal corner comes out with a radius in it. Modelled as a circle
@@ -922,6 +958,19 @@ export function simulateTurning({
             ? boreCut(surface, mask, into, step, grid, a, b,
               drillR > 0 ? drillR : nose, drillR > 0 ? drillR : half, drillR > 0, pitch, form)
             : turnCut(surface, mask, into, step, grid, a, b, nose, half, bar.radius, pitch, form);
+        // A thread is cut a few hundredths at a time and is never deeper than
+        // the V of its own insert, which is 0.87 of its pitch. A pass that takes
+        // more than the pitch is not cutting a thread: it is cutting the bar
+        // the thread was to be cut in, which the operations before it were to
+        // have turned or bored away.
+        if (pitch > 0 && !isDrill && took > pitch) {
+          threadCut.count++;
+          if (took > threadCut.depth) {
+            threadCut.depth = took;
+            threadCut.pitch = pitch;
+            threadCut.step = step;
+          }
+        }
         // A plunge — a groove, a parting cut, a drill — is full depth by nature
         // and is governed by the peck, not by the depth of cut. What the depth
         // of cut governs is a pass running *along* the bar.
@@ -960,6 +1009,7 @@ export function simulateTurning({
     trackZ: new Float32Array(trackZ),
     trackTool: new Int32Array(trackTool),
     rapidCut,
+    threadCut,
     totalSeconds: seconds,
     truncated,
   };

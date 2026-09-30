@@ -1,11 +1,12 @@
 import { test, assert } from './runner.js';
 import { generateToolpath } from '../engine/toolpath.js';
 import { buildGcode } from '../post/index.js';
-import { readGcode } from '../engine/backplot.js';
+import { readGcode, tapCutFinding } from '../engine/backplot.js';
+import { simulateRemoval } from '../engine/simulate.js';
 import { MOVE_STRIDE, OP, FEED, eachMove } from '../engine/cl.js';
 import { tapDrillDiameter, threadForHole } from '../engine/strategies/holes.js';
 import { coarsePitch, suggestCutting } from '../doc/tool-library.js';
-import { makeTube, makeBoss, makeBox } from './fixtures.js';
+import { makeTube, makeBoss, makeBox, makeRevolved } from './fixtures.js';
 
 const STOCK = { kind: 'box', min: [0, 0, 0], max: [40, 40, 20] };
 /** A block with a ⌀5 hole through it — what an M6 tapping drill leaves. */
@@ -462,4 +463,68 @@ test('every hole strategy approaches from above the billet, not just the part', 
     assert.ok(lowestRapid >= 23 - 1e-6, `${type} rapids down to Z${lowestRapid}, inside the billet`);
     assert.ok(lowestR >= 23 + 0.5 - 1e-6, `${type} feeds from R${lowestR}, inside the billet`);
   }
+});
+
+// --- a tap needs the hole it follows ---
+
+const DRILL5 = {
+  number: 3, type: 'drill', diameter: 5, tipAngle: 118, flutes: 2, fluteLength: 30,
+  spindleRpm: 3000, feedCut: 200, feedPlunge: 150,
+};
+
+test('a tap that comes down on metal is reported, and one that finds its hole is not', () => {
+  // The path of a tap is a perfectly good tapping cycle whether the tapping drill
+  // went in ahead of it or not, and the file reads the same either way. It is the
+  // billet in front of the simulation that knows there was no hole: the flat of a
+  // tap is smaller than its thread, and in a ⌀5 hole it drops through air.
+  const drill = run('drill', DRILL5, TAPPED, { bottomZ: -3 });
+  const tap = run('tap', TAP, TAPPED, { diameterTol: 0.3 });
+  assert.ok(drillMoves(drill).length === 1 && drillMoves(tap).length === 1, 'one hole each');
+  const simulate = (ops) => simulateRemoval({ stock: STOCK, ops });
+
+  const tapped = simulate([{ cl: drill, tool: DRILL5 }, { cl: tap, tool: TAP }]);
+  assert.eq(tapped.tapCut.count, 0, 'drilled first, the tap finds its hole');
+  assert.eq(tapCutFinding(tapped, [{ name: 'drill' }, { name: 'tap' }]), null, 'and there is nothing to say');
+
+  const bare = simulate([{ cl: tap, tool: TAP }]);
+  assert.eq(bare.tapCut.count, 1, 'with no drilling ahead of it, the tap comes down on metal');
+  const found = tapCutFinding(bare, [{ name: 'Tap M6', tool: TAP }]);
+  assert.ok(found, 'reported');
+  assert.eq(found.level, 'warn', 'as a warning');
+  assert.ok(/tap in Tap M6/.test(found.text), `in the operation: ${found?.text}`);
+  assert.ok(/1 hole/.test(found.text), `at how many holes: ${found?.text}`);
+  assert.ok(/⌀5 for this tap/.test(found.text), `and says what to drill: ${found?.text}`);
+
+  // a hole drilled *after* it is no help
+  const late = simulate([{ cl: tap, tool: TAP }, { cl: drill, tool: DRILL5 }]);
+  assert.eq(late.tapCut.count, 1, 'drilled after, the tap has still come down on metal');
+});
+
+test('and a tap that runs out of the hole it was given', () => {
+  // Blind, with the drill stopped seven millimetres into a twelve-deep hole: the
+  // tap goes on down to two short of the bottom, and for the last three
+  // millimetres it is cutting a hole, not a thread.
+  const part = makeRevolved([[0, 0], [20, 0], [20, 20], [2.5, 20], [2.5, 8], [0, 8], [0, 0]]);
+  const stock = { kind: 'box', min: [-21, -21, 0], max: [21, 21, 20] };
+  const make = (type, tool, params = {}) => generateToolpath({
+    type, name: type, tool, mesh: part, stock,
+    params: {
+      topZ: 20, bottomZ: 0, clearanceHeight: 30, tolerance: 0.01,
+      diameterTol: 0.5, entryGap: 1, ...params,
+    },
+  });
+  const tap = make('tap', TAP, { diameterTol: 0.3 });
+  assert.eq(drillMoves(tap).length, 1, `the blind hole is tapped: ${notes(tap)}`);
+  const deep = make('drill', DRILL5, {});
+  const shallow = make('drill', DRILL5, { bottomZ: 13 });
+  assert.ok(drillMoves(shallow)[0].z > drillMoves(deep)[0].z + 4, 'one drill is much shorter');
+  const after = (drill) => simulateRemoval({
+    stock, ops: [{ cl: drill, tool: DRILL5 }, { cl: tap, tool: TAP }],
+  });
+  assert.eq(after(deep).tapCut.count, 0, 'drilled to the floor, the tap has all the hole it needs');
+  assert.eq(after(shallow).tapCut.count, 1, 'drilled seven deep, the tap runs out of hole');
+  // a tap that goes a millimetre into the point of its drill is bottoming, which
+  // is what a bottoming tap does, and not a hole cut in solid
+  const near = make('drill', DRILL5, { bottomZ: drillMoves(deep)[0].z + 1 });
+  assert.eq(after(near).tapCut.count, 0, 'a millimetre into the point of the drill is not reported');
 });

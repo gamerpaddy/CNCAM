@@ -707,6 +707,71 @@ export function bodyCutFinding(sim, ops = []) {
   };
 }
 
+/**
+ * A tap that came down on metal.
+ *
+ * A tap follows a hole; it does not make one. Its cycle is a perfectly good
+ * cycle whether the tapping drill went in ahead of it or not, and the file reads
+ * the same either way - so a program with the drilling left out, or in the wrong
+ * order, or stopped short of where the tap goes, looks fine and breaks the tap
+ * on the first hole. The simulation had the billet in front of it and knows
+ * whether there was a hole.
+ *
+ * @returns a finding, or null when every tap found its hole
+ */
+export function tapCutFinding(sim, ops = []) {
+  const hit = sim?.tapCut;
+  if (!hit?.count) return null;
+  const op = sim.opEnds ? sim.opEnds.findIndex((end) => end > hit.step) : -1;
+  const where = ops[op]?.name;
+  const tap = ops[op]?.tool;
+  const size = tap?.diameter > 0 && tap?.pitch > 0
+    ? ` (⌀${+(tap.diameter - tap.pitch).toFixed(2)} for this tap)` : '';
+  return {
+    level: 'warn',
+    line: -1,
+    step: hit.step,
+    text: `The tap${where ? ` in ${where}` : ''} comes down on metal, not on a hole, at `
+      + `${plural(hit.count, 'hole')} — a tap follows a hole and does not cut one, so in solid metal `
+      + `it breaks. Drill the tapping drill first${size}, deep enough that the tap does not `
+      + 'reach the bottom of it.',
+  };
+}
+
+/**
+ * A threading pass that took more than a thread.
+ *
+ * A thread is a groove a few hundredths deeper with every pass, and even a
+ * sharp insert makes one no deeper than 0.87 of the pitch. A pass that takes off
+ * more than the pitch is not cutting a thread, it is cutting the bar the thread
+ * was to be cut in: the bore that was not made yet, the shaft that was not
+ * turned down to size. Or it is running its flank into the shoulder or the floor
+ * it was to stop short of. The insert is a point on a synchronised feed; asked
+ * for five millimetres of steel it does not stall, it breaks.
+ *
+ * Nothing else in the program says so. The path is a perfectly good thread,
+ * every move of it is a feed, and the G-code check reads the same either way -
+ * it is the metal it meets that is wrong, which is the simulation's to know.
+ *
+ * @returns a finding, or null when no pass was that deep
+ */
+export function threadCutFinding(sim, ops = []) {
+  const hit = sim?.threadCut;
+  if (!hit?.count) return null;
+  const op = sim.opEnds ? sim.opEnds.findIndex((end) => end > hit.step) : -1;
+  const where = ops[op]?.name;
+  return {
+    level: 'warn',
+    line: -1,
+    step: hit.step,
+    text: `A threading pass${where ? ` in ${where}` : ''} takes ${hit.depth.toFixed(2)}mm off in one cut`
+      + ` — a whole thread at a ${+hit.pitch.toFixed(3)}mm pitch is ${(0.65 * hit.pitch).toFixed(2)}mm deep. `
+      + 'Either the metal it cuts in was to have been turned or bored away by an operation '
+      + 'before it (check the order of the operations), or the insert runs into a shoulder '
+      + 'or the bottom of a hole it has no room to run out of.',
+  };
+}
+
 /** Which operation a line of the file belongs to. */
 function opAtLine(marks, line) {
   let lo = 0;

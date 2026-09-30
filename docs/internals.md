@@ -954,6 +954,21 @@ The panel's own reach warning is the conservative version of the same question �
 it assumes the slot is only as wide as the cutter — and this one is the
 answer for the metal that is actually there.
 
+**And a tap, and a thread, that were given no hole to follow.** Two more programs
+are perfectly good paths and break the tool on the first cut, and neither can be
+told from the file: a tap whose tapping drill was left out, or put after it, or
+stopped short of where the tap goes; and a threading pass cut in a bar the
+operations before it were to have bored or turned down. The simulation knows what
+was in front of them. A tap's cycle is judged on how much of its disc was metal
+when it reached the bottom (`countTap`): the flat of a tap is smaller than its
+thread and drops through a drilled hole, so the share is nothing there and three
+fifths in solid metal, whatever the size. A threading insert cuts a groove no
+deeper than the V of its own form, 0.87 of the pitch, so a synchronised pass that
+takes off more than the pitch is not cutting a thread (`sim.threadCut`) - which
+also happens where its flank runs into a shoulder or the floor of a hole it was
+not given room to run out of. Both are reported the way a rapid through metal is,
+in the program status and in the G-code check.
+
 ### Reachability
 
 Toolpaths are planned against the part's **downward silhouette** — the union of

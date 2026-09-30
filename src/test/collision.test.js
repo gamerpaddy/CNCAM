@@ -28,14 +28,16 @@ import { MOVE_STRIDE, OP, FEED } from '../engine/cl.js';
 import { regionReachFor } from '../engine/op-reach.js';
 import { fixtureLoops } from '../engine/fixtures.js';
 import { offsetLoops } from '../geom/clipper.js';
-import { makeStepped, makePocketBlock, makeMushroom, makeBox } from './fixtures.js';
+import { makeStepped, makePocketBlock, makeMushroom, makeBox, makeRamp } from './fixtures.js';
 import { simulateRemoval } from '../engine/simulate.js';
 import { loadSampleBuffer } from './samples.js';
 import { parseSTL } from '../io/stl.js';
 import { meshFromSoup, computeNormals } from '../geom/mesh.js';
 import { resolveSetup } from '../engine/setup.js';
-import { computeStock } from '../engine/stock.js';
-import { createSetup } from '../doc/schema.js';
+import { computeStock, createStock } from '../engine/stock.js';
+import { createSetup, createOperation } from '../doc/schema.js';
+import { buildFaces } from '../geom/faces.js';
+import { resolveRegions } from '../app/regions-ui.js';
 import { cutsOf } from './cuts.js';
 
 const TOOLS = {
@@ -491,5 +493,142 @@ test('and one that starts at the top of the billet has nothing to say about it',
     const params = { ...defaultParamsFor(type, { stock, tool }), tolerance: 0.05 };
     const cl = generateToolpath({ type, name: type, tool, mesh, stock, params, fixtures: [] });
     assert.ok(!cl.notes.some((n) => /billet stands/.test(n.text)), `${type}: nothing to say`);
+  }
+});
+
+// --- adaptive clearing of a picked face -----------------------------------------
+//
+// Pick a face and the levels above it cannot machine it: the region belongs to
+// the levels at and below the face, and the billet over it stands. A level that
+// comes down onto stock the levels above left is the case the two safety nets in
+// the adaptive strategy are for, and a program that never meets it does not need
+// them - which is why the rest of this file never noticed either was gone.
+//
+//   keepOut  stock a level above could not reach is kept out of the level that
+//            could, when taking it there would be a cut deeper than a stepdown
+//            and a quarter; a pass that took it came down through it at rapid
+//   topAt    an entry that has to come down where a level above left stock
+//            stands is raised over it, and fed in from there
+
+/** A part in a setup turned `turn` degrees, the way the app places it, and its picks resolved. */
+function pickedOp(type, raw, pickedFace, overrides = {}, turn = 30) {
+  const stockDef = createStock('box-margin');
+  stockDef.margin = [1, 1, 1];
+  stockDef.marginBottom = 0;
+  const setup = {
+    stock: stockDef, orientation: { rotationDeg: [0, 0, turn], origin: 'stock-top-center' }, mode: 'mill',
+  };
+  const { meshes, stock, bounds } = resolveSetup(setup, [raw], computeStock);
+  const placed = meshes[0];
+  const tool = { ...TOOLS.flat, fluteLength: 30 };
+  const zs = [];
+  for (let i = 2; i < placed.positions.length; i += 3) zs.push(placed.positions[i]);
+  const params = {
+    ...createOperation(type).params,
+    ...defaultParamsFor(type, {
+      stock, tool, modelBounds: { min: [0, 0, Math.min(...zs)], max: [0, 0, Math.max(...zs)] },
+    }),
+    ...overrides,
+  };
+  const op = {
+    id: 'op', type, toolId: 't', enabled: true, params,
+    regions: { include: [{ modelId: 'm', faceId: pickedFace(raw) }], avoid: [] },
+  };
+  const doc = { meshes: new Map([['m', raw]]), toolpaths: new Map(), project: { tools: [tool] } };
+  const regions = resolveRegions(doc, op, () => placed, null, tool, raw);
+  const cl = generateToolpath({
+    type, name: type, tool, mesh: placed, stock, params, regions, fixtures: [],
+  });
+  const sim = simulateRemoval({ stock, ops: [{ cl, tool }], maxCells: 60000 });
+  return { cl, sim, bounds };
+}
+
+const pickedAdaptive = (raw, pickedFace, overrides) => pickedOp('adaptive', raw, pickedFace, overrides);
+
+/** The id of the biggest face that looks up, on the model as it came in. */
+function largestUpFace(raw) {
+  const { faces } = buildFaces(raw);
+  let best = -1;
+  let bestArea = 0;
+  faces.forEach((tris, id) => {
+    let area = 0;
+    let up = 0;
+    for (const t of tris) {
+      const at = (k) => raw.indices[t * 3 + k] * 3;
+      const [a, b, c] = [at(0), at(1), at(2)];
+      const ux = raw.positions[b] - raw.positions[a];
+      const uy = raw.positions[b + 1] - raw.positions[a + 1];
+      const vx = raw.positions[c] - raw.positions[a];
+      const vy = raw.positions[c + 1] - raw.positions[a + 1];
+      const uz = raw.positions[b + 2] - raw.positions[a + 2];
+      const vz = raw.positions[c + 2] - raw.positions[a + 2];
+      const cross = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+      area += cross / 2;
+      up += (ux * vy - uy * vx) / 2;
+    }
+    if (up > 0.9 * area && area > bestArea) { best = id; bestArea = area; }
+  });
+  assert.ok(best >= 0, 'found the biggest face that looks up');
+  return best;
+}
+
+/** The id of the face whose vertices all satisfy `test`, on the model as it came in. */
+function faceOf(raw, test) {
+  const { faces } = buildFaces(raw);
+  const found = faces.findIndex((tris) => tris.length > 0 && tris.every((t) => {
+    for (let k = 0; k < 3; k++) {
+      const i = raw.indices[t * 3 + k] * 3;
+      if (!test(raw.positions[i], raw.positions[i + 1], raw.positions[i + 2])) return false;
+    }
+    return true;
+  }));
+  assert.ok(found >= 0, 'found the face to pick');
+  return found;
+}
+
+test('adaptive clearing beside a picked wall does not rapid into stock a level above left', () => {
+  // The skirt of a ramp, picked, at stepdown 4: the level that reaches it is
+  // handed the metal the level above could not, and without the keep-out for what
+  // a level cannot take it enters straight down through 2.7mm of it.
+  const ramp = makeRamp();
+  const pick = (raw) => faceOf(raw, (x, y) => y === 0);
+  const { cl, sim } = pickedAdaptive(ramp, pick, { stepdown: 4 });
+  assert.ok(cl.count > 100, `the pick is machined (${cl.count} moves)`);
+  assert.eq(sim.rapidCut.count, 0,
+    `${sim.rapidCut.count} rapids through stock, ${sim.rapidCut.depth.toFixed(2)}mm deep at worst`);
+  assert.ok(cl.notes.some((n) => /left standing where a level above could not reach it/.test(n.text)),
+    `and it says what it left: ${JSON.stringify(cl.notes.map((n) => n.text.slice(0, 60)))}`);
+});
+
+test('an entry that has to come down where a level above left stock is raised over it', () => {
+  // The cap of a mushroom, picked by its wall: the ring the tool may work in is
+  // beside the wall, over stock the level above left standing at the far end of
+  // its pass. Entered at the level's own height that is 6.3mm of it at rapid.
+  const mushroom = makeMushroom({ postSize: 10, capSize: 30, postHeight: 10, capHeight: 5, center: [20, 20] }).mesh;
+  const pick = (raw) => faceOf(raw, (x, y, z) => y === 35 && z > 9.99);
+  const { cl, sim } = pickedAdaptive(mushroom, pick, {});
+  assert.ok(cl.count > 100, `the pick is machined (${cl.count} moves)`);
+  assert.eq(sim.rapidCut.count, 0,
+    `${sim.rapidCut.count} rapids through stock, ${sim.rapidCut.depth.toFixed(2)}mm deep at worst`);
+});
+
+// --- pocketing a picked area that goes round the part ------------------------------
+//
+// A pocket cuts its rings a level at a time, and between the rings of two
+// separate pockets the tool lifts to just above the floor the level above left,
+// when the straight move stays inside what that level emptied. "Where the tool is"
+// for that question was the point the pass before started at - and a ring that
+// ramps down finishes where the ramp reached depth, a ramp's length round the
+// ring from there. Round a C-shaped floor that is the far side of the part, and
+// the straight move from it to the other end of the C is across the part, 40mm of
+// it at rapid, a millimetre under the top and deeper at every level after.
+
+test('a pocket in a floor that goes round the part does not cross the part between its ends', async () => {
+  for (const [file, turn] of [['clamp1.stl', 0], ['test-slope.stl', 0]]) {
+    const raw = computeNormals(meshFromSoup(parseSTL(await loadSampleBuffer(file))));
+    const { cl, sim } = pickedOp('pocket', raw, largestUpFace, {}, turn);
+    assert.ok(cl.count > 1000, `${file}: the pick is machined (${cl.count} moves)`);
+    assert.eq(sim.rapidCut.count, 0,
+      `${file}: ${sim.rapidCut.count} rapids through stock, ${sim.rapidCut.depth.toFixed(2)}mm deep at worst`);
   }
 });

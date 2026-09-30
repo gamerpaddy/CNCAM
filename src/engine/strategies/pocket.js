@@ -8,7 +8,7 @@
 // place the part is absent but surrounded, which is exactly a pocket. That
 // means an unpicked pocket operation still does the obvious thing.
 
-import { CLBuilder } from '../cl.js';
+import { CLBuilder, lastXY } from '../cl.js';
 import { plural, pluralEs } from '../text.js';
 import { concentricRings, coreEntry } from '../rings.js';
 import { mergeTolerance } from '../simplify.js';
@@ -172,6 +172,7 @@ export function generatePocket({
         atDepth,
         runIn,
         link: atDepth ? null : onLevel ? linkFor(level, from, entry) : ceiling,
+        level,
         room: hasLead(passLead) ? roomOf(level) : null,
       });
       from = loopExitPoint(ready, passLead);
@@ -223,6 +224,26 @@ export function generatePocket({
   for (let i = 0; i < passes.length; i++) {
     const p = passes[i];
     const next = passes[i + 1];
+    // A low link was worked out from where the pass before was *planned* to
+    // finish, which is the point it starts at. It finishes where it finishes: a
+    // ring that ramps down is cut a ramp's length round from its start before
+    // the lap at depth begins, and the lap ends there (see cutLoopWithRamp) -
+    // up to fifty millimetres from the point the plan used, and the far side of
+    // a C-shaped pocket from it. The straight move between two rings of the
+    // pocket that stays inside what the level above emptied, measured from the
+    // wrong end, is a move across the part the C goes round. So it is asked
+    // again with the tool where it actually is, and goes up to the crossing
+    // plane if the answer is no.
+    let arriveAt = p.link;
+    if (p.link != null && p.link < ceiling - 1e-9 && cl.count > 0) {
+      const at = lastXY(cl);
+      const ready = orderLoopForEntry(p.loop, direction, p.lead, at, p.runIn);
+      const safe = linkFor(p.level, at, loopEntryPoint(ready, p.lead));
+      if (safe > p.link + 1e-9) {
+        cl.rapid(at[0], at[1], safe);
+        arriveAt = safe;
+      }
+    }
     if (cutLoopPass(cl, p.loop, p.zEntry, p.z, {
       clearance,
       direction,
@@ -234,7 +255,7 @@ export function generatePocket({
       // arrive over this pass at the height that clears what is between here
       // and the last one — inside a pocket this operation has already opened,
       // that is a lift to just above its floor rather than over the whole billet
-      crossAt: p.link,
+      crossAt: arriveAt,
       // and leave at the height the *next* pass arrives at, so the retract and
       // the traverse that follows it are the two ends of one move rather than a
       // diagonal that cuts the corner off whatever is between. A next pass that

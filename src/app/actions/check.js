@@ -19,7 +19,8 @@
 
 import { openFile, ACCEPT } from '../../io/files.js';
 import {
-  readGcode, reviewProgram, rapidCutFinding, bodyCutFinding, aboutNoseCentre,
+  readGcode, reviewProgram, rapidCutFinding, bodyCutFinding, tapCutFinding, threadCutFinding,
+  aboutNoseCentre,
 } from '../../engine/backplot.js';
 import { renderGcodePanel } from '../gcode-panel.js';
 import { SimulationPlayback } from '../../engine/simulate.js';
@@ -252,6 +253,10 @@ export function makeCheckActions(ctx, space) {
         // most worth having on somebody else's program.
         const crash = rapidCutFinding(sim, ops);
         const body = bodyCutFinding(sim, ops);
+        const thread = threadCutFinding(sim, ops);
+        const tap = tapCutFinding(sim, ops);
+        if (tap) findings.unshift(tap);
+        if (thread) findings.unshift(thread);
         if (body) findings.unshift(body);
         if (crash) findings.unshift(crash);
       } catch (err) {
