@@ -184,6 +184,22 @@ test('a wall cut to size on the outline of the part is not a gouge', () => {
   }
 });
 
+test('a wall cut to size is not a gouge when the billet is the size of the part', () => {
+  // The grid starts exactly on the wall, so the outermost column has no cell
+  // beside it to say there is air out there — and the cutter, tangent to the
+  // wall, took that column the whole depth of the block.
+  const stock = { kind: 'box', min: [-10, -10, -10], max: [10, 10, 0] };
+  const mesh = leaningBlock(0);
+  const check = (into) => {
+    const sim = simulateRemoval({ stock, ops: [lapRound(into)], maxCells: 250000 });
+    return verifyRun({ sim, mesh, stock });
+  };
+  const onSize = check(0);
+  assert.eq(onSize.gougeCells, 0,
+    `${onSize.gougeCells} cells, worst ${onSize.worstGouge?.mm} at ${onSize.worstGouge?.x},${onSize.worstGouge?.y}`);
+  assert.ok(check(0.2).gougeCells > 100, 'and a pass 0.2mm into the wall still is one');
+});
+
 test('a tighter tolerance finds what a loose one forgives', () => {
   const tight = verified([faceTo(8.2)], { tolerance: 0.05 }).result;
   const loose = verified([faceTo(8.2)], { tolerance: 0.5 }).result;

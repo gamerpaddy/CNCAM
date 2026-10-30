@@ -33,14 +33,23 @@ export function generateDrill({
   mesh, tool, params, regions, drawing, stock,
 }) {
   const clearance = params.clearanceHeight;
-  const bounds = computeBounds(mesh.positions);
-  const topZ = Math.min(params.topZ, bounds.max[2]);
-  const bottomZ = Math.max(params.bottomZ, bounds.min[2]);
-  const matchTol = Math.max(0, params.diameterTol ?? 0.5);
-
   const cl = new CLBuilder();
   cl.toolChange(tool.number);
   applyCutting(cl, { params }, tool);
+
+  // A drawing of circles is a job with no part in it — a plate of hole positions
+  // imported as a DXF and nothing else — and then the billet is all there is to
+  // measure the depth against. The app passes no mesh at all for such a project,
+  // and reading its positions threw.
+  const hasPart = !!mesh?.positions?.length;
+  if (!hasPart && !(drawing && stock?.min && stock?.max)) {
+    cl.warn('there is no model to find holes in — import one, or point this at a drawing of circles');
+    return cl.finish();
+  }
+  const bounds = hasPart ? computeBounds(mesh.positions) : { min: stock.min, max: stock.max };
+  const topZ = Math.min(params.topZ, bounds.max[2]);
+  const bottomZ = Math.max(params.bottomZ, bounds.min[2]);
+  const matchTol = Math.max(0, params.diameterTol ?? 0.5);
 
   // Where the holes are. A drawing wins when there is one, for the same reason
   // it does in engraving and slotting: hole positions are a thing you draw, and
@@ -56,7 +65,7 @@ export function generateDrill({
       + 'this one has only open lines in it');
     return cl.finish();
   }
-  const found = drawn ?? findHoles(mesh, { topZ, bottomZ, bounds });
+  const found = drawn ?? (hasPart ? findHoles(mesh, { topZ, bottomZ, bounds }) : []);
   const matched = found.filter((h) => Math.abs(h.r * 2 - tool.diameter) <= matchTol);
 
   if (matched.length === 0) {
@@ -92,7 +101,7 @@ export function generateDrill({
   // Above the billet as well as the part — see heights.js holeSurfaceZ.
   const retractZ = holeApproachZ(topZ, stock, params, 0.5);
 
-  holes.sort((a, b) => a.cy - b.cy || a.cx - b.cx);   // stable, roughly shortest path
+  orderHoles(holes);
   const perHole = (params.depthMode ?? 'bottomZ') === 'hole';
 
   // One rapid to clearance, before the first hole and not between them. G98
@@ -134,6 +143,77 @@ export function generateDrill({
       + `underside, so the ${tipAngleOf(tool)}° point clears it`);
   }
   return cl.finish();
+}
+
+/**
+ * Put holes in the order they are visited, in place: the shortest route between
+ * them that a cheap search finds.
+ *
+ * Every hole operation walked its holes sorted by Y and then X. That is a
+ * raster, and a raster is the shortest route only for holes that already sit in
+ * rows: on fourteen holes scattered over a plate it ran 323mm between them
+ * where the nearest-neighbour route with 2-opt on top runs 196, and a Y that
+ * differs in the third decimal puts two holes of one row on different "rows",
+ * which sends the tool back and forth across the part between them. Each of
+ * those is a rapid at clearance height, and none of it removes metal.
+ *
+ * It starts where the sort used to — lowest Y, then lowest X — so a plate whose
+ * holes are in a grid is walked the way it always was and only a layout that
+ * was being walked badly changes. An open route, not a tour: the tool does not
+ * have to come back to the first hole. 2-opt is capped because it is O(n²) per
+ * sweep, and a part with a few hundred holes is a pattern whose
+ * nearest-neighbour order is already a good one.
+ */
+export function orderHoles(holes) {
+  const n = holes.length;
+  if (n < 3) {
+    holes.sort((a, b) => a.cy - b.cy || a.cx - b.cx);
+    return holes;
+  }
+  const first = holes.reduce((best, h) => (
+    h.cy < best.cy - 1e-9 || (Math.abs(h.cy - best.cy) <= 1e-9 && h.cx < best.cx) ? h : best));
+  const left = holes.filter((h) => h !== first);
+  let route = [first];
+  while (left.length) {
+    const at = route[route.length - 1];
+    let pick = 0;
+    let best = Infinity;
+    for (let i = 0; i < left.length; i++) {
+      const d = (left[i].cx - at.cx) ** 2 + (left[i].cy - at.cy) ** 2;
+      if (d < best - 1e-12) { best = d; pick = i; }
+    }
+    route.push(left.splice(pick, 1)[0]);
+  }
+  if (n <= 200) route = twoOpt(route);
+  for (let i = 0; i < n; i++) holes[i] = route[i];
+  return holes;
+}
+
+/**
+ * Reverse stretches of an open route while that makes it shorter. The first hole
+ * stays where it is; the far end is free to move.
+ */
+function twoOpt(route) {
+  const n = route.length;
+  const d = (a, b) => Math.hypot(a.cx - b.cx, a.cy - b.cy);
+  let improved = true;
+  let sweeps = 0;
+  while (improved && sweeps++ < 50) {
+    improved = false;
+    for (let i = 1; i < n - 1; i++) {
+      for (let j = i + 1; j < n; j++) {
+        // reversing i..j swaps edges (i-1,i) and (j,j+1) for (i-1,j) and (i,j+1);
+        // at the end of the route there is no second edge to swap
+        const before = d(route[i - 1], route[i]) + (j + 1 < n ? d(route[j], route[j + 1]) : 0);
+        const after = d(route[i - 1], route[j]) + (j + 1 < n ? d(route[i], route[j + 1]) : 0);
+        if (after < before - 1e-9) {
+          for (let a = i, b = j; a < b; a++, b--) [route[a], route[b]] = [route[b], route[a]];
+          improved = true;
+        }
+      }
+    }
+  }
+  return route;
 }
 
 /**
@@ -239,17 +319,31 @@ function findRoundFeatures(mesh, { topZ, bottomZ, bounds, outward = false }) {
   const step = span / steps;
   const merged = [];
 
+  // The round features on one slice. Kept, because the depth refinement below
+  // asks about the same heights again and again, and a slice is not free.
+  const seen = new Map();
+  const circlesAt = (at) => {
+    if (!seen.has(at)) {
+      const found = [];
+      for (const loop of unionLoops(sliceMeshZ(mesh, at))) {
+        // a hole encloses no material and comes back negative; a boss is the
+        // other sign of the same test
+        if (outward ? loopArea(loop) <= 0 : loopArea(loop) >= 0) continue;
+        const circle = fitCircle(loop);
+        if (circle) found.push(circle);
+      }
+      seen.set(at, found);
+    }
+    return seen.get(at);
+  };
+  const sameFeature = (h, circle) => Math.hypot(h.cx - circle.cx, h.cy - circle.cy) < h.r * 0.5
+    && Math.abs(h.r - circle.r) < Math.max(0.1, h.r * 0.1);
+
   for (let i = 0; i <= steps; i++) {
     const at = hi - step * i;
-    for (const loop of unionLoops(sliceMeshZ(mesh, at))) {
-      // a hole encloses no material and comes back negative; a boss is the
-      // other sign of the same test
-      if (outward ? loopArea(loop) <= 0 : loopArea(loop) >= 0) continue;
-      const circle = fitCircle(loop);
-      if (!circle) continue;
+    for (const circle of circlesAt(at)) {
       // the same hole, seen one slice further down
-      const same = merged.find((h) => Math.hypot(h.cx - circle.cx, h.cy - circle.cy) < h.r * 0.5
-        && Math.abs(h.r - circle.r) < Math.max(0.1, h.r * 0.1));
+      const same = merged.find((h) => sameFeature(h, circle));
       if (same) same.bottom = Math.min(same.bottom, at);
       else merged.push({ ...circle, top: at, bottom: at });
     }
@@ -266,7 +360,49 @@ function findRoundFeatures(mesh, { topZ, bottomZ, bounds, outward = false }) {
   // not something to put a drill into — unless the scan was that shallow. The
   // same is true of a boss: one slice of a round pad is a fillet.
   const real = merged.filter((h) => h.top - h.bottom >= step * 1.5);
-  return real.length ? real : merged;
+  const out = real.length ? real : merged;
+
+  // A slice says a hole is there; it does not say where it stops. The floor of
+  // a blind hole lies somewhere in the step below the last slice that saw it,
+  // and the top of one that opens in a pocket floor or under a counterbore
+  // somewhere in the step above the first — and on a part a hundred millimetres
+  // tall a step is a millimetre. Taking the slice for the answer drilled a
+  // blind hole 0.5mm short of its floor and spotted from a surface that was
+  // 0.8mm lower than the real one. The ends are found by halving the step:
+  // seven slices, and an answer good to a hundredth.
+  //
+  // A hole at the end of the scanned range is not one of these — it was seen on
+  // the first or last slice, and is reported where the range stops.
+  const present = (h, at) => circlesAt(at).some((c) => sameFeature(h, c));
+  const REFINE = 7;
+  for (const h of out) {
+    if (h.bottom > lo + 1e-9) {
+      let seenAt = h.bottom;
+      let goneAt = h.bottom - step;
+      for (let k = 0; k < REFINE; k++) {
+        const mid = (seenAt + goneAt) / 2;
+        if (present(h, mid)) seenAt = mid; else goneAt = mid;
+      }
+      h.bottom = (seenAt + goneAt) / 2;
+    } else {
+      // The scan ran out before the hole did — or the hole ran out exactly there.
+      // Whether it goes on is what a tap needs to know (a thread in a blind hole
+      // stops short of the floor, in a through one it goes beyond the underside),
+      // and the underside of the part answers it without another slice.
+      const below = Math.max(bounds.min[2] + EPS, lo - Math.max(step, 0.5));
+      h.runsOn = lo - EPS <= bounds.min[2] + 2 * EPS || (below < lo - EPS && present(h, below));
+    }
+    if (h.top < hi - 1e-9) {
+      let seenAt = h.top;
+      let goneAt = h.top + step;
+      for (let k = 0; k < REFINE; k++) {
+        const mid = (seenAt + goneAt) / 2;
+        if (present(h, mid)) seenAt = mid; else goneAt = mid;
+      }
+      h.top = (seenAt + goneAt) / 2;
+    }
+  }
+  return out;
 }
 
 /** "⌀5.00 ×2, ⌀8.20" — what sizes are actually there, so a drill can be picked. */

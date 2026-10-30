@@ -418,6 +418,8 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
   };
 }
 
+const MAX_ARC_CHORDS = 20000;
+
 /** The station a T word names, unpicking the lathe's station+offset pairing. */
 function toolNumber(words, xScale) {
   const found = words.find(([l]) => l === 'T');
@@ -509,7 +511,12 @@ function arcPoints(from, to, centre, ccw, tolerance, plane = 17) {
   const step = radius > tolerance
     ? 2 * Math.acos(Math.max(-1, 1 - tolerance / radius))
     : Math.PI / 2;
-  const segments = Math.max(1, Math.ceil(Math.abs(sweep) / step));
+  // A ceiling, because the count is sweep over a step that shrinks with the
+  // radius: an arc whose centre is written 1e12 away (a hand-typed I, a
+  // mangled number) asked for sixty million chords and hung the tab. Past a
+  // few tens of thousands the chords are shorter than the machine's own
+  // resolution and the arc is a straight line to within any tolerance asked.
+  const segments = Math.min(MAX_ARC_CHORDS, Math.max(1, Math.ceil(Math.abs(sweep) / step)));
   const out = [];
   for (let k = 1; k <= segments; k++) {
     const ang = start + (sweep * k) / segments;

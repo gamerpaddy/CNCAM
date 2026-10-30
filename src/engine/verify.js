@@ -241,10 +241,21 @@ export function verifyProgram({
   };
 }
 
-/** Does any cell next to this one have no part over it? */
+/**
+ * Does any cell next to this one have no part over it?
+ *
+ * A cell on the border of the grid has neighbours that are not in the grid, and
+ * what is beyond the billet is air as far as this question goes: the exact
+ * check it leads to (`besideAnEdge`) reads the model itself, not the raster. A
+ * billet cut to the part's own outline puts the grid's first column exactly on
+ * the wall, where a cutter running along it on size is tangent to the cell —
+ * and with the border not counted, a waterline round such a part was reported
+ * as 893 cells gouged 18mm deep, along the two walls the grid starts on.
+ */
 function besideAir(model, width, height, cell) {
   const i = cell % width;
   const j = (cell - i) / width;
+  if (i === 0 || j === 0 || i === width - 1 || j === height - 1) return true;
   for (let dj = -1; dj <= 1; dj++) {
     const y = j + dj;
     if (y < 0 || y >= height) continue;

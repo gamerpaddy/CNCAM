@@ -142,3 +142,20 @@ test('every strategy either cuts or says why not', () => {
     assert.ok(cuts > 0 || said, `${type} cut nothing and said nothing about it`);
   });
 });
+
+test('a cutter no wider than a typing slip is refused, not planned for', () => {
+  // "1e9" is a number every field accepts. A contour offset by half a billion
+  // millimetres never returned, a waterline wrote ten million moves and an
+  // engraving threw out of an array — all of it from one typed digit.
+  for (const type of MILLING_OPS.filter((t) => t !== 'command')) {
+    const { tool, mesh, stock, params } = setupFor(type);
+    const t0 = Date.now();
+    const cl = generateToolpath({
+      type, name: type, tool: { ...tool, diameter: 1e9 }, mesh, stock, params, fixtures: [],
+    });
+    assert.ok(Date.now() - t0 < 2000, `${type} spent ${Date.now() - t0}ms on a 1e9mm cutter`);
+    assert.eq(cl.count, 0, `${type} planned moves for a cutter a thousand kilometres across`);
+    assert.ok(cl.notes.some((n) => n.level === 'warn' && /wider than/.test(n.text)),
+      `${type} did not say why`);
+  }
+});

@@ -65,3 +65,36 @@ test('a facet with a corner that is not a number is left out', () => {
   assert.eq(soup.length, 9, 'one good facet, the NaN one dropped');
   assert.ok([...soup].every(Number.isFinite));
 });
+
+test('an ASCII facet with a corner written nan or inf is left out, not the whole file', () => {
+  // `nan` and `inf` are what an exporter writes for a corner it could not
+  // compute. The reader only matched digits, so it saw one vertex too few, the
+  // facets after it no longer lined up in threes, and the file was refused for
+  // being "not a whole number of triangles" — or, with `1e999`, let through
+  // with an Infinity in the positions, which is a model with no bounds.
+  const good = 'facet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 10 0 0\nvertex 0 10 0\nendloop\nendfacet\n';
+  const bad = (corner) => `facet normal 0 0 1\nouter loop\nvertex ${corner} 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\n`;
+  for (const corner of ['nan', '-nan(ind)', 'inf', '1e999', '1e39', '1.2.3']) {
+    const text = `solid t\n${good}${bad(corner)}${good}endsolid t`;
+    const soup = parseSTL(new TextEncoder().encode(text).buffer);
+    assert.eq(soup.length, 18, `${corner}: the two good facets, the bad one dropped`);
+    assert.ok([...soup].every(Number.isFinite), `${corner}: and nothing in it that is not a number`);
+  }
+});
+
+test('a binary STL cut short says so instead of reporting no triangles', () => {
+  // Header promises 3 facets, the file holds one and a bit. It is not ASCII, so
+  // the text reader found nothing and the import said "has no triangles in it"
+  // about a file with thousands; worse, importing what did arrive would machine
+  // a part with an open end.
+  const full = binarySTL([TRI, TRI, TRI]);
+  const cut = full.slice(0, 84 + 50 + 20);
+  let message = '';
+  try { parseSTL(cut); } catch (err) { message = err.message; }
+  assert.ok(/cut short/.test(message), `a clear refusal, got "${message}"`);
+  assert.ok(/3 triangles/.test(message) && /holds 1\b/.test(message), 'that says how short');
+  // a header promising facets with none behind it is the same fault
+  const header = new ArrayBuffer(84);
+  new DataView(header).setUint32(80, 7, true);
+  assert.throws(() => parseSTL(header), 'a header with nothing behind it');
+});

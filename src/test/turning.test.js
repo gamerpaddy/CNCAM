@@ -8,12 +8,14 @@
 import { test, assert } from './runner.js';
 import { generateToolpath } from '../engine/toolpath.js';
 import { eachMove, OP, FEED } from '../engine/cl.js';
-import { turningProfile, radiusAtZ, offsetProfile, barFromStock } from '../engine/lathe.js';
+import {
+  turningProfile, radiusAtZ, offsetProfile, barFromStock, profilePoints,
+} from '../engine/lathe.js';
 import { buildGcode } from '../post/index.js';
 import { simulateTurning, SimulationPlayback } from '../engine/simulate.js';
 import { readGcode, aboutNoseCentre, checkPost } from '../engine/backplot.js';
 import { latheControlPoint, bladeHalfWidth } from '../engine/tool-geometry.js';
-import { makeShaft, makeBox } from './fixtures.js';
+import { makeShaft, makeBox, makeRevolved } from './fixtures.js';
 
 const INSERT = {
   number: 1, type: 'turning', name: 'CCMT 0.4', diameter: 6, noseRadius: 0.4,
@@ -497,7 +499,8 @@ test('the part that comes out is the part that went in', () => {
   // and anything under size is a part in the bin.
   for (const [z, want] of [[10, shaft.bigR], [25, shaft.bigR], [50, shaft.smallR]]) {
     const got = cut.radiusAt(z);
-    assert.ok(got >= want - 1e-6, `at Z${z} the bar is ${got.toFixed(3)}, inside the ${want} part`);
+    // within the 5 micron tolerance the nose arc is fitted to is not a part in the bin
+    assert.ok(got >= want - 0.005, `at Z${z} the bar is ${got.toFixed(4)}, inside the ${want} part`);
     assert.ok(got < want + 0.25, `at Z${z} the bar is ${got.toFixed(3)}, ${want} was wanted`);
   }
 });
@@ -682,6 +685,51 @@ test('the nose offset rounds a convex corner and trims a concave one', () => {
   // and the convex corner is gone round rather than cut across
   const round = path.filter(([z, r]) => z > 34.9 && z < 35.5 && r > 15 && r < 15.4);
   assert.ok(round.length >= 3, `the outer corner is an arc, got ${round.length} points`);
+});
+
+test('the nose offset keeps the nose out of a profile with many corners, whatever the nose', () => {
+  // A stepped and tapered part with a 5mm step and a taper in it, and the nose
+  // radii a finishing insert comes in: 0.2mm to a round one. Each corner of a
+  // sampled profile used to be trimmed against the one before it, and a taper
+  // sampled as a run of corners a hair off straight trimmed itself away — the
+  // path ran into the metal, 1.4mm for a 2mm nose. The path's nose centre must
+  // be a nose radius from every segment of the profile it was made from.
+  const outline = [[0, 0], [7.66, 0], [2.49, 3.34], [4.66, 16.76], [9.56, 16.76], [9.56, 20.08],
+    [7.17, 20.08], [7.17, 33.79], [7.67, 33.79], [7.67, 38.55], [0, 38.55]];
+  const profile = turningProfile(makeRevolved(outline, 24), { samples: 600 });
+  const near = (poly, [pz, pr]) => {
+    let best = Infinity;
+    for (let i = 0; i + 1 < poly.length; i++) {
+      const [az, ar] = poly[i];
+      const [bz, br] = poly[i + 1];
+      const dz = bz - az;
+      const dr = br - ar;
+      const len2 = dz * dz + dr * dr;
+      const t = len2 > 0 ? Math.max(0, Math.min(1, ((pz - az) * dz + (pr - ar) * dr) / len2)) : 0;
+      best = Math.min(best, Math.hypot(pz - az - t * dz, pr - ar - t * dr));
+    }
+    return best;
+  };
+  for (const nose of [0.2, 0.4, 0.8, 1.2, 2, 5]) {
+    const points = profilePoints(profile, profile.zMax, profile.zMin, { step: 0.05 });
+    const path = offsetProfile(points, nose, 0.005);
+    let worst = 0;
+    for (const q of path) worst = Math.max(worst, nose - near(points, q));
+    assert.ok(worst < 0.01, `a nose of ${nose}mm dug ${worst.toFixed(3)}mm into the part`);
+  }
+});
+
+test('a peck of a billionth of a millimetre is a few hundred pecks, said so, not an endless loop', () => {
+  // The peck loop took it literally: 1.6mm of groove in steps of 1e-9 is a
+  // billion and a half plunges, and the generator never returned.
+  const t0 = Date.now();
+  const cl = generateToolpath({
+    type: 'turnGroove', name: 'groove', tool: BLADE, mesh: shaft.mesh, stock: BAR,
+    params: { ...base, topZ: 50, bottomZ: 47, grooveRadius: 6, peck: 1e-9 },
+  });
+  assert.ok(Date.now() - t0 < 5000, 'it comes back');
+  assert.ok(cl.count > 0 && cl.count < 20000, `a bounded program (${cl.count} moves)`);
+  assert.ok(cl.notes.some((n) => n.level === 'warn' && /pecks/.test(n.text)), 'and says what it did');
 });
 
 test('a groove exactly one blade wide is plunged once', () => {

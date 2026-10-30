@@ -211,6 +211,9 @@ test('a number is read the way it is written, comma or full stop', () => {
   assert.eq(parseNumber('5,'), 5);
   assert.eq(parseNumber('5.'), 5);
   assert.ok(Number.isNaN(parseNumber('abc')), 'and nor is text');
+  // an exponent too big to hold is text that looks like a number, not Infinity
+  assert.ok(Number.isNaN(parseNumber('1e999')), 'and nor is a number too big to be one');
+  assert.ok(Number.isNaN(parseNumber('-1e400')));
   // shown back with a full stop and without float noise
   assert.eq(formatNumber(0.5), '0.5');
   assert.eq(formatNumber(25.400000000000002), '25.4');
@@ -435,4 +438,17 @@ test('a part-off reports the one height it actually has', async () => {
   const rough = read('turnRough', { topZ: 0, bottomZ: -30, stepdown: 1, stockToLeave: 0.3 });
   assert.ok(/Along the bar/.test(rough), `roughing still spans the bar: ${rough}`);
   assert.ok(/30\.00 mm/.test(rough), `and says how far: ${rough}`);
+});
+
+// A job that never returns used to leave "Generating…" up for good: cancelling
+// is cooperative, and a worker stuck in a loop never hears it. The pool can be
+// told to give up on everything, and says so to whoever was waiting.
+test('stopping the pool rejects what was waiting instead of leaving it hanging', async () => {
+  const { WorkerPool } = await import('../workers/pool.js');
+  const pool = new WorkerPool(0);      // no workers, so every job is queued
+  const waiting = [pool.run('a', {}), pool.run('b', {})];
+  const seen = waiting.map((p) => p.then(() => 'resolved', (e) => e.message));
+  assert.eq(pool.cancelAll(), 2, 'both jobs were abandoned');
+  assert.eq((await Promise.all(seen)).join(), 'stopped by you,stopped by you');
+  assert.eq(pool.queue.length, 0, 'and nothing is left to run');
 });

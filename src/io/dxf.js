@@ -259,10 +259,9 @@ function entityToPaths(type, entity, tol) {
       const r = number(entity, 40);
       if (!(r > 0)) return [];
       const from = number(entity, 50) * DEG;
-      let to = number(entity, 51) * DEG;
       // DXF arcs always run counter-clockwise from start to end
-      while (to <= from) to += Math.PI * 2;
-      return path(ocs(arcPoints(number(entity, 10), number(entity, 20), r, from, to - from, tol)));
+      return path(ocs(arcPoints(number(entity, 10), number(entity, 20), r, from,
+        ccwSweep(from, number(entity, 51) * DEG), tol)));
     }
 
     case 'ELLIPSE':
@@ -347,6 +346,24 @@ function polylinePoints(xs, ys, bulges, closed, tol) {
   return out;
 }
 
+/**
+ * How far an arc runs counter-clockwise from `from` to `to`, in (0, 2π] when the end is not past the start.
+ *
+ * Equal angles are the whole circle, which is what this has always read them
+ * as. It is a remainder rather than a loop that adds a turn until `to` has
+ * passed `from`: that loop never ends once `from` is large enough that adding
+ * 2π to a small `to` changes nothing — a start angle of 1e300 hung the import
+ * (and the tab) on one ARC.
+ */
+function ccwSweep(from, to) {
+  const turn = Math.PI * 2;
+  // an end already past the start is taken as written — an ellipse's 2π, rounded
+  // up in the file's twelfth digit, must stay the whole ellipse
+  if (to > from) return to - from;
+  const sweep = (((to - from) % turn) + turn) % turn;
+  return sweep > 0 ? sweep : turn;
+}
+
 /** An arc as points, chorded so the sagitta stays under `tol`. */
 function arcPoints(cx, cy, r, from, sweep, tol) {
   const steps = arcSteps(r, Math.abs(sweep), tol);
@@ -381,8 +398,7 @@ function ellipsePoints(entity, tol) {
   const my = number(entity, 21);
   const ratio = number(entity, 40, 1);
   const from = number(entity, 41, 0);
-  let to = number(entity, 42, Math.PI * 2);
-  while (to <= from) to += Math.PI * 2;
+  const to = from + ccwSweep(from, number(entity, 42, Math.PI * 2));
 
   const major = Math.hypot(mx, my);
   if (!(major > 0)) return [];

@@ -108,6 +108,25 @@ export class WorkerPool {
     entry?.worker.postMessage({ cancel: id });
   }
 
+  /**
+   * Abandon everything that is running or waiting, and start again clean.
+   *
+   * The only way out of a job that does not come back. `cancel` is cooperative
+   * — the worker has to be between slices to hear it — and a strategy stuck in
+   * a loop never is, so the worker is terminated outright and the next job
+   * spawns a fresh one. Every caller waiting on a job gets a rejection rather
+   * than silence, which is what lets Generate and Simulate finish their own
+   * bookkeeping: the spinner stops and the operation says why it has no path.
+   */
+  cancelAll(reason = 'stopped by you') {
+    const waiting = [...this.active.values(), ...this.queue];
+    this.active.clear();
+    this.queue.length = 0;
+    this.terminate();
+    for (const task of waiting) task.reject(new Error(reason));
+    return waiting.length;
+  }
+
   terminate() {
     for (const w of this.all) w.terminate();
     this.all.length = 0;

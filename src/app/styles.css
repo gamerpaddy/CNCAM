@@ -1721,6 +1721,19 @@ button.pick-active {
 }
 .status-summary { flex: 0 0 auto; color: var(--fg-dim); }
 .status-summary:empty { display: none; }
+.busy-stop {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  padding: 0 8px;
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.busy-stop[hidden] { display: none; }
+.busy-stop:hover { background: var(--accent); color: #fff; }
 
 /* A job is running. Silence for several seconds reads as a hang, and a hang
    invites a second click that queues a second identical job. */

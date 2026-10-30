@@ -239,6 +239,11 @@ export function makeProgramActions(ctx, space) {
             earlier: (setup.mode ?? 'mill') === 'turn' || READS_EARLIER.has(op.type)
               ? operationsBefore(setup, op) : undefined,
           }).then((cl) => {
+            // The operation may have been deleted, or the whole project cleared
+            // or replaced, while the worker ran. Its path then belongs to
+            // nothing: it sat in the store for the rest of the session, and
+            // bumped the epoch that tells the viewport and the post to redraw.
+            if (!doc.findItem('op', op.id)) return;
             doc.toolpaths.set(op.id, cl);
             doc.fingerprints.set(op.id, fingerprint);
             doc.failures.delete(op.id);
@@ -1004,6 +1009,19 @@ export function makeProgramActions(ctx, space) {
   }
 
   /**
+   * Give up on whatever the worker pool is doing.
+   *
+   * A strategy that never returns used to leave "Generating…" up for good, with
+   * the Generate and Simulate buttons greyed out until the page was reloaded
+   * and the work since the last autosave with it.
+   */
+  function stopJobs() {
+    const stopped = ctx.pool.cancelAll();
+    if (stopped) ctx.ui.setStatus(`Stopped — ${plural(stopped, 'job')} abandoned. Nothing was `
+      + 'changed in the project; change the settings that made it slow and generate again', true);
+  }
+
+  /**
    * Bring the toolpaths a file is about to be printed from up to date.
    *
    * A toolpath is computed once and then kept until something replaces it, so
@@ -1226,5 +1244,6 @@ export function makeProgramActions(ctx, space) {
     exportGcode,
     exportOperationsSeparately,
     exportOneOperation,
+    stopJobs,
   };
 }

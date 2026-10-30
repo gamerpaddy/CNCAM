@@ -5,6 +5,7 @@ import { readGcode, tapCutFinding } from '../engine/backplot.js';
 import { simulateRemoval } from '../engine/simulate.js';
 import { MOVE_STRIDE, OP, FEED, eachMove } from '../engine/cl.js';
 import { tapDrillDiameter, threadForHole } from '../engine/strategies/holes.js';
+import { orderHoles } from '../engine/strategies/drill.js';
 import { coarsePitch, suggestCutting } from '../doc/tool-library.js';
 import { makeTube, makeBoss, makeBox, makeRevolved } from './fixtures.js';
 
@@ -138,13 +139,39 @@ test('tapping switches the mode on and off again', () => {
 });
 
 test('a blind hole is tapped short of its floor by the tap lead', () => {
-  // a pocket 10mm deep with a ⌀5 hole another 6mm into its floor
-  const blind = makeTube(20, 20, 18, 2.5, 14);
-  const cl = run('tap', TAP, blind, { depthMode: 'hole', bottomZ: 0 });
+  // a ⌀5 hole 12mm deep in a block 20 tall: its floor is at Z8
+  const blind = makeRevolved([[0, 8], [2.5, 8], [2.5, 20], [18, 20], [18, 0], [0, 0]], 24);
+  const stock = { kind: 'box', min: [-20, -20, 0], max: [20, 20, 20] };
+  for (const depthMode of ['hole', 'bottomZ']) {
+    const cl = generateToolpath({
+      type: 'tap', name: 'tap', tool: TAP, mesh: blind, stock,
+      params: {
+        topZ: 20, bottomZ: 0, clearanceHeight: 30, tolerance: 0.01,
+        diameterTol: 0.5, entryGap: 1, depthMode,
+      },
+    });
+    const holes = drillMoves(cl);
+    assert.eq(holes.length, 1, `one hole: ${notes(cl)}`);
+    // a lead of two threads at 1mm: the tap stops 2mm over the floor — and does
+    // so whatever Bottom Z says, which here is 8mm under the floor of the hole
+    assert.close(holes[0].z, 10, 0.02, `${depthMode}: stopped short of the floor, at ${holes[0].z}`);
+    assert.ok(/lead cuts nothing/.test(notes(cl)), notes(cl));
+  }
+});
+
+test('a through hole is tapped on past the underside, by the lead', () => {
+  // The test for "blind" used to be "reaches Bottom Z", which every through hole
+  // does as well — so a tap in a plate stopped two millimetres short of the
+  // underside and the last two threads were never cut.
+  const cl = run('tap', TAP, TAPPED, { bottomZ: 0 });
   const holes = drillMoves(cl);
   assert.eq(holes.length, 1, `one hole: ${notes(cl)}`);
-  assert.ok(holes[0].z > 0.5, `stopped short of the floor, at ${holes[0].z}`);
-  assert.ok(/lead cuts nothing/.test(notes(cl)), notes(cl));
+  assert.close(holes[0].z, -2, 0.02, `the lead comes out of the underside: Z${holes[0].z}`);
+  assert.ok(/past the underside/.test(notes(cl)), notes(cl));
+  // and a hole that goes on below Bottom Z is not the end of a hole: the tap
+  // takes the depth it was given
+  const shallow = run('tap', TAP, TAPPED, { bottomZ: 8 });
+  assert.close(drillMoves(shallow)[0].z, 8, 0.02, 'a depth limit inside a through hole is a depth');
 });
 
 test('LinuxCNC taps with G33.1, and reads back as the same hole', () => {
@@ -527,4 +554,129 @@ test('and a tap that runs out of the hole it was given', () => {
   // is what a bottoming tap does, and not a hole cut in solid
   const near = make('drill', DRILL5, { bottomZ: drillMoves(deep)[0].z + 1 });
   assert.eq(after(near).tapCut.count, 0, 'a millimetre into the point of the drill is not reported');
+});
+
+// --- the order the holes are visited in ---
+
+/** A drawing of circles: one closed 24-gon per centre, which is how a DXF circle arrives. */
+function circlesAt(centres, r = 3) {
+  return centres.map(([cx, cy]) => {
+    const points = [];
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      points.push(cx + r * Math.cos(a), cy + r * Math.sin(a));
+    }
+    return { points, closed: true };
+  });
+}
+
+/** XY distance walked between drill cycles, in program order. */
+function drillRoute(cl) {
+  const pts = drillMoves(cl);
+  let sum = 0;
+  for (let i = 1; i < pts.length; i++) sum += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  return { sum, count: pts.length };
+}
+
+test('holes are visited by the shortest route found, not row by row', () => {
+  // Three columns of five holes, each a few hundredths off a straight line. Read
+  // as rows (Y, then X) they are fifteen different rows, so the old order went
+  // across the plate and back for every hole: 800mm of travel for a part whose
+  // holes are covered by three 80mm walks.
+  const centres = [];
+  for (let c = 0; c < 3; c++) {
+    for (let k = 0; k < 5; k++) centres.push([10 + c * 40, 10 + k * 16 + ((c * 5 + k) % 4) * 0.05 * (c + 1)]);
+  }
+  const drawing = circlesAt(centres);
+  const BIT = { ...DRILL5, diameter: 6 };
+  const make = (type, tool) => generateToolpath({
+    type, name: type, tool, drawing, mesh: BORED, stock: STOCK,
+    params: {
+      topZ: 20, bottomZ: 0, clearanceHeight: 30, tolerance: 0.01,
+      diameterTol: 0.5, entryGap: 1,
+    },
+  });
+  const drill = drillRoute(make('drill', BIT));
+  assert.eq(drill.count, 15, 'every hole is drilled once');
+  // three columns: 4 × 16 down each, and two 40mm hops between them
+  assert.ok(drill.sum < 64 * 3 + 80 + 5, `the route is the three columns, not ${drill.sum.toFixed(0)}mm of crossing`);
+  // and it is one function that every operation visiting holes goes through
+  const holes = centres.map(([cx, cy]) => ({ cx, cy, r: 3 }));
+  const walked = orderHoles(holes.slice().sort((a, b) => b.cx - a.cx || b.cy - a.cy));
+  let sum = 0;
+  for (let i = 1; i < walked.length; i++) sum += Math.hypot(walked[i].cx - walked[i - 1].cx, walked[i].cy - walked[i - 1].cy);
+  assert.ok(sum < 64 * 3 + 80 + 5, `from any starting order, ${sum.toFixed(0)}mm`);
+});
+
+test('a blind hole is drilled to its own floor and spotted from its own surface, on a tall part too', () => {
+  // The scan finds a hole by slicing the part, and a slice tells where a hole
+  // IS, not where it stops: on a part 100mm tall the slices are a millimetre
+  // apart, and the floor of the blind hole below was read as the last slice that
+  // saw it — 0.5mm above the real one. depthMode "hole" drilled to that.
+  const FLOOR = 37;
+  const COUNTERBORE_FLOOR = 69;
+  const body = makeRevolved([
+    [0, FLOOR], [3, FLOOR], [3, 100], [20, 100], [20, 0], [0, 0],
+  ], 48);
+  // and a ⌀6 hole that opens in the floor of a ⌀12 counterbore
+  const stepped = makeRevolved([
+    [0, 20], [3, 20], [3, COUNTERBORE_FLOOR], [6, COUNTERBORE_FLOOR], [6, 100], [20, 100], [20, 0], [0, 0],
+  ], 48);
+  const stock = { kind: 'box', min: [-20, -20, 0], max: [20, 20, 100] };
+  const make = (type, tool, mesh, params = {}) => generateToolpath({
+    type, name: type, tool, mesh, stock,
+    params: {
+      topZ: 100, bottomZ: 0, clearanceHeight: 110, tolerance: 0.01,
+      diameterTol: 0.5, entryGap: 1, depthMode: 'hole', ...params,
+    },
+  });
+  const bit = { ...DRILL5, diameter: 6 };
+  const drilled = drillMoves(make('drill', bit, body));
+  assert.eq(drilled.length, 1);
+  assert.close(drilled[0].z, FLOOR, 0.02, `drilled to Z${drilled[0].z.toFixed(3)}, the floor is at ${FLOOR}`);
+
+  // a 90° spot across the ⌀6 hole's mouth, which is the counterbore floor
+  const spot = drillMoves(make('spot', { ...SPOT, diameter: 12 }, stepped, { spotDiameter: 6 }))
+    .filter((m) => Math.abs(m.z - (COUNTERBORE_FLOOR - 3)) < 1.5);
+  assert.eq(spot.length, 1, 'one spot, in the counterbore floor');
+  assert.close(spot[0].z, COUNTERBORE_FLOOR - 3, 0.02,
+    `the cone is sunk from the real surface: Z${spot[0].z.toFixed(3)}, wanted ${COUNTERBORE_FLOOR - 3}`);
+});
+
+test('a drawing of circles drills with no model in the project at all', () => {
+  // The app hands the strategy no mesh when a project holds only a DXF, which is
+  // the job "Positions from" a drawing is for — and the drill read the mesh's
+  // positions before it looked at the drawing, so the operation threw.
+  const drawing = circlesAt([[10, 10], [30, 10], [20, 30]]);
+  const BIT = { ...DRILL5, diameter: 6 };
+  const cl = generateToolpath({
+    type: 'drill', name: 'drill', tool: BIT, mesh: null, drawing, stock: STOCK,
+    params: {
+      topZ: 20, bottomZ: 0, clearanceHeight: 30, tolerance: 0.01,
+      diameterTol: 0.5, entryGap: 1,
+    },
+  });
+  const holes = drillMoves(cl);
+  assert.eq(holes.length, 3, `three circles, three holes: ${notes(cl)}`);
+  assert.ok(holes.every((h) => h.z < 0), 'through the billet, point and all');
+  const bare = generateToolpath({
+    type: 'drill', name: 'drill', tool: BIT, mesh: null, stock: STOCK,
+    params: { topZ: 20, bottomZ: 0, clearanceHeight: 30, tolerance: 0.01, diameterTol: 0.5 },
+  });
+  assert.eq(bare.count, 0, 'with neither a part nor a drawing it says so instead of throwing');
+  assert.ok(/no model/.test(notes(bare)), notes(bare));
+});
+
+test('a spot drill with a flat on its tip is sunk by the width the cone has to grow, not by the whole of it', () => {
+  // A cone ⌀6 across at the surface, 90° included, from a tool that is already
+  // ⌀2 at its tip: it has only to grow 2mm each side, so the tip goes in 2mm.
+  // The depth was worked out as if the tool ended in a point, 3mm — a ⌀8 spot.
+  const FLAT_TIP = { ...SPOT, diameter: 10, tipDiameter: 2 };
+  const point = drillMoves(run('spot', SPOT, BORED, { spotDiameter: 6 }))[0];
+  const flat = drillMoves(run('spot', FLAT_TIP, BORED, { spotDiameter: 6 }))[0];
+  assert.close(point.z, 20 - 3, 0.02, 'from a point: three millimetres in');
+  assert.close(flat.z, 20 - 2, 0.02, `from a ⌀2 flat: two, got ${(20 - flat.z).toFixed(3)}`);
+  const none = run('spot', FLAT_TIP, BORED, { spotDiameter: 1.5 });
+  assert.close(drillMoves(none)[0].z, 20, 0.02, 'a cone narrower than the tip is not cut at all');
+  assert.ok(/flat tip/.test(notes(none)), notes(none));
 });

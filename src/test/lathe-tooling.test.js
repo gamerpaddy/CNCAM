@@ -11,7 +11,7 @@ import { test, assert } from './runner.js';
 import {
   insertOutline, parseInsertCode, latheToolOutline, isLatheTool, insertIcOf,
   INSERT_SHAPES, INSERT_LETTERS, toolPose, effectiveLead, cornerAngleOf,
-  insertEngagement, recommendedDepthOfCut, cuttingEdgeLength, polygonCornerAngle,
+  insertEngagement, recommendedDepthOfCut, cuttingEdgeLength, polygonCornerAngle, insertReach,
 } from '../engine/insert.js';
 import {
   toolSections, latheReachOf, bladeHalfWidth, tipLengthOf,
@@ -20,7 +20,7 @@ import { toolFromPreset, allPresets, machineCanHold } from '../doc/tool-library.
 import { computeStock, isRoundStock, deriveCylinder } from '../engine/stock.js';
 import { createFixture, chuckLimit } from '../engine/fixtures.js';
 import {
-  boreProfile, hasBore, barFromStock, turningProfile, drillOversize,
+  boreProfile, hasBore, barFromStock, turningProfile, drillOversize, radiusAtZ,
 } from '../engine/lathe.js';
 import { generateToolpath, TURNING_OPS, toolpathStats } from '../engine/toolpath.js';
 import { CLBuilder, FEED, OP, eachMove } from '../engine/cl.js';
@@ -1714,4 +1714,171 @@ test('a thread that runs out into the bar is not a crash', () => {
     assert.eq(sim.rapidCut.count, 0,
       `pitch ${pitch}: ${sim.rapidCut.count} rapids, ${sim.rapidCut.depth.toFixed(3)}mm deep`);
   }
+});
+
+// --- the insert is not only its nose -----------------------------------------
+
+/**
+ * How far the body of the insert, in the pose the tool is drawn in, goes into
+ * the part while the nose centre is driven along `cl` — the deepest of every
+ * point of the insert's underside at every point along every move.
+ */
+function bodyGouge(cl, t, mesh) {
+  const hull = insertReach(t);
+  const profile = turningProfile(mesh, { samples: 2000 });
+  const lowest = (dz) => {
+    for (let i = 0; i + 1 < hull.length; i++) {
+      if (dz >= hull[i][0] && dz <= hull[i + 1][0]) {
+        const span = hull[i + 1][0] - hull[i][0];
+        return span < 1e-9 ? hull[i][1]
+          : hull[i][1] + ((hull[i + 1][1] - hull[i][1]) * (dz - hull[i][0])) / span;
+      }
+    }
+    return Infinity;
+  };
+  let worst = 0;
+  let prev = null;
+  eachMove(cl, (op, x, y, z) => {
+    if (prev) {
+      const n = Math.max(1, Math.ceil(Math.hypot(x - prev[0], z - prev[1]) / 0.25));
+      for (let k = 0; k <= n; k++) {
+        const r = prev[0] + ((x - prev[0]) * k) / n;
+        const zc = prev[1] + ((z - prev[1]) * k) / n;
+        for (let dz = hull[0][0]; dz <= hull[hull.length - 1][0]; dz += 0.1) {
+          const depth = radiusAtZ(profile, zc + dz) - (r + lowest(dz));
+          if (depth > worst) worst = depth;
+        }
+      }
+    }
+    prev = [x, z];
+  });
+  return worst;
+}
+
+function turnedPart(outline) {
+  const mesh = makeRevolved(outline);
+  const stock = computeStock([mesh], { kind: 'cylinder', cylinder: deriveCylinder([mesh]) });
+  return { mesh, stock };
+}
+
+test('the insert reaches as far back along the bar as its corner leaves room for', () => {
+  // The underside of the insert behind the nose is the edge a back-taper has to
+  // clear. On a 95° holder it is what is left of the corner once the end edge is
+  // laid at the lead: 5° for the 80° insert of a roughing tool, 30° for the 55°
+  // of a profiling one, and 50° for the 35° of a copy tool. Every one of them
+  // used to be drawn, engaged and planned at 5°.
+  const slope = (name, lead = 95) => {
+    const t = { ...tool(name), leadAngle: lead };
+    const hull = insertReach(t);
+    // the longest straight edge of the underside: the one that trails off the nose
+    let best = [0, 0, 0];
+    for (let i = 0; i + 1 < hull.length; i++) {
+      const length = Math.hypot(hull[i + 1][0] - hull[i][0], hull[i + 1][1] - hull[i][1]);
+      if (length > best[0]) best = [length, hull[i + 1][1] - hull[i][1], hull[i + 1][0] - hull[i][0]];
+    }
+    return Math.atan2(best[1], best[2]) * 180 / Math.PI;
+  };
+  assert.close(slope('CNMG 120408 rougher'), 5, 1.5, '80° insert at 95°');
+  assert.close(slope('DCMT 070204 finishing'), 30, 2, '55° insert at 95°');
+  assert.close(slope('VNMG 160404 profiling'), 50, 2, '35° insert at 95°');
+  // and the nose is the lowest point there is: the hull is measured from its centre
+  for (const name of ['CNMG 120408 rougher', 'DCMT 070204 finishing', 'RCMT 1003 copying']) {
+    const t = tool(name);
+    const lowest = Math.min(...insertReach(t).map(([, r]) => r));
+    assert.close(lowest, -t.noseRadius, 0.02, `${name}: lowest metal a nose radius under the centre`);
+  }
+});
+
+test('a finishing pass keeps the body of the insert out of a taper that falls away toward the chuck', () => {
+  // ⌀16 at the chuck, ⌀32 at the free end, and between them a taper at 28° to
+  // the bar. Walking toward the chuck the surface falls away behind the nose,
+  // faster than the 5° edge of a roughing insert trails off it — so the nose
+  // followed the profile and the edge went 5mm into the taper. A 55° insert,
+  // which trails at 30°, can follow it.
+  const { mesh, stock } = turnedPart([[0, 0], [8, 0], [8, 10], [16, 25], [16, 40], [0, 40]]);
+  const bar = { stockToLeave: 0 };
+  const rough = turnOp('turnFinish', 'CNMG 120408 rougher', 1, mesh, stock, bar);
+  const profiling = turnOp('turnFinish', 'DCMT 070204 finishing', 1, mesh, stock, bar);
+  const gouge = bodyGouge(rough.cl, rough.tool, mesh);
+  assert.ok(gouge < 0.02, `the 80° insert went ${gouge.toFixed(2)}mm into the taper`);
+  assert.ok(bodyGouge(profiling.cl, profiling.tool, mesh) < 0.02, 'and the 55° one stayed out of it too');
+  // the one that cannot reach says so, and the one that can does not
+  assert.ok(rough.cl.notes.some((n) => n.level === 'warn' && /cannot follow/.test(n.text)),
+    `held-off finishing was not reported: ${rough.cl.notes.map((n) => n.text)}`);
+  assert.ok(!profiling.cl.notes.some((n) => /cannot follow/.test(n.text)),
+    'the profiling insert follows the taper, so it has nothing to report');
+  // and the profiling insert does follow it, rather than keeping out of the way:
+  // its nose centre is within a nose radius or so of the taper's own surface
+  const profile = turningProfile(mesh, { samples: 2000 });
+  const cuts = cutPoints(profiling.cl);
+  let sampled = 0;
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const [x0, , z0] = cuts[i];
+    const [x1, , z1] = cuts[i + 1];
+    for (let k = 0; k <= 10; k++) {
+      const z = z0 + ((z1 - z0) * k) / 10;
+      const x = x0 + ((x1 - x0) * k) / 10;
+      if (z < 12 || z > 23) continue;
+      sampled++;
+      const r = radiusAtZ(profile, z);
+      assert.ok(x - r < profiling.tool.noseRadius * 2 + 0.5,
+        `Z${z.toFixed(1)}: nose at ${x.toFixed(2)} over a ${r.toFixed(2)} taper`);
+    }
+  }
+  assert.ok(sampled > 0, 'the profiling pass has moves on the taper');
+});
+
+test('a chamfer on the chuck end of a part is not cut by an edge that cannot trail off it', () => {
+  // 45° at the end of the part nearest the chuck: the diameter falls away
+  // toward the chuck at 45°, which no 5° trailing edge can follow. The nose
+  // went down it with the edge 0.9mm into the diameter above.
+  const { mesh, stock } = turnedPart([[0, 0], [14, 0], [15, 1], [15, 38], [14, 39], [14, 40], [0, 40]]);
+  const rough = turnOp('turnFinish', 'CNMG 120408 rougher', 1, mesh, stock, { stockToLeave: 0 });
+  const gouge = bodyGouge(rough.cl, rough.tool, mesh);
+  assert.ok(gouge < 0.02, `the insert went ${gouge.toFixed(2)}mm into the diameter`);
+});
+
+test('roughing stops short of a shoulder by what the tool leans into it, not by its nose alone', () => {
+  // A tool whose end edge leans forward — a 62° lead, a tool bought to turn
+  // toward a shoulder at an angle — reaches into the shoulder by the height of
+  // the cut times the lean, and the pass stopped a nose radius off it as if it
+  // were square.
+  const { mesh, stock } = turnedPart([[0, 0], [16, 0], [16, 20], [8, 20], [8, 40], [0, 40]]);
+  for (const lead of [62, 75, 95]) {
+    const t = { ...tool('CNMG 120408 rougher'), leadAngle: lead };
+    const op = createOperation('turnRough');
+    Object.assign(op.params, defaultParamsFor('turnRough', {
+      stock, modelBounds: { min: [0, 0, 0], max: [0, 0, 40] }, tool: t,
+    }), { stockToLeave: 0.3 });
+    const cl = generateToolpath({
+      type: 'turnRough', name: 'rough', params: op.params, tool: t, stock, mesh, fixtures: [],
+    });
+    assert.ok(cl.count > 0, `lead ${lead} roughs`);
+    // the allowance is 0.3, and nothing may be cut into the part beyond it
+    const gouge = bodyGouge(cl, t, mesh);
+    assert.ok(gouge < 0.02, `lead ${lead}: the tool went ${gouge.toFixed(2)}mm into the shoulder`);
+  }
+});
+
+test('a stretch of the part that every roughing level is stopped short of is said, not left to the finish', () => {
+  // ⌀20 for the first 15mm behind a ⌀32 flange: each roughing pass comes in from
+  // the free end and the flange stops it, so the spigot is untouched — and the
+  // operation reported "N roughing passes from ⌀33 to ⌀20.6" and nothing else,
+  // with 6mm of radius standing for the pass that follows.
+  const { mesh, stock } = turnedPart([[0, 0], [10, 0], [10, 15], [16, 15], [16, 35], [12, 35], [12, 50], [0, 50]]);
+  const rough = turnOp('turnRough', 'CNMG 120408 rougher', 1, mesh, stock, { stockToLeave: 0.3 });
+  const text = rough.cl.notes.filter((n) => n.level === 'warn').map((n) => n.text).join(' | ');
+  assert.ok(/⌀20\.00 from Z0 to Z1[45][.0-9]* is not roughed/.test(text), `the spigot was not named: ${text}`);
+  // and the finishing insert, which cannot get behind the flange either, says
+  // it stays out of the stretch its body would cut into, rather than driving the
+  // nose down the spigot with the edge through the flange
+  const finish = turnOp('turnFinish', 'DCMT 070204 finishing', 2, mesh, stock, { stockToLeave: 0 });
+  assert.ok(finish.cl.notes.some((n) => /cannot follow/.test(n.text)),
+    `finishing did not say it stayed out: ${finish.cl.notes.map((n) => n.text)}`);
+  assert.ok(bodyGouge(finish.cl, finish.tool, mesh) < 0.02, 'and nothing of it is in the part');
+
+  // an ordinary shaft, with the big diameter nearest the chuck, has nothing to say
+  const plain = turnedPart([[0, 0], [16, 0], [16, 20], [10, 20], [10, 40], [0, 40]]);
+  const quiet = turnOp('turnRough', 'CNMG 120408 rougher', 1, plain.mesh, plain.stock, { stockToLeave: 0.3 });
+  assert.ok(!quiet.cl.notes.some((n) => /not roughed/.test(n.text)), 'a plain shoulder is not reported');
 });

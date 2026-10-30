@@ -877,8 +877,19 @@ export function loadCatalogs() {
   } catch {
     stored = null;              // private mode, or something else wrote the key
   }
+  // What is kept is a drawer whose tools are all records with a name: everything
+  // that reads a catalogue sorts, filters or compares by name and by type, and
+  // a `null` or a bare number in the list (an older build's file, a hand edit)
+  // was a tool picker that threw every time it was opened, for good — the key
+  // is read again on every open, so there was no way for the user to get out.
   const catalogs = Array.isArray(stored?.catalogs)
-    ? stored.catalogs.filter((c) => c && typeof c.id === 'string' && Array.isArray(c.tools))
+    ? stored.catalogs
+      .filter((c) => c && typeof c.id === 'string' && Array.isArray(c.tools))
+      .map((c) => ({
+        ...c,
+        name: typeof c.name === 'string' ? c.name : 'Catalogue',
+        tools: c.tools.filter((t) => t && typeof t === 'object' && typeof t.name === 'string'),
+      }))
     : null;
   if (catalogs) {
     return catalogs.some((c) => c.id === DEFAULT_CATALOG)
@@ -891,7 +902,9 @@ export function loadCatalogs() {
 function readLegacyTools() {
   try {
     const parsed = JSON.parse(localStorage.getItem(USER_KEY) ?? 'null');
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((t) => t && typeof t === 'object' && typeof t.name === 'string')
+      : [];
   } catch {
     return [];
   }
@@ -1062,11 +1075,21 @@ export function serializeLibrary(tools, name = '') {
   }, null, 2);
 }
 
+/** The tools array of a library file, wrapped or bare — every entry a record, or a sentence saying which is not. */
+function toolRecords(parsed) {
+  const tools = Array.isArray(parsed) ? parsed : parsed?.tools;
+  if (!Array.isArray(tools)) throw new Error('not a tool library (expected a tools array)');
+  const at = tools.findIndex((t) => !t || typeof t !== 'object' || Array.isArray(t));
+  if (at >= 0) {
+    throw new Error(`entry ${at + 1} of the tools list is not a tool (it is ${tools[at] === null ? 'null' : typeof tools[at]})`);
+  }
+  return tools;
+}
+
 /** The same file read as a catalogue: the name on it, and its tools as records. */
 export function deserializeCatalog(json) {
   const parsed = JSON.parse(json);
-  const tools = Array.isArray(parsed) ? parsed : parsed?.tools;
-  if (!Array.isArray(tools)) throw new Error('not a tool library (expected a tools array)');
+  const tools = toolRecords(parsed);
   // Stored as records rather than as project tools: a catalogue entry has no id
   // and no tool number, because those belong to the project it is pulled into
   // and not to the drawer it sits in.
@@ -1085,8 +1108,6 @@ export function deserializeCatalog(json) {
  * tools already in it.
  */
 export function deserializeLibrary(json) {
-  const parsed = JSON.parse(json);
-  const tools = Array.isArray(parsed) ? parsed : parsed.tools;
-  if (!Array.isArray(tools)) throw new Error('not a tool library (expected a tools array)');
+  const tools = toolRecords(JSON.parse(json));
   return tools.map((t, i) => toolFromPreset(t, t.number ?? i + 1));
 }

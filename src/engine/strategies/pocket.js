@@ -14,7 +14,7 @@ import { concentricRings, coreEntry } from '../rings.js';
 import { mergeTolerance } from '../simplify.js';
 import {
   offsetLoops, offsetNormalized, enclosedVoids, diffLoops, loopArea, intersectLoops,
-  unionWithHoles, unionLoops,
+  unionWithHoles, unionLoops, bufferOpenPaths,
 } from '../../geom/clipper.js';
 import { SilhouetteStack } from '../../geom/silhouette.js';
 import { depthLevelsFor, depthPasses } from '../stock.js';
@@ -65,12 +65,17 @@ export function generatePocket({
   const levels = [];
   let zEntry = params.topZ;
   let clearedAbove = null;
+  let clearedLevel = null;
   for (const z of depthLevelsFor(params, mesh, tool)) {
     const shadow = silhouette.down(z);
     const found = pocketArea(shadow, regions,
       { radius: r, tolerance, stockToLeave, z, minClearedWidth: step });
     if (found.raw) sawRegion = true;
-    levels.push({ z, zEntry, area: found.area, clearedAbove, shadow });
+    // `swath` is what the level's rings actually swept, filled in as they are
+    // planned: the area the centre may go in says where the cutter is allowed,
+    // and the metal it took off is a smaller thing — see `linkFor`.
+    const level = { z, zEntry, area: found.area, clearedAbove, clearedBy: clearedLevel, shadow, swath: [] };
+    levels.push(level);
     // Both of these only move when this level actually emptied something.
     // `zEntry` is the height the *next* level's ramp starts from, and a level
     // that found no region has taken nothing off: the pocket on the step plate
@@ -78,7 +83,7 @@ export function generatePocket({
     // carrying that level's Z down meant the pass below rapided to a feed plane
     // one millimetre inside the billet and then ramped a stepdown through 3mm
     // of standing stock — a full-width cut at three times the depth asked for.
-    if (found.area.length) { clearedAbove = found.area; zEntry = z; }
+    if (found.area.length) { clearedAbove = found.area; zEntry = z; clearedLevel = level; }
   }
 
   // The highest the tool is ever asked to travel between passes. `crossAt` is
@@ -99,6 +104,7 @@ export function generatePocket({
   const linkFor = (level, a, b) => {
     if (!a || !level.clearedAbove?.length) return ceiling;
     return spanInside(level.clearedAbove, a, b, Math.max(r / 2, tolerance * 4, 0.05))
+      && flownOver(level.clearedBy?.swath, a, b, r)
       ? Math.min(ceiling, level.zEntry + gap)
       : ceiling;
   };
@@ -148,11 +154,26 @@ export function generatePocket({
       // Already down and stepping across from the ring beside this one — see
       // the note on `atDepth` below, and engine/linking.js startNearestSlide
       // for why the step is spread along the loop rather than taken square.
-      const slide = entered && !hasLead(passLead);
-      const runIn = slide ? 2 * tool.diameter : 0;
-      const ready = orderLoopForEntry(loop, direction, resolveLead(loop, passLead),
+      let slide = entered && !hasLead(passLead);
+      let runIn = slide ? 2 * tool.diameter : 0;
+      let ready = orderLoopForEntry(loop, direction, resolveLead(loop, passLead),
         from, runIn);
-      const entry = loopEntryPoint(ready, passLead);
+      let entry = loopEntryPoint(ready, passLead);
+      // Stepping across at depth is a straight move from where the last ring
+      // ended to where this one starts, and it is only the same bite as the ring
+      // when the two are neighbours. With an island in the pocket they are not
+      // always: the rings round the island and the rings round the wall are
+      // separate loops of one group, and the step from one family to the other
+      // is a line across whatever stands between them. Measured, on a pocket
+      // with a 20x16 boss in it: a cutting move straight through the boss at
+      // every level, 8mm deep. A step that leaves the area the centre may go in
+      // is not a step, so the ring is entered the ordinary way instead.
+      if (slide && from && !spanInside(area, from, entry, Math.max(r / 2, tolerance * 4, 0.05))) {
+        slide = false;
+        runIn = 0;
+        ready = orderLoopForEntry(loop, direction, resolveLead(loop, passLead), from, 0);
+        entry = loopEntryPoint(ready, passLead);
+      }
       // One entry per pocket per level, and the rest is a spiral.
       //
       // Every ring was entered on its own: lift, traverse, and ramp a whole
@@ -215,6 +236,7 @@ export function generatePocket({
       let above = Math.max(z, Math.min(params.topZ, ground.topIn(swept)));
       for (const zz of depthPasses(above, z, params.stepdown)) {
         planPocket(level, found, above, zz, zz <= z + 1e-9);
+        if (zz <= z + 1e-9) level.swath.push(...swept);
         ground.cut(swept, zz);
         above = zz;
       }
@@ -472,6 +494,33 @@ function spanInside(loops, a, b, step) {
     if (!pointInLoops(region, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)) return false;
   }
   return true;
+}
+
+/**
+ * Does a cutter flying from `a` to `b` stay over metal the level above took
+ * off — its whole width, not its centre line?
+ *
+ * The centre line staying inside the area the level cleared is not the same
+ * thing. Concentric rings a stepover apart sweep a band each, and when the
+ * stepover is most of the cutter the bands meet along the sides and not at the
+ * corners: each ring's sharp inner corner stands a little way short of the next
+ * ring's rounded outer one, and the sliver of stock between them is as tall as
+ * the whole level. A diagonal hop across the rings runs through those, so it
+ * is judged against what was swept. Measured, ⌀6 at 95% across a 50x40 pocket:
+ * a rapid through 5mm of stock at every level below the first.
+ *
+ * A level with no record at all answers true, as the area test is all there is;
+ * a level that swept nothing answers false, since it took nothing off.
+ */
+function flownOver(swath, a, b, r) {
+  if (!swath) return true;
+  if (swath.length === 0) return false;
+  const half = Math.max(r - 0.05, r * 0.9);
+  const band = bufferOpenPaths([[a[0], a[1], b[0], b[1]]], half, 0.01);
+  if (band.length === 0) return true;
+  let left = 0;
+  for (const loop of diffLoops(band, swath)) left += Math.abs(loopArea(loop));
+  return left < 0.02;
 }
 
 /** [minX, minY, maxX, maxY] of one flat loop. */

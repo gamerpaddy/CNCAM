@@ -3,11 +3,14 @@ import { Document } from '../doc/document.js';
 import { createSetup, createOperation, createTool } from '../doc/schema.js';
 import { generateToolpath, IMPLEMENTED_OPS, OP_LABELS } from '../engine/toolpath.js';
 import { eachMove, OP, FEED, CLBuilder } from '../engine/cl.js';
+import { simulateRemoval } from '../engine/simulate.js';
 import { downhillAt, buildHeightmap } from '../geom/heightmap.js';
 import {
   unionLoops, loopArea, loopsBounds, enclosedVoids, unionWithHoles,
 } from '../geom/clipper.js';
-import { makeBox, makeMushroom, makeRamp, makePocketBlock, makeStepped } from './fixtures.js';
+import {
+  makeBox, makeMushroom, makeRamp, makePocketBlock, makeStepped, makeIslandPocket,
+} from './fixtures.js';
 
 const FLAT = { number: 1, type: 'flat', diameter: 6, fluteLength: 20, spindleRpm: 10000, feedCut: 800, feedPlunge: 300 };
 const BALL = { ...FLAT, type: 'ball' };
@@ -88,6 +91,79 @@ test('enclosedVoids finds a hole that the flat loop list hides', () => {
   assert.close(b.max[0], 30, 0.01, 'void max X');
   assert.close(b.min[1], 10, 0.01, 'void min Y');
   assert.close(b.max[1], 30, 0.01, 'void max Y');
+});
+
+test('an island standing in a void is not part of the void', () => {
+  // A 50x40 hole in a plate, and a 20x16 boss standing in the middle of it.
+  // The boss is an outer of its own as far as the union is concerned, so the
+  // hole alone is not the pocket: it was handed back whole, and a pocketing pass
+  // cut the boss down to the floor.
+  const plate = [0, 0, 70, 0, 70, 60, 0, 60];
+  const hole = [10, 10, 10, 50, 60, 50, 60, 10];
+  const boss = [25, 22, 45, 22, 45, 38, 25, 38];
+  const voids = enclosedVoids([plate, hole, boss]);
+  const area = voids.reduce((sum, loop) => sum + loopArea(loop), 0);
+  assert.close(Math.abs(area), 50 * 40 - 20 * 16, 0.5, 'the void is the hole less the boss');
+  // and a boss that touches a wall at a point is still inside the hole
+  const touching = [10, 22, 30, 22, 30, 38, 10, 38];
+  const voids2 = enclosedVoids([plate, hole, touching]);
+  const area2 = voids2.reduce((sum, loop) => sum + Math.abs(loopArea(loop)), 0);
+  assert.ok(area2 < 50 * 40 - 1, `an island against a wall still takes its area off (${area2})`);
+});
+
+test('a pocket round an island never cuts the island', () => {
+  const { mesh, island, top } = makeIslandPocket();
+  const stock = { kind: 'box', min: [0, 0, 0], max: [70, 60, top] };
+  const cl = generateToolpath({
+    type: 'pocket', name: 'pocket', tool: FLAT, mesh, stock,
+    params: {
+      topZ: top, bottomZ: 0, stepdown: 3, stepover: 0.4, clearanceHeight: top + 10,
+      stockToLeave: 0, tolerance: 0.01, direction: 'climb', leadType: 'none', rampAngle: 3,
+    },
+  });
+  assert.ok(cl.count > 0, 'the pocket is cut');
+  // The cutter's footprint over the boss, at any depth below its top, is a cut
+  // into the boss. Measured as the distance from the centre to the boss's
+  // rectangle: inside it, or nearer to it than the cutter's radius.
+  const r = FLAT.diameter / 2;
+  const clear = (x, y) => Math.hypot(
+    Math.max(island.min[0] - x, 0, x - island.max[0]),
+    Math.max(island.min[1] - y, 0, y - island.max[1]));
+  let deepest = 0;
+  let prev = null;
+  eachMove(cl, (op, x, y, z, i, j, k, feed) => {
+    if (prev && feed !== FEED.RAPID && z < top - 0.5) {
+      const n = Math.max(1, Math.ceil(Math.hypot(x - prev[0], y - prev[1]) / 0.25));
+      for (let s = 0; s <= n; s++) {
+        const px = prev[0] + ((x - prev[0]) * s) / n;
+        const py = prev[1] + ((y - prev[1]) * s) / n;
+        deepest = Math.max(deepest, r - clear(px, py));
+      }
+    }
+    prev = [x, y, z];
+  });
+  assert.ok(deepest < 0.05, `the cutter went ${deepest.toFixed(2)}mm into the island`);
+});
+
+test('a pocket at nearly the cutter width never rapids across the stock the rings left standing', () => {
+  // ⌀6 at 95% across a 50x40 pocket: the rings sit 5.7mm apart, so their bands
+  // overlap along the sides and not at the corners, where a sliver of stock
+  // stands as tall as the level. The hop from the last ring to the first of the
+  // next level passed to the area test (its centre line is inside the pocket)
+  // and flew diagonally through it at one gap above the floor: 5mm of metal at
+  // rapid. It is now judged against what the level above actually swept.
+  const { mesh, top } = makePocketBlock({ size: 70, pocketSize: 50, height: 12, depth: 8 });
+  const stock = { kind: 'box', min: [-2, -2, 0], max: [72, 72, top + 3] };
+  const cl = generateToolpath({
+    type: 'pocket', name: 'pocket', tool: FLAT, mesh, stock,
+    params: {
+      topZ: top + 3, bottomZ: 0, stepdown: 3, stepover: 0.95, clearanceHeight: top + 13,
+      stockToLeave: 0, tolerance: 0.01, direction: 'climb', leadType: 'arc', rampAngle: 3,
+    },
+  });
+  assert.ok(cl.count > 0, 'the pocket is cut');
+  const sim = simulateRemoval({ stock, ops: [{ cl, tool: FLAT }], maxCells: 60000 });
+  assert.eq(sim.rapidCut.count, 0, `rapids that took metal: ${sim.rapidCut.count} up to ${sim.rapidCut.depth}mm`);
 });
 
 test('a solid shape has no enclosed voids', () => {

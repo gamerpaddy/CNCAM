@@ -17,14 +17,22 @@ export async function openFile(accept) {
       throw err;
     }
   }
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = accept.extensions.join(',');
     input.onchange = async () => {
       const file = input.files[0];
       if (!file) return resolve(null);
-      resolve({ name: file.name, buffer: await file.arrayBuffer(), handle: null });
+      // a file the browser cannot read (too big for memory, gone since it was
+      // picked) rejects here, and a promise nobody settles is an Open that never
+      // answers: no file, no message
+      try {
+        resolve({ name: file.name, buffer: await file.arrayBuffer(), handle: null });
+      } catch (err) {
+        reject(err);
+      }
+      return undefined;
     };
     input.oncancel = () => resolve(null);
     input.click();

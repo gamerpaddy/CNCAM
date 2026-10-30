@@ -1,5 +1,7 @@
 import { test, assert } from './runner.js';
-import { generateToolpath } from '../engine/toolpath.js';
+import { generateToolpath, toolpathStats } from '../engine/toolpath.js';
+import { concentricRings } from '../engine/rings.js';
+import { loopArea } from '../geom/clipper.js';
 import { eachMove, OP, FEED } from '../engine/cl.js';
 import { cutLoopWithRamp } from '../engine/linking.js';
 import { CLBuilder } from '../engine/cl.js';
@@ -198,4 +200,70 @@ test('and says so when the drawing has no circles in it', () => {
   assert.eq(drills, 0);
   assert.ok(cl.notes.some((n) => /no circles in the drawing/.test(n.text)),
     `said why: ${JSON.stringify(cl.notes)}`);
+});
+
+// --- round stock with a bore in it ---
+
+/** A tube standing on the origin plate: ⌀80 outside, `bore` inside, centred at (60, 15). */
+function tubeAround(top, bore) {
+  return {
+    kind: bore > 0 ? 'tube' : 'cylinder', min: [20, -25, 0], max: [100, 55, top],
+    cylinder: { diameter: 80, innerDiameter: bore, height: top, center: [60, 15], baseZ: 0 },
+  };
+}
+
+test('the last ring of a band is one pass, not a string of slivers', () => {
+  // Two concentric polygons — a groove round a boss, round stock round a round
+  // part — meet on a circle, and at the very last hair of the erosion the
+  // offsetter hands back that circle as a speck at every vertex (96 loops of
+  // 0.0002mm² here), not a loop. Each speck was a pass with a descent of its own.
+  const circle = (radius, clockwise, phase = 0) => {
+    const loop = [];
+    for (let i = 0; i < 96; i++) {
+      const a = ((clockwise ? -i : i) / 96) * 2 * Math.PI + phase;
+      loop.push(radius * Math.cos(a), radius * Math.sin(a));
+    }
+    return loop;
+  };
+  for (const [outer, inner] of [[13.7, 5.6], [18.8, 12.5], [25.6, 14.8], [43, 1]]) {
+    const rings = concentricRings([circle(outer, false), circle(inner, true, 0.03)], 3.6, 0.01, 3);
+    const last = rings[rings.length - 1];
+    assert.ok(rings.length >= 2, `${outer}/${inner} is eroded at all`);
+    assert.eq(last.length, 1, `the last ring of ${outer}/${inner} is ${last.length} loops`);
+    assert.ok(loopArea(last[0]) > 0, 'and it is a loop, wound the way a ring is');
+  }
+});
+
+test('a bore in round stock does not double what clearing round it costs', () => {
+  const clear = (bore) => generateToolpath({
+    type: 'clear2d', name: 'rough', tool: TOOL, mesh: makeBox(40, 30, 10),
+    stock: tubeAround(11, bore),
+    params: { topZ: 11, bottomZ: 0, stepdown: 4, stepover: 0.6, stockToLeave: 0,
+              clearanceHeight: 25, entryGap: 1, tolerance: 0.01, rampAngle: 3 },
+  });
+  const solid = toolpathStats(clear(0));
+  const bored = toolpathStats(clear(8));
+  // Measured: 6097 blocks solid, 46301 with the bore, 23175mm of cutting against 10692.
+  assert.ok(bored.cutLength < 1.15 * solid.cutLength,
+    `${bored.cutLength.toFixed(0)}mm of cutting round a bore, ${solid.cutLength.toFixed(0)}mm without`);
+  assert.ok(clear(8).count < 2 * clear(0).count, 'and nowhere near twice the blocks');
+});
+
+test('adaptive clearing round a bore does not spiral back over what it has cut', () => {
+  const adaptive = (bore) => generateToolpath({
+    type: 'adaptive', name: 'rough', tool: TOOL, mesh: makeBox(40, 30, 10),
+    stock: tubeAround(11, bore),
+    params: { topZ: 11, bottomZ: 0, stepdown: 4, stockToLeave: 0, clearanceHeight: 25,
+              entryGap: 1, tolerance: 0.01, rampAngle: 3, engagement: 0.15 },
+  });
+  const solid = toolpathStats(adaptive(0));
+  for (const bore of [8, 16]) {
+    const bored = toolpathStats(adaptive(bore));
+    // A bore takes material away, so it cannot cost more cutting than the billet
+    // without one. Measured before: 21023mm with a ⌀8 bore against 15144 solid —
+    // the bore's own rings were refused ("no cleared space beside them"), and the
+    // metal round it was opened by a seeded spiral across the rings already cut.
+    assert.ok(bored.cutLength <= solid.cutLength,
+      `⌀${bore} bore: ${bored.cutLength.toFixed(0)}mm of cutting against ${solid.cutLength.toFixed(0)} solid`);
+  }
 });

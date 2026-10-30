@@ -715,14 +715,16 @@ export class Document extends EventTarget {
    * before geometry was embedded restores its machining intent and reports how
    * many models still need re-importing.
    *
-   * @returns { models, restored } — how many models the project has, and how
-   *   many of them arrived with their geometry
+   * @returns { models, restored, repairs } — how many models the project has,
+   *   how many of them arrived with their geometry, and what had to be dropped
+   *   or reset to make the file usable (sentences; empty for a clean file)
    */
   loadJSON(json) {
-    const project = deserializeProject(json);
-    const meshes = extractMeshes(project);
+    const repairs = [];
+    const project = deserializeProject(json, repairs);
+    const meshes = extractMeshes(project, repairs);
     for (const [id, mesh] of meshes) meshes.set(id, computeNormals(mesh));
     this.restore(project, meshes);
-    return { models: project.models.length, restored: meshes.size };
+    return { models: project.models.length, restored: meshes.size, repairs };
   }
 }

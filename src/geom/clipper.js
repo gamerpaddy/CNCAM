@@ -11,6 +11,19 @@ const ClipperLib = globalThis.ClipperLib;
 const SCALE = 1e5; // 10 nm integer resolution
 
 /**
+ * The arc tolerance Clipper is given, scaled, with a floor.
+ *
+ * A round join is divided into steps of π / acos(1 − tolerance / delta), so the
+ * count grows without bound as the tolerance goes to nothing: a tolerance of 0
+ * (or 1e-9, or a negative one) made one offset of a 3mm tool radius a hundred
+ * thousand steps per corner, and a contour pass that never finished. A tenth of
+ * a micron is below what any machine or any grid here can tell from none, and
+ * keeps the worst join to a few hundred steps.
+ */
+const MIN_ARC_TOLERANCE = 1e-4;
+const arcStepOf = (tolerance) => Math.max(Number.isFinite(tolerance) ? tolerance : 0, MIN_ARC_TOLERANCE) * SCALE;
+
+/**
  * Two sorted linked lists in the JavaScript port of Clipper, made into a sort
  * and a heap — with exactly the order the lists produced.
  *
@@ -191,7 +204,7 @@ export function unionLoops(loops) {
 export function offsetLoops(loops, delta, arcTolerance = 0.005) {
   const paths = loops.map(toPath).filter((p) => p.length >= 3);
   const normalized = unionPaths(paths);
-  const co = new ClipperLib.ClipperOffset(2, arcTolerance * SCALE);
+  const co = new ClipperLib.ClipperOffset(2, arcStepOf(arcTolerance));
   co.AddPaths(normalized, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
   const solution = new ClipperLib.Paths();
   co.Execute(solution, delta * SCALE);
@@ -211,7 +224,7 @@ export function offsetLoops(loops, delta, arcTolerance = 0.005) {
 export function bufferOpenPaths(paths, halfWidth, arcTolerance = 0.005) {
   const usable = paths.map(toPath).filter((p) => p.length >= 2);
   if (usable.length === 0 || !(halfWidth > 0)) return [];
-  const co = new ClipperLib.ClipperOffset(2, arcTolerance * SCALE);
+  const co = new ClipperLib.ClipperOffset(2, arcStepOf(arcTolerance));
   co.AddPaths(usable, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etOpenRound);
   const solution = new ClipperLib.Paths();
   co.Execute(solution, halfWidth * SCALE);
@@ -260,7 +273,7 @@ export function diffLoops(subjectLoops, clipLoops) {
  * inward offsets of a clearing region, where re-union would be wasted work).
  */
 export function offsetNormalized(loops, delta, arcTolerance = 0.005) {
-  const co = new ClipperLib.ClipperOffset(2, arcTolerance * SCALE);
+  const co = new ClipperLib.ClipperOffset(2, arcStepOf(arcTolerance));
   co.AddPaths(loops.map(toPath).filter((p) => p.length >= 3),
     ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
   const solution = new ClipperLib.Paths();
@@ -354,9 +367,43 @@ export function unionWithHoles(loops) {
   return out;
 }
 
+/** A flat loop [x0, y0, x1, y1, …] run the other way round, as a new array. */
+function reverseLoop(loop) {
+  const out = new Array(loop.length);
+  const n = loop.length / 2;
+  for (let i = 0; i < n; i++) {
+    out[i * 2] = loop[(n - 1 - i) * 2];
+    out[i * 2 + 1] = loop[(n - 1 - i) * 2 + 1];
+  }
+  return out;
+}
+
 /** Just the enclosed voids of a loop set — pockets, in other words. */
 export function enclosedVoids(loops) {
-  return unionWithHoles(loops).flatMap((region) => region.holes);
+  const regions = unionWithHoles(loops);
+  return regions.flatMap((region) => region.holes.flatMap((hole) => {
+    // A void with metal standing in it is not the whole hole. A pocket with an
+    // island in it — a boss left in the middle for a bearing, a post for a
+    // screw — has a hole in the part's shadow that the island sits inside as an
+    // outer of its own, and handing back the hole alone made the pocket cut the
+    // island down to the floor: measured, a 20x16 boss 8mm tall taken off to the
+    // pocket floor by a pocketing pass, which clearing and adaptive leave alone.
+    // What is *inside* is told by area, not by a vertex, so an island that
+    // touches the wall at a point is still inside it.
+    const holeArea = Math.abs(loopArea(hole));
+    const islands = regions.filter((other) => {
+      if (other.outer === region.outer) return false;
+      const size = Math.abs(loopArea(other.outer));
+      if (!(size < holeArea)) return false;
+      const shared = intersectLoops([other.outer], [hole])
+        .reduce((sum, loop) => sum + Math.abs(loopArea(loop)), 0);
+      return shared > size * (1 - 1e-6);
+    });
+    if (islands.length === 0) return [hole];
+    // the hole's own winding is clockwise and its islands counter-clockwise, so
+    // the pocket keeps the convention the plain hole has
+    return diffLoops([hole], islands.map((other) => other.outer)).map(reverseLoop);
+  }));
 }
 
 /**

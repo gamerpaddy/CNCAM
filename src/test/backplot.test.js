@@ -7,7 +7,7 @@ import { simulateRemoval } from '../engine/simulate.js';
 import { buildGcode } from '../post/index.js';
 import { generateToolpath } from '../engine/toolpath.js';
 import { CLBuilder, FEED } from '../engine/cl.js';
-import { makePocketBlock, makeTube } from './fixtures.js';
+import { makePocketBlock, makeTube, makeRevolved } from './fixtures.js';
 
 const TOOL = {
   number: 1, type: 'flat', diameter: 6, fluteLength: 25, shankDiameter: 6,
@@ -221,7 +221,9 @@ test('an arc posted the wrong way round is not the path that went in', () => {
 
 test('and a coordinate quietly moved is caught too', () => {
   const { cl, text } = roundTrip('linuxcnc');
-  const broken = text.replace(/^Y19\.975$/m, 'Y21.975');
+  // Any bare Y line of the cutting will do, whichever ring the pocket starts with:
+  // naming one coordinate broke this every time the pocket's spiral moved.
+  const broken = text.replace(/^Y(-?[\d.]+)$/m, (_, y) => `Y${(Number(y) + 2).toFixed(3)}`);
   assert.ok(broken !== text, 'the fixture line was there to break');
   const { worst } = comparePaths(cl, readGcode(broken).cl);
   assert.ok(worst > 0.5, `the diff notices: ${worst.toFixed(3)}mm`);
@@ -438,6 +440,62 @@ test('and the fault it exists to find still fires on the same program', () => {
     + `against ${r.ops[0].allowed.toFixed(2)}mm allowed`);
 });
 
+test('a level change with a feed of no length in it is not reported as a post bug', () => {
+  // A waterline ends a level with a rapid up, a feed of nothing at the top, and a
+  // rapid down — the post has no line to write for the empty move. The check
+  // starts a "hole" where the feeding starts, and with the empty feed in the CL
+  // and not in the file the two began it at different heights: every level of a
+  // plate with holes in it added the height of its lift, 114mm of "bug" in all.
+  const cl = new CLBuilder();
+  cl.rapid(0, 0, 10);
+  cl.rapid(10, 0, 1);
+  cl.cut(10, 0, -1, FEED.PLUNGE);
+  for (let level = 0; level < 12; level++) {
+    const z = -1 - level * 0.5;
+    cl.cut(0, 10, z);
+    cl.cut(-10, 0, z);
+    cl.cut(0, -10, z);
+    cl.cut(10, 0, z);
+    cl.rapid(10, 0, 3);                  // lift to the link height
+    cl.cut(10, 0, 3, FEED.PLUNGE);       // ... and a feed of no length there
+    cl.rapid(10, 0, z + 0.25);
+    cl.cut(10, 0, z - 0.5, FEED.PLUNGE);
+  }
+  cl.rapid(10, 0, 10);
+  const r = checked(cl.finish(), 'levels', 'linuxcnc', { arcs: false });
+  assert.ok(r.over <= 0, `nothing to say: worst ${r.worst.toFixed(3)}mm, `
+    + `allowed ${r.ops[0].allowed.toFixed(3)}mm`);
+});
+
+test('a link whose two ends are a thousandth apart is still one place', () => {
+  // The same level change, with the rapid across the top computed from the end of
+  // one pass and the start of the next: 1.1 thousandths apart in the path, and
+  // printed to three decimals as two numbers whose difference falls just under a
+  // thousandth. A "same place" tested at exactly a thousandth was one hole in the
+  // file and two runs in the path — taken from a waterline round a boss on a real
+  // plate, where the plate sits 500mm out from the origin.
+  const Y = -516.74371;
+  const cl = new CLBuilder();
+  cl.rapid(0, 0, 10);
+  cl.rapid(-209.68214, Y, 1);
+  cl.cut(-209.68214, Y, -1, FEED.PLUNGE);
+  for (let level = 0; level < 12; level++) {
+    const z = -1 - level * 0.5;
+    cl.cut(-199.68214, Y + 10, z);
+    cl.cut(-189.68214, Y, z);
+    cl.cut(-199.68214, Y - 10, z);
+    cl.cut(-209.68214, Y, z);
+    cl.rapid(-209.68214, Y, 3);
+    cl.rapid(-209.68217, Y - 0.0011, 3);   // across the top, 1.1 thousandths
+    cl.rapid(-209.68217, Y - 0.0011, z + 0.25);
+    cl.cut(-209.68217, Y - 0.0011, z - 0.5, FEED.PLUNGE);
+  }
+  cl.rapid(-209.68214, Y, 10);
+  const r = checked(cl.finish(), 'levels', 'linuxcnc', { arcs: false });
+  assert.ok(r.over <= 0, `nothing to say: worst ${r.worst.toFixed(3)}mm, `
+    + `allowed ${r.ops[0].allowed.toFixed(3)}mm`);
+});
+
 /** A real drilling pass, pecked - the operation both posts spell differently. */
 function peckedHole() {
   return generateToolpath({
@@ -491,8 +549,10 @@ function tappedHole() {
       ...TOOL, type: 'tap', diameter: 6, pitch: 1, leadThreads: 2, flutes: 3,
       spindleRpm: 350, feedCut: 350, feedPlunge: 350,
     },
-    mesh: makeTube(20, 20, 18, 2.5, 20),
-    stock: { kind: 'box', min: [0, 0, 0], max: [40, 40, 20] },
+    // a blind hole: a through one is tapped past its underside, which is not the
+    // depth this fixture is about
+    mesh: makeRevolved([[0, 1], [2.5, 1], [2.5, 20], [18, 20], [18, 0], [0, 0]], 24),
+    stock: { kind: 'box', min: [-20, -20, 0], max: [20, 20, 20] },
     params: {
       topZ: 20, bottomZ: -1, clearanceHeight: 30, tolerance: 0.01,
       diameterTol: 0.5, entryGap: 1,
@@ -529,8 +589,8 @@ test('but a tap taken to the wrong depth is still caught, however it is spelled'
   for (const post of ['linuxcnc', 'grbl']) {
     const ops = [{ name: 'tap', cl }];
     const { text, lineMap } = buildGcode(post, ops);
-    // the tap bottoms at Z1 — a 2-thread lead stops it 2mm short of Z−1
-    const shallow = text.replace(/Z1\b/g, 'Z6');
+    // the tap bottoms at Z3 — a 2-thread lead stops it 2mm short of the floor at Z1
+    const shallow = text.replace(/Z3\b/g, 'Z8');
     assert.ok(shallow !== text, `${post}: the depth was there to break`);
     const r = checkPost({ ops, text: shallow, lineMap, fitTolerance: 0.01 });
     assert.ok(r.over > 0, `${post}: five millimetres short is a fault, not noise`);
@@ -701,4 +761,18 @@ test('a program that drives the holder into the wall of a pocket is reported, fr
     stock: { ...stock, max: [60, 60, 30] }, ops: [{ cl: r.cl, tool: tall }],
   });
   assert.eq(bodyCutFinding(clean), null, 'a shallower slot has nothing to report');
+});
+
+test('an arc whose centre is a million kilometres away does not ask for millions of chords', () => {
+  // The chord count is the sweep over a step that shrinks with the radius. An I
+  // of 1e12 (a hand-typed word, a mangled number) asked for sixty million of
+  // them and hung the tab reading a file.
+  const started = Date.now();
+  const parsed = parseGcode('G0 X0 Y0\nG2 X10 Y0 I0 J1000000000000 F100\n');
+  assert.ok(Date.now() - started < 3000, 'it came back');
+  assert.ok(parsed.points.length > 10 && parsed.points.length <= 20001,
+    `${parsed.points.length} points, bounded`);
+  assert.ok(parsed.points.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y)), 'all real');
+  const last = parsed.points[parsed.points.length - 1];
+  assert.close(last.x, 10, 1e-9, 'and it still lands where the block said');
 });

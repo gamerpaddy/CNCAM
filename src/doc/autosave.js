@@ -35,35 +35,48 @@ const MESH_BUDGET = 3_000_000;   // characters of base64; keeps us inside quota
  * that has been running this app since before the store existed comes back with
  * what it had — and then, on its first save, moves to the store for good.
  *
- * @returns { project, meshes } — meshes as a Map of modelId → mesh, without
- *   normals; the caller computes those.
+ * @returns { project, meshes, repairs } — meshes as a Map of modelId → mesh,
+ *   without normals; the caller computes those. `repairs` is what had to be
+ *   dropped or reset to make the saved file usable (see doc/repair.js). A
+ *   session that cannot be read at all comes back as `{ unreadable }` — the
+ *   reason, for the caller to say — rather than as nothing: an autosave that
+ *   vanished without a word is a job lost without a word.
  */
 export async function loadSaved() {
   if (storeAvailable()) {
     try {
       const json = await loadSession();
       if (json) {
-        const project = deserializeProject(json);
-        return { project, meshes: extractMeshes(project) };
+        const repairs = [];
+        const project = deserializeProject(json, repairs);
+        return { project, meshes: extractMeshes(project, repairs), repairs };
       }
     } catch (err) {
-      console.warn('discarding unreadable autosave', err);
-      await clearSession();
-      return null;
+      console.warn('unreadable autosave', err);
+      // A session written by a newer build is not damaged, only ahead of this
+      // one: left where it is, so going back to that build brings it back.
+      if (!/this build reads up to/.test(err.message)) await clearSession();
+      return { unreadable: err.message };
     }
   }
   return loadLegacy();
 }
 
 function loadLegacy() {
+  // no storage to read (blocked by the browser, or none at all) is not a
+  // session that was damaged
+  let json = null;
+  try { json = localStorage.getItem(PROJECT_KEY); } catch { return null; }
+  if (!json) return null;
   try {
-    const json = localStorage.getItem(PROJECT_KEY);
-    if (!json) return null;
-    return { project: deserializeProject(json), meshes: loadLegacyMeshes() };
+    const repairs = [];
+    return { project: deserializeProject(json, repairs), meshes: loadLegacyMeshes(), repairs };
   } catch (err) {
-    console.warn('discarding unreadable autosave', err);
-    clearSaved();
-    return null;
+    console.warn('unreadable autosave', err);
+    if (!/this build reads up to/.test(err.message)) {
+      try { clearSaved(); } catch { /* nothing to clear it from */ }
+    }
+    return { unreadable: err.message };
   }
 }
 

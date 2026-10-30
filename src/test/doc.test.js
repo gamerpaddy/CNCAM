@@ -306,3 +306,130 @@ test('a project remembers which machine it was left on', () => {
   assert.eq(legacy.machine, 'mill');
   assert.ok(legacy.setups.every((s) => s.mode === 'mill'), 'and all its setups are milling setups');
 });
+
+// --- a project file is not ours to trust ---
+
+/** A saved project with one of everything, as the text a file would hold. */
+function fullProject() {
+  const doc = new Document();
+  const tool = createTool('flat');
+  doc.addTool(tool);
+  const setup = createSetup('Setup 1');
+  doc.addSetup(setup);
+  const op = createOperation('contour2d');
+  op.toolId = tool.id;
+  doc.addOperation(setup, op);
+  return JSON.parse(serializeProject(doc.project));
+}
+
+test('a project whose lists are not lists, or hold things that are not records, still opens', () => {
+  // Each of these used to fail with a raw TypeError ("Cannot read properties of
+  // null (reading 'regions')") — or, worse, load and take the tree or Generate
+  // down afterwards, and then be restored by the autosave on every reload.
+  const damage = [
+    (p) => { p.setups[0].operations[0] = null; },
+    (p) => { p.setups[0].operations = 'x'; },
+    (p) => { p.setups[0].operations.push(7, 'a'); },
+    (p) => { p.setups[0].fixtures = 3; },
+    (p) => { p.setups[0].modelIds = 'abc'; },
+    (p) => { p.setups[0] = 'x'; },
+    (p) => { p.setups = null; },
+    (p) => { p.tools[0] = null; },
+    (p) => { p.tools = {}; },
+    (p) => { p.models = 5; },
+    (p) => { p.drawings = 'x'; },
+    (p) => { p.machines = [null, 3]; },
+    (p) => { p.setups[0].operations[0].regions.include = [null]; },
+    (p) => { p.setups[0].operations[0].regions = 4; },
+    (p) => { p.setups[0].orientation.rotationDeg = 7; },
+    (p) => { p.setups[0].stock.margin = 'x'; },
+  ];
+  for (const [i, hurt] of damage.entries()) {
+    const p = fullProject();
+    hurt(p);
+    const doc = new Document();
+    const { repairs } = doc.loadJSON(JSON.stringify(p));
+    assert.ok(Array.isArray(repairs), `case ${i}: the repairs are reported`);
+    for (const s of doc.project.setups) {
+      assert.ok(Array.isArray(s.operations) && Array.isArray(s.fixtures) && Array.isArray(s.modelIds),
+        `case ${i}: a setup's lists are lists`);
+      assert.ok(s.operations.every((o) => o.params && o.regions && Array.isArray(o.regions.include)),
+        `case ${i}: every operation has its settings and picks`);
+    }
+    // and everything that reads a loaded project afterwards runs
+    doc.setups(); doc.activeSetup(); doc.strandedJob(); doc.machineRecord(); doc.postId();
+  }
+});
+
+test('a number that went missing in a file is reset to the default, and said', () => {
+  // JSON writes NaN as null: a tool with a null diameter, an operation with a
+  // null stepdown. Both loaded, and both put NaN into everything downstream.
+  const p = fullProject();
+  p.tools[0].diameter = null;
+  p.setups[0].operations[0].params.stepdown = 'deep';
+  p.setups[0].operations[0].params.feedCut = 'fast';
+  const doc = new Document();
+  const { repairs } = doc.loadJSON(JSON.stringify(p));
+  assert.eq(doc.project.tools[0].diameter, 6, 'the default cutter width');
+  const op = doc.project.setups[0].operations[0];
+  assert.eq(op.params.stepdown, 2, 'the default stepdown');
+  assert.eq(op.params.feedCut, null, 'a feed that is no number goes back to inheriting the tool\'s');
+  const said = repairs.join(' | ');
+  assert.ok(/diameter/.test(said) && /stepdown/.test(said) && /feedCut/.test(said),
+    `each change is named: ${said}`);
+});
+
+test('ids are strings and unique after loading, and an unknown operation type is dropped', () => {
+  const p = fullProject();
+  const twin = JSON.parse(JSON.stringify(p.setups[0].operations[0]));
+  p.setups[0].operations.push(twin);                          // the same id twice
+  p.setups[0].operations.push({ ...twin, id: 'ok', type: 'laser' });
+  p.tools[0].id = 12;
+  const doc = new Document();
+  const { repairs } = doc.loadJSON(JSON.stringify(p));
+  const ops = doc.project.setups[0].operations;
+  assert.eq(ops.length, 2, 'the unknown type is dropped, the twin kept');
+  assert.ok(ops[0].id !== ops[1].id, 'and given an id of its own');
+  assert.eq(typeof doc.project.tools[0].id, 'string');
+  assert.ok(repairs.some((r) => /laser/.test(r)), 'the dropped operation is named');
+});
+
+test('a file that is not a project is refused in words, not with a TypeError', () => {
+  for (const [text, fragment] of [
+    ['not json at all', /not valid JSON/],
+    ['null', /not a project/],
+    ['[1,2]', /not a project/],
+    ['{"name":"x"}', /does not look like a CNCAM project/],
+    ['{"version":"x"}', /does not look like a CNCAM project/],
+    ['{"version":999}', /Unsupported project version: 999/],
+  ]) {
+    let message = '';
+    try { deserializeProject(text); } catch (err) { message = err.message; }
+    assert.ok(fragment.test(message), `${text}: "${message}"`);
+  }
+});
+
+test('saved geometry that cannot be a mesh is dropped with a reason, the project kept', () => {
+  const doc = new Document();
+  const model = createModel('part', 'part.stl');
+  doc.addModel(model, {
+    positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+    indices: new Uint32Array([0, 1, 2]),
+  });
+  const p = JSON.parse(doc.toJSON());
+  // a triangle naming a vertex that is not there
+  const bad = JSON.parse(JSON.stringify(p));
+  // btoa, not Buffer: this file runs in the browser's test page as well as in node
+  bad.models[0].geometry.indices = btoa(String.fromCharCode(...new Uint8Array(new Uint32Array([0, 1, 9]).buffer)));
+  let loaded = new Document().loadJSON(JSON.stringify(bad));
+  assert.eq(loaded.restored, 0, 'no geometry came back');
+  assert.ok(loaded.repairs.some((r) => /damaged/.test(r)), 'and it says why');
+  // base64 that is not base64
+  const garbage = JSON.parse(JSON.stringify(p));
+  garbage.models[0].geometry.positions = '!!!';
+  loaded = new Document().loadJSON(JSON.stringify(garbage));
+  assert.eq(loaded.models, 1, 'the model is still in the project');
+  assert.ok(loaded.repairs.some((r) => /decoded/.test(r)), 'with the reason');
+  // and the good one is untouched
+  assert.eq(new Document().loadJSON(JSON.stringify(p)).restored, 1);
+});

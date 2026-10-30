@@ -21,7 +21,7 @@
 // more than the stepover asked for and the two families meet in the middle
 // instead of overlapping by whatever was left over.
 
-import { offsetNormalized, loopArea } from '../geom/clipper.js';
+import { offsetNormalized, loopArea, unionWithHoles } from '../geom/clipper.js';
 import { pointInLoops, distanceToLoops } from '../geom/inside.js';
 import { rampSlopeFor } from './linking.js';
 
@@ -39,17 +39,39 @@ const DEPTH_STEPS = 6;
  * band is wherever the part happens to be furthest from the stock.
  */
 function medialDepth(loops, step, tolerance) {
+  const leaves = (d) => leavesBand(offsetNormalized(loops, -d, tolerance));
   let lo = 0;                       // known to leave something
   let hi = step;
-  while (hi < step * MAX_RINGS && offsetNormalized(loops, -hi, tolerance).length > 0) {
+  while (hi < step * MAX_RINGS && leaves(hi)) {
     lo = hi;
     hi *= 2;
   }
   for (let i = 0; i < DEPTH_STEPS; i++) {
     const mid = (lo + hi) / 2;
-    if (offsetNormalized(loops, -mid, tolerance).length > 0) lo = mid; else hi = mid;
+    if (leaves(mid)) lo = mid; else hi = mid;
   }
   return lo;
+}
+
+/**
+ * The narrowest ring worth calling a ring, in mm.
+ *
+ * Eroding a band of even width — a groove round a boss, round stock round a
+ * round part — to its very last hair does not give a thin loop, it gives
+ * whatever the two polygons that draw the band's edges happen to leave: ninety
+ * -six separate specks, one at each vertex, measured at 0.0002mm² each. A ring
+ * that narrow is not a path anybody can cut; one a tenth of a millimetre wide is
+ * a loop like any other, and the cutter's width swallows the difference.
+ */
+const MIN_BAND = 0.1;
+
+/** Is there a ring here at least `MIN_BAND` wide, taking the loops together? */
+function leavesBand(ring) {
+  if (ring.length === 0) return false;
+  let area = 0;
+  let edge = 0;
+  for (const loop of ring) { area += loopArea(loop); edge += perimeterOf(loop); }
+  return edge > 0 && (2 * area) / edge >= MIN_BAND;
 }
 
 /**
@@ -80,9 +102,35 @@ export function concentricRings(loops, step, tolerance, radius = 0) {
     // rather than an area, so an empty answer there is the shape running out
     // and not an error.
     if (ring.length === 0) break;
-    rings.push(ring);
+    rings.push(k === n ? medialRing(ring, tolerance) : ring);
   }
   return rings;
+}
+
+/**
+ * The ring on the medial axis, as the one pass it is.
+ *
+ * Where the region is a band of even width — a groove round a boss, a billet
+ * round a round part, a tube round its bore — the two families of rings meet on
+ * a *circle*, and the offsetter hands back that ring as an annulus: two loops,
+ * the one the outside family made and the one the inside family made, a
+ * fraction of a millimetre apart. Cut as they are they are the same pass twice.
+ * So a ring that has come out as a band is cut once, down its middle — half its
+ * width in from its outer edge.
+ */
+function medialRing(ring, tolerance) {
+  if (ring.every((loop) => loopArea(loop) > 0)) return ring;
+  const out = [];
+  for (const piece of unionWithHoles(ring)) {
+    if (piece.holes.length === 0) { out.push(piece.outer); continue; }
+    let area = Math.abs(loopArea(piece.outer));
+    let edge = perimeterOf(piece.outer);
+    for (const hole of piece.holes) { area -= Math.abs(loopArea(hole)); edge += perimeterOf(hole); }
+    const width = (2 * area) / edge;
+    const middle = width > 0 ? offsetNormalized([piece.outer], -width / 2, tolerance) : [];
+    out.push(...(middle.length > 0 ? middle : [piece.outer, ...piece.holes]));
+  }
+  return out;
 }
 
 /**

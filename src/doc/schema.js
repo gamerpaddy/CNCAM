@@ -5,6 +5,7 @@
 import { createStock } from '../engine/stock.js';
 import { encodeMesh, decodeMesh } from './mesh-codec.js';
 import { defaultMachines, MACHINE_KINDS } from './machines.js';
+import { repairProject } from './repair.js';
 
 // v3 → v4: the project carries machines, not just a post id. A post is how a
 // move is spelled; a machine is how far the table goes, how fast a rapid
@@ -499,22 +500,62 @@ export function serializeProject(project, meshes = null) {
  *
  * @returns Map of modelId → mesh (without normals; the caller computes those)
  */
-export function extractMeshes(project) {
+export function extractMeshes(project, notes = []) {
   const meshes = new Map();
   for (const model of project.models ?? []) {
     if (!model.geometry) continue;
-    const mesh = decodeMesh(model.geometry);
+    let mesh = null;
+    try {
+      mesh = decodeMesh(model.geometry);
+    } catch (err) {
+      notes.push(`model ${model.name}: its saved geometry could not be decoded (${err.message}) — re-import it`);
+    }
     delete model.geometry;
+    // geometry is read by index, so numbers that cannot be a mesh are not kept:
+    // a triangle naming a vertex that is not there is NaN in every bound, and
+    // from there a stock with no size
+    const problem = mesh && meshProblem(mesh);
+    if (problem) {
+      notes.push(`model ${model.name}: its saved geometry is damaged (${problem}) — re-import it`);
+      mesh = null;
+    }
     if (mesh) meshes.set(model.id, mesh);
   }
   return meshes;
 }
 
-export function deserializeProject(json) {
-  const p = JSON.parse(json);
-  if (typeof p.version !== 'number' || p.version > PROJECT_VERSION) {
-    throw new Error(`Unsupported project version: ${p.version}`);
+/** Why a decoded mesh cannot be one, or null. */
+function meshProblem(mesh) {
+  const { positions, indices } = mesh;
+  if (positions.length === 0 || indices.length === 0) return 'it holds no triangles';
+  if (positions.length % 3 !== 0 || indices.length % 3 !== 0) return 'its lengths are not whole vertices and triangles';
+  for (let i = 0; i < positions.length; i++) if (!Number.isFinite(positions[i])) return 'a coordinate is not a number';
+  const count = positions.length / 3;
+  for (let i = 0; i < indices.length; i++) if (indices[i] >= count) return 'a triangle names a vertex that is not there';
+  return null;
+}
+
+/**
+ * @param json the file's text
+ * @param notes optional list that collects what had to be repaired to make the
+ *   file usable — see doc/repair.js. The caller says it to the user.
+ */
+export function deserializeProject(json, notes = []) {
+  let p;
+  try {
+    p = JSON.parse(json);
+  } catch (err) {
+    throw new Error(`this is not a CNCAM project — it is not valid JSON (${err.message})`);
   }
+  if (!p || typeof p !== 'object' || Array.isArray(p)) {
+    throw new Error('this is not a CNCAM project — the file is not a project record');
+  }
+  if (typeof p.version !== 'number' || !(p.version >= 1) || p.version > PROJECT_VERSION) {
+    throw new Error(typeof p.version === 'number' && p.version > PROJECT_VERSION
+      ? `Unsupported project version: ${p.version} — this build reads up to ${PROJECT_VERSION}`
+      : `Unsupported project version: ${p.version} — this does not look like a CNCAM project`);
+  }
+  repairProject(p, notes);
   p.machine ??= 'mill';
   p.post ??= 'linuxcnc';
   p.postOptions = { ...createPostOptions(), ...(p.postOptions ?? {}) };

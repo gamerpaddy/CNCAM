@@ -45,6 +45,7 @@ You have been warned. With that out of the way:
 
 ## Contents
 
+* [A look at it](#a-look-at-it)
 * [What it does](#what-it-does)
   * [Getting a part in](#getting-a-part-in)
   * [Milling operations](#milling-operations)
@@ -57,6 +58,24 @@ You have been warned. With that out of the way:
   * [Tests](#tests)
 * [Licence](#licence)
 * [More detail](#more-detail)
+
+## A look at it
+
+A milling job on a sample part: face, adaptive rough with a 12mm flat, parallel
+finish with a 6mm ball. Left, the toolpaths over the model; right, the same
+program run through the simulation and measured against the part (green is the
+part, blue is metal still standing on it).
+
+| Toolpaths | Simulation checked against the model |
+|---|---|
+| ![Milling toolpaths over the model](docs/img/mill-toolpaths.png) | ![The milled part, coloured by deviation from the model](docs/img/mill-simulation.png) |
+
+And a lathe job: face the end, rough turn, finish turn with a nose-compensated
+insert, drawn with the insert and holder, and the bar as it comes out.
+
+| Toolpaths | Simulation |
+|---|---|
+| ![Turning toolpaths on the shaft](docs/img/lathe-toolpaths.png) | ![The turned shaft with the finishing insert](docs/img/lathe-simulation.png) |
 
 ## What it does
 
@@ -176,6 +195,20 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
 * And it checks its own posts the same way. Every time a program is written the
   file is read straight back and compared with the path it was printed from, so
   a flipped G2/G3 or a lost modal word is a warning rather than a scrapped part.
+* **Bad input is told, not thrown.** A truncated or garbage STL, a DXF with a
+  circle at 1e300, an OBJ with indices that point nowhere, a project file with a
+  missing field, a number typed as `1e999` or a tool library with a hole in it
+  are each named in the status line rather than breaking the page. A project
+  that has to be repaired on the way in says what it dropped and what it reset.
+  Settings are held to the range their field allows, and an operation told to do
+  something it cannot (a cutter wider than the part, a stock a hundred metres
+  long, a peck of a billionth of a millimetre) says so and does a bounded
+  version of it instead of hanging. A long **Generate** has a **Stop** button
+  that cancels what the workers are still computing.
+* **Holes are visited in a short route.** Drill, spot, tap, thread mill and bore
+  walk their holes by nearest neighbour with a 2-opt pass on top, starting where
+  the old raster started, so a plate of scattered holes no longer sends the head
+  back and forth across it.
 * Projects save to a file, and the browser keeps a drawer of them for you —
   **File → Projects in this browser** — where every save is a new version, nothing is overwritten, and
   any version can be opened or downloaded as a .cncam file. The session autosaves
@@ -272,7 +305,9 @@ git config core.hooksPath .githooks
 
 ### Tests
 
-There are around 770 of them.
+There are around 920 of them, among them a robustness suite that feeds the
+importers, the project loader, the G-code reader and every strategy input they
+were never meant to receive.
 
 ```bash
 node src/test/node-run.js

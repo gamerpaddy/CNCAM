@@ -39,7 +39,10 @@ export function parseNumber(text) {
   if (typeof text === 'number') return text;
   const cleaned = String(text ?? '').trim().replace(/\s+/g, '').replace(',', '.');
   if (cleaned === '' || !/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(cleaned)) return NaN;
-  return Number(cleaned);
+  // "1e999" is spelled like a number and is not one: Infinity went into a
+  // spindle speed and came out of the post as `M3 SInfinity`.
+  const value = Number(cleaned);
+  return Number.isFinite(value) ? value : NaN;
 }
 
 /** How a number is shown in a field: full stop, and no float noise. */

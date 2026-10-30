@@ -27,9 +27,19 @@ export function effectiveCutting(op, tool) {
   };
 }
 
+/**
+ * The override when it is a usable number, else the tool's own — and when that
+ * is not usable either, zero, which the post already names ("no cutting feed").
+ * A tool read from an old file or typed past the field's checks can hold NaN,
+ * a negative or text, and passed through they came out as `FNaN` and `F-1`.
+ * Under one is no more usable: the post writes a speed in whole turns, so 0.4
+ * rpm went out as `S0`, and a feed of 1e-9 as the `F0` a control refuses, on a
+ * program estimated at seventy-five billion hours.
+ */
 function numberOr(override, fallback) {
-  return typeof override === 'number' && Number.isFinite(override) && override > 0
-    ? override : fallback;
+  const usable = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 1;
+  if (usable(override)) return override;
+  return usable(fallback) ? fallback : 0;
 }
 
 /**

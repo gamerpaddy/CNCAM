@@ -630,6 +630,15 @@ export function buildLayout(root, actions, project) {
   // said a word. The last few are kept, a click away.
   const statusText = el('span', { class: 'status-text' }, ['Ready']);
   const busy = el('span', { class: 'busy' });
+  // The way out of a job that does not come back — see actions.stopJobs. Beside
+  // the status line rather than in it, so it is not a click on the message log.
+  const stopButton = el('button', {
+    type: 'button',
+    class: 'busy-stop',
+    title: 'Stop the running job',
+    hidden: true,
+    onclick: () => actions.stopJobs?.(),
+  }, ['Stop']);
   const log = [];
   const statusMessage = el('button', {
     type: 'button',
@@ -645,7 +654,7 @@ export function buildLayout(root, actions, project) {
       : [{ label: 'No messages yet', disabled: true }]),
   }, [busy, statusText]);
   const summary = el('span', { class: 'status-summary' }, []);
-  const status = el('div', { class: 'status' }, [statusMessage, summary]);
+  const status = el('div', { class: 'status' }, [statusMessage, stopButton, summary]);
 
   const timeline = buildTimeline(
     (step, seconds) => actions.seekSimulation(step, seconds),
@@ -808,6 +817,7 @@ export function buildLayout(root, actions, project) {
      */
     setBusy(on) {
       busy.classList.toggle('on', !!on);
+      stopButton.hidden = !on;
       // the buttons that would start another job stand down while one runs
       generateButton.disabled = !!on;
       simulateButton.disabled = !!on;

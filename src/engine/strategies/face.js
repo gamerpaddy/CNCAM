@@ -17,6 +17,7 @@ import { applyRegionsToArea, regionsActive } from '../regions.js';
 import { applyCutting } from '../cutting.js';
 import { approach, entryPlane, crossingPlane, goHome } from '../heights.js';
 import { radiusAt } from '../tool-geometry.js';
+import { segmentInLoops } from '../../geom/inside.js';
 
 export function generateFace({
   stock, tool, params, regions, fixtures,
@@ -198,7 +199,14 @@ export function generateFace({
       for (const span of spans) {
         const from = [span[0], span[1]];
         const to = [span[span.length - 2], span[span.length - 1]];
-        const contiguous = started && !oneWay && spans.length === 1;
+        // Stepping over to the next row is a straight cut from where the last one
+        // ended, and it is only "still off the material" while that line stays in
+        // the region. Beside a clamp it does not: the rows that cross the clamp
+        // are cut short at its keep-out, the rows either side run on to the edge
+        // of the billet, and the step between the two ends cuts across the
+        // clamp's corner. Measured, ⌀6 flat beside a 10x30 jaw: 1.5mm into it.
+        const contiguous = started && !oneWay && spans.length === 1
+          && (!shaped || segmentInLoops(clipArea, ...lastXY(cl), from[0], from[1], tolerance));
         if (!started) {
           approach(cl, from[0], from[1], z, { clearance, feedPlane });
           started = true;

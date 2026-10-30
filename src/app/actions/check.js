@@ -149,7 +149,11 @@ export function makeCheckActions(ctx, space) {
     // eslint-disable-next-line no-param-reassign
     file ??= await openFile(ACCEPT.gcode);
     if (!file) return;
-    const text = file.text ?? new TextDecoder().decode(file.buffer);
+    // One line break, whichever the file was written with: a program saved with
+    // bare carriage returns (an old Mac editor, some conversational controls) is
+    // one line of text to everything below that splits on \n — one block read,
+    // the rest of the file silently not there, and the panel showing a single row.
+    const text = (file.text ?? new TextDecoder().decode(file.buffer)).replace(/\r\n?/g, '\n');
 
     ctx.ui.setStatus(`Reading ${file.name}…`);
     let read;

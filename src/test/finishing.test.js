@@ -878,3 +878,52 @@ test('a one-way raster does not cut its way back across the part', () => {
   assert.eq(longCuts(run('oneway')), 0, 'the return is a link, not a cut');
   assert.eq(longCuts(run('zigzag')), 0, 'and a zig-zag never had one');
 });
+
+test('a milling pass with no model in the project says so instead of throwing', () => {
+  // The app asks for a model before it generates (op-status.js), but a project
+  // edited by hand, or a model removed after the pass was made, still reaches the
+  // strategy — and every one of them read `mesh.positions` of null.
+  const stock = { kind: 'box', min: [0, 0, 0], max: [40, 40, 10] };
+  const params = {
+    topZ: 10, bottomZ: 0, clearanceHeight: 20, stepover: 2, stepdown: 2, tolerance: 0.02, entryGap: 1,
+  };
+  for (const type of ['contour2d', 'pocket', 'clear2d', 'adaptive', 'bore', 'chamfer',
+    'parallel3d', 'waterline', 'slot', 'engrave', 'drill']) {
+    const tool = type === 'chamfer' ? { ...TOOL, tipAngle: 90 } : type === 'drill' ? { ...TOOL, type: 'drill' } : BALL;
+    const cl = generateToolpath({ type, name: type, tool, mesh: null, stock, params });
+    assert.eq(cl.count, 0, `${type} writes no moves`);
+    assert.ok((cl.notes ?? []).some((n) => n.level === 'warn' && /model/.test(n.text)),
+      `${type} says there is no model`);
+  }
+});
+
+test('waterline with a cone-shaped cutter stands off a wall by what the cone is, not by its tip', () => {
+  // A 90° chamfer mill is two points on its profile, the tip and the shoulder,
+  // and the radius it has by a height was read off the points at or below it —
+  // so it was a needle for every band but the last, and the passes in the top
+  // 5mm of a ten-millimetre block ran along the wall with the cone half inside
+  // it. Measured: 135779 cells of the finished block cut away, 4.94mm deep.
+  const mesh = makeBox(30, 30, 10);
+  const stock = { kind: 'box', min: [-4, -4, 0], max: [34, 34, 12] };
+  const CHAMFER = { ...TOOL, type: 'chamfer', diameter: 10, tipAngle: 90 };
+  const steps = profileSteps(CHAMFER, 1);
+  assert.close(steps[0].radius, 1, 1e-6, 'one millimetre up a 45° cone it is one millimetre wide');
+  assert.close(steps[3].radius, 4, 1e-6, 'four up, four wide');
+  const cl = generateToolpath({
+    type: 'waterline', name: 'w', tool: CHAMFER, mesh, stock,
+    params: {
+      topZ: 12, bottomZ: 0, stepdown: 1, stockToLeave: 0, tolerance: 0.01,
+      clearanceHeight: 22, entryGap: 1, direction: 'climb', leadType: 'none',
+    },
+  });
+  // at tip height z the cone is z' - z wide z' above it: at the block's top
+  // (Z10) it is 10 - z across, to the full 5, and the tip has to be at least
+  // that far outside the block
+  let worst = Infinity;
+  eachMove(cl, (op, x, y, z, i, j, k, feed) => {
+    if (op !== OP.LINE || feed === FEED.RAPID || z >= 10 - 1e-6) return;
+    const outside = Math.hypot(Math.max(-x, x - 30, 0), Math.max(-y, y - 30, 0));
+    worst = Math.min(worst, outside - Math.min(5, 10 - z));
+  });
+  assert.ok(worst > -0.05, `the cone is ${(-worst).toFixed(2)}mm into the block at its worst`);
+});

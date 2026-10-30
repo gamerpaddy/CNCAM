@@ -70,6 +70,27 @@ const PROBES = 12;
  */
 const DEFAULT_RESOLUTION = 0.1;
 
+/**
+ * Is this front the first one round a bore in the stock — a tube's own hole?
+ *
+ * That ring is the one pass that has air on its inside by construction, and no
+ * reading of the raster can be trusted to say so. The material mask is dilated
+ * by a cell, which narrows a round bore by a cell all the way round, and round
+ * a hole a few cutter radii across the disc then reads 0.16–0.22 of itself over
+ * metal against the 0.14 a straight wall at the same bite gives. Every ring of
+ * the bore failed "has cleared space beside it", the whole family was refused,
+ * and the material round the bore was opened from the inside by a seeded spiral
+ * that circled back over the rings the outside peel had already cut: measured
+ * on a ⌀80 tube with a ⌀16 bore, 3500mm of the 8300mm a level cut was air —
+ * 0.5mm of feed per 1mm of cutting, where the same billet solid is 0.1.
+ *
+ * It is told by its winding: material lies inside a front the peel marches in
+ * from the stock edge, so a front wound the other way is round a hole.
+ */
+function openedByBore(loop, hole) {
+  return !hole && loopArea(loop) < 0;
+}
+
 /** Tuple comparison, first difference wins. */
 function lexLess(a, b) {
   for (let i = 0; i < a.length; i++) {
@@ -147,6 +168,15 @@ export function generateAdaptive({
   const stockPlane = crossingPlane(params, stock, fixtures);
 
   const outer = stockOutline(stock, r);
+  // Where the tool may go with the part left out of it: the billet less the
+  // keep-outs, which are a clamp's footprint and any face picked to avoid. The
+  // part's own allowance is a wall of stock a link may stray into by a tenth of
+  // a millimetre or three (see linkSlack), and a clamp is not stock — a link
+  // that strays into one is the tool in the jaw. Null when there is nothing to
+  // keep out of.
+  const firm = (regions?.avoid ?? []).length > 0
+    ? applyRegionsToArea(outer, { include: [], avoid: regions.avoid }, { radius: r, tolerance })
+    : null;
   const bounds = loopsBounds(outer);
   const spread = Math.hypot(bounds.max[0] - bounds.min[0], bounds.max[1] - bounds.min[1]);
   const silhouette = new SilhouetteStack(mesh, { tolerance });
@@ -222,7 +252,7 @@ export function generateAdaptive({
       cl, map, z, zEntry, clearance, rampAngle, bite, tolerance, standing, stockHere,
       feedPlane: entryPlane(params, zEntry, z),
       stockPlane,
-      direction, allowed, report, minSegment,
+      direction, allowed, firm, report, minSegment,
       // how far a link may stray outside `allowed` and still not reach the
       // part: the allowance, less the tolerance — see canStayDown.
       //
@@ -557,7 +587,8 @@ class LevelCutter {
             const span = this.thin(path);
             if (span.length >= 2) {
               pool.push({
-                span, ring, opener: openWith && ring === 0, entry: ring < entryRings,
+                span, ring, opener: ring === 0 && (openWith || openedByBore(loop, hole)),
+                entry: ring < entryRings,
               });
             }
           }
@@ -1029,7 +1060,8 @@ class LevelCutter {
     // line reaches the *part*. Straying into the allowance is what the cell of
     // slack always allowed, and refusing that too cost a fifth more cutting on
     // parts that were never touched.
-    return segmentInLoops(this.allowed, from[0], from[1], to[0], to[1], this.linkSlack);
+    return segmentInLoops(this.allowed, from[0], from[1], to[0], to[1], this.linkSlack)
+      && (!this.firm || segmentInLoops(this.firm, from[0], from[1], to[0], to[1], this.tolerance));
   }
 
   finish() {

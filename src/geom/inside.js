@@ -117,6 +117,12 @@ export function segmentInLoops(loops, ax, ay, bx, by, eps = 1e-6) {
   const maxX = Math.max(ax, bx) + eps;
   const minY = Math.min(ay, by) - eps;
   const maxY = Math.max(ay, by) + eps;
+  // Where the segment passes through a vertex of the boundary, as a fraction of
+  // its length. Going through a vertex is no crossing by the test below — both
+  // edges at it only touch — but it is where a segment gets to the *other side*
+  // of a boundary without crossing an edge, so each stretch between two of them
+  // is judged on its own.
+  const touches = [];
   for (const loop of loops) {
     const n = loop.length / 2;
     for (let i = 0, k = n - 1; i < n; k = i++) {
@@ -131,6 +137,10 @@ export function segmentInLoops(loops, ax, ay, bx, by, eps = 1e-6) {
       // `eps` each, so an end lying on the boundary is not a crossing.
       const p = (sx * (py - ay) - sy * (px - ax)) / sLen;
       const q = (sx * (qy - ay) - sy * (qx - ax)) / sLen;
+      if (p >= -eps && p <= eps) {
+        const along = ((px - ax) * sx + (py - ay) * sy) / (sLen * sLen);
+        if (along > 1e-6 && along < 1 - 1e-6) touches.push(along);
+      }
       if (!((p > eps && q < -eps) || (p < -eps && q > eps))) continue;
       const ex = qx - px;
       const ey = qy - py;
@@ -140,9 +150,24 @@ export function segmentInLoops(loops, ax, ay, bx, by, eps = 1e-6) {
       if ((a > eps && b < -eps) || (a < -eps && b > eps)) return false;
     }
   }
-  const mx = (ax + bx) / 2;
-  const my = (ay + by) / 2;
-  return pointInLoops(loops, mx, my) || distanceToLoops(loops, mx, my) <= eps;
+  // The chord of an arc that bends round something starts on the boundary and
+  // ends on it, and can pass through any number of its vertices between: the
+  // middle of the whole segment may be well clear of it while a stretch of it is
+  // not. Measured, a facing row's step-over past a clamp's rounded corner went
+  // 0.29mm through the keep-out with its midpoint 3mm outside it.
+  touches.sort((u, v) => u - v);
+  let from = 0;
+  for (let i = 0; i <= touches.length; i++) {
+    const to = i < touches.length ? touches[i] : 1;
+    if (to - from > 1e-9) {
+      const mid = (from + to) / 2;
+      const mx = ax + sx * mid;
+      const my = ay + sy * mid;
+      if (!pointInLoops(loops, mx, my) && distanceToLoops(loops, mx, my) > eps) return false;
+    }
+    from = to;
+  }
+  return true;
 }
 
 /** Is (x, y) inside the filled area described by `loops`? */

@@ -305,31 +305,46 @@ export function hasBore(profile, zLo = -Infinity, zHi = Infinity) {
  * nose radius, which is the curve a ball of that radius rolls along on the
  * outside of the metal.
  *
- * This is a curve offset, and a curve offset is not "move every point along its
- * own normal". Doing that is right in the middle of a face and wrong at both
- * ends of one, in opposite directions:
+ * That curve is asked for as what it *is* — the lowest radius the nose centre
+ * can stand at, for each Z, without the nose touching the part — rather than
+ * built by walking the profile and fixing the corners up. Walking it was right
+ * in the middle of a face and had to be patched at every corner: round a convex
+ * one on an arc, trim a concave one back to where the two offsets cross. The
+ * trimming carried the whole thing, and a sampled profile is full of corners a
+ * hair off straight — the smear of a step, the ramp of a taper — each of which
+ * trims the one before it. Measured against a brute-force check on 4800 random
+ * stepped and tapered profiles with noses from 0.2mm to a ⌀10 round insert, one
+ * in eight finishing paths put the nose into the part, up to 4.8mm with the
+ * round insert: a ⌀10 insert dived 1.9mm into the journal below a 6mm step.
  *
- *   * At a **convex** corner — the outside corner of a shoulder — the two
- *     surfaces disagree about which way to move the corner point, and averaging
- *     them lands the nose centre a chord short of both. The corner has to be
- *     gone *round*, on an arc of the nose radius: that arc is the corner the
- *     insert leaves on the part.
- *   * At a **concave** corner — where a shoulder meets the diameter behind it —
- *     the two offsets overlap, and a point averaged between them sits *inside*
- *     the metal. Measured on a ⌀30/⌀16 shaft with a 0.4mm nose, the finishing
- *     pass dived 0.33mm into the ⌀16 journal and took 0.15mm off the shoulder
- *     face, on the one operation in the app whose whole job is to hold a size.
- *     The two offsets have to be *trimmed* to where they cross.
+ * Here every segment of the profile has a capsule round it — the offset line
+ * along its upper side, and a disc of the nose radius at each end — and the
+ * path is the top of the union. A convex corner is the arc of its disc, a
+ * concave one is the crossing of two capsules, and a corner the nose is too big
+ * to reach into is simply never visited: there is nothing to trim because
+ * nothing was drawn past it.
  *
- * Corners are told apart by which way the surface normal turns, and the walk is
- * canonicalised to ascending Z first so that "outward" is one expression rather
- * than a sign that depends on which end the pass started from.
+ * The top of the union is not continuous. A face the profile drops down is a
+ * wall in it, and a wall is where a disc starts or stops being the highest
+ * thing in reach, so both sides of it are written. Between those, the path is
+ * sampled finely enough to stay within `tolerance` of the curve.
  *
- * @param points [[z, r], …] along the profile
+ * The nose is not the whole of the insert, and given `body` — the underside of
+ * the insert from `insertReach` — the path is the top of the union of that too:
+ * the lowest the nose centre can stand without any of the insert being in the
+ * part. Where the surface falls away behind the nose faster than the insert's
+ * own edge does, the nose cannot follow it, and the path runs above it instead
+ * of taking the edge through the metal. What the path then leaves is for
+ * whoever planned it to say; see `unreachedBy`.
+ *
+ * @param points [[z, r], …] along the profile, in either direction, Z never
+ *   going back on itself — a profile is a radius for every position along the bar
+ * @param body [[dz, dr], …] the lowest metal of the insert at each offset along
+ *   the bar from the nose centre, ascending in dz; null for the nose alone
  * @returns [[z, r], …] for the nose *centre*, in the order it was given
  */
-export function offsetProfile(points, noseRadius, tolerance = 0.005) {
-  if (!(noseRadius > 0) || points.length < 2) return points.map((p) => [...p]);
+export function offsetProfile(points, noseRadius, tolerance = 0.005, body = null) {
+  if ((!(noseRadius > 0) && !body) || points.length < 2) return points.map((p) => [...p]);
   const descending = points[points.length - 1][0] < points[0][0];
   const walk = descending ? [...points].reverse() : points;
 
@@ -342,127 +357,198 @@ export function offsetProfile(points, noseRadius, tolerance = 0.005) {
   }
   if (p.length < 2) return points.map((q) => [...q]);
 
-  // Walking in +Z with the metal below the curve, the outward normal of a
-  // segment heading (dz, dr) is (−dr, dz): straight up off a diameter, and
-  // along the bar off a face.
-  const normals = [];
-  for (let i = 0; i + 1 < p.length; i++) {
+  // A point on the straight line between its neighbours is not a corner, and
+  // the capsule round it is covered by theirs — the same path with fewer pieces
+  // to ask about. A finishing pass samples a profile every hundredth of a
+  // millimetre and a stepped shaft is almost all straight, so this is most of
+  // the points of a long part: the cost below is every point times the points
+  // within a nose radius of it, and a 300mm shaft took 7.6s with a round insert.
+  // Judged against the line from the last point kept, so a run of them cannot
+  // drift away from the line by a hair a point.
+  const kept = [p[0]];
+  for (let i = 1; i + 1 < p.length; i++) {
+    const [az, ar] = kept[kept.length - 1];
+    const dz = p[i + 1][0] - az;
+    const dr = p[i + 1][1] - ar;
+    const across = ((p[i][0] - az) * dr - (p[i][1] - ar) * dz) / Math.hypot(dz, dr);
+    const along = (p[i][0] - az) * dz + (p[i][1] - ar) * dr;
+    if (Math.abs(across) < 1e-7 && along > 0 && along < dz * dz + dr * dr) continue;
+    kept.push(p[i]);
+  }
+  kept.push(p[p.length - 1]);
+  p.length = 0;
+  p.push(...kept);
+
+  const rho = noseRadius;
+  const n = p.length;
+  // The upper side of each segment, moved out by the nose radius. Walking in +Z
+  // with the metal below the curve, a segment heading (dz, dr) has the outward
+  // normal (−dr, dz): straight up off a diameter, and along the bar off a face.
+  const lines = [];
+  for (let i = 0; i + 1 < n; i++) {
     const dz = p[i + 1][0] - p[i][0];
     const dr = p[i + 1][1] - p[i][1];
     const len = Math.hypot(dz, dr);
-    normals.push([-dr / len, dz / len]);
+    const nz = (-dr / len) * rho;
+    const nr = (dz / len) * rho;
+    lines.push([p[i][0] + nz, p[i][1] + nr, p[i + 1][0] + nz, p[i + 1][1] + nr]);
   }
 
-  const shift = (point, n) => [point[0] + n[0] * noseRadius, point[1] + n[1] * noseRadius];
-  const out = [shift(p[0], normals[0]), shift(p[1], normals[0])];
-
-  // A concave corner is trimmed to where the two offsets cross, and that point
-  // can lie further along the outgoing surface than the next few samples of it
-  // do: a step in the profile is sampled as a short steep ramp, so the crossing
-  // sits about a nose radius past the first millimetre of the diameter behind
-  // it. `gate` is that point and the direction the path leaves it in; nothing
-  // behind it is written, so the insert does not walk back down the diameter it
-  // has just reached and then forward again over the same ground.
-  let gate = null;
-  const push = (q) => {
-    if (gate) {
-      if ((q[0] - gate.at[0]) * gate.dir[0] + (q[1] - gate.at[1]) * gate.dir[1] <= 1e-9) return;
-      gate = null;
+  // The insert's underside, read at any offset along the bar. It is a hull, so
+  // between two of its vertices it is the straight line joining them.
+  const hull = body && body.length >= 2 ? body : null;
+  const underside = (dz) => {
+    let lo = 0;
+    let hi = hull.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (hull[mid][0] <= dz) lo = mid; else hi = mid;
     }
-    out.push(q);
+    const [az, ar] = hull[lo];
+    const [bz, br] = hull[hi];
+    return bz - az < 1e-12 ? Math.min(ar, br) : ar + ((br - ar) * (dz - az)) / (bz - az);
+  };
+  // First sample at or past z, by bisection: the insert is a dozen millimetres
+  // long and the profile a few hundredths between samples.
+  const firstAtOrPast = (z) => {
+    let lo = 0;
+    let hi = n;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (p[mid][0] < z) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  };
+  // The profile's radius at z, where a vertical face has the higher of its two.
+  const profileAt = (z) => {
+    const i = firstAtOrPast(z);
+    let best = -Infinity;
+    if (i < n && Math.abs(p[i][0] - z) < 1e-12) {
+      for (let k = i; k < n && Math.abs(p[k][0] - z) < 1e-12; k++) best = Math.max(best, p[k][1]);
+      return best;
+    }
+    if (i === 0 || i === n) return -Infinity;
+    const [az, ar] = p[i - 1];
+    const [bz, br] = p[i];
+    return ar + ((br - ar) * (z - az)) / (bz - az);
+  };
+  // The highest the nose centre has to be at z for the insert to clear the part.
+  // The insert is straight between the vertices of its hull and the profile is
+  // straight between its samples, so the worst contact is at a sample or where a
+  // hull vertex lands on the profile — and nowhere else.
+  const bodyTop = (z) => {
+    if (!hull) return -Infinity;
+    const from = z + hull[0][0];
+    const to = z + hull[hull.length - 1][0];
+    let best = -Infinity;
+    for (let i = firstAtOrPast(from); i < n && p[i][0] <= to + 1e-12; i++) {
+      best = Math.max(best, p[i][1] - underside(p[i][0] - z));
+    }
+    for (const [dz, dr] of hull) {
+      const at = profileAt(z + dz);
+      if (at > -Infinity) best = Math.max(best, at - dr);
+    }
+    return best;
   };
 
-  for (let i = 1; i < normals.length; i++) {
-    const a = normals[i - 1];
-    const b = normals[i];
-    const turn = a[0] * b[1] - a[1] * b[0];
-    const start = shift(p[i], b);
-    const end = shift(p[i + 1], b);
-    if (turn < -1e-12) {
-      // convex: the nose rolls round the corner, so the corner arc is drawn
-      gate = null;
-      arcAbout(out, p[i], a, b, noseRadius, tolerance);
-      push(end);
-    } else if (turn > 1e-12) {
-      // concave: the offsets overlap, so both are cut back to where they cross
-      gate = null;
-      const hit = trimBack(out, start, end);
-      const dz = end[0] - start[0];
-      const dr = end[1] - start[1];
-      const len = Math.hypot(dz, dr) || 1;
-      gate = { at: hit, dir: [dz / len, dr / len] };
-      push(end);
-    } else {
-      push(end);   // straight on
+  // Only what is within a nose radius of Z can be the top there, and `p` is in
+  // order of Z, so the ones that count are found by walking out from the last
+  // place that was asked about.
+  let near = 0;
+  const topAt = (z) => {
+    while (near > 0 && p[near][0] > z - 2 * rho) near--;
+    while (near + 1 < n && p[near + 1][0] < z - 2 * rho) near++;
+    let best = -Infinity;
+    for (let i = near; i < n && p[i][0] <= z + 2 * rho + 1e-9; i++) {
+      const across = z - p[i][0];
+      if (Math.abs(across) <= rho) {
+        best = Math.max(best, p[i][1] + Math.sqrt(Math.max(0, rho * rho - across * across)));
+      }
+      if (i + 1 < n) {
+        const [az, ar, bz, br] = lines[i];
+        const lo = Math.min(az, bz);
+        const hi = Math.max(az, bz);
+        if (z < lo - 1e-12 || z > hi + 1e-12) continue;
+        best = Math.max(best, hi - lo < 1e-12
+          ? Math.max(ar, br)
+          : ar + ((br - ar) * (z - az)) / (bz - az));
+      }
     }
-  }
-  return descending ? out.reverse() : out;
-}
+    return Math.max(best, bodyTop(z));
+  };
+  // On either side of z: the top is not continuous where a face drops away.
+  const EPS = 1e-9;
+  const below = (z) => topAt(z - EPS);
+  const above = (z) => topAt(z + EPS);
 
-/**
- * Join `out` to the segment start→end where the two overlap, by cutting both
- * back to the point they cross. Returns the joining point.
- *
- * The overlap can run back over more than one segment — a step is sampled as a
- * short ramp, so the diameter behind a shoulder is buried under several of
- * them — so the output is trimmed until the crossing lands on a piece of it
- * that is still there.
- */
-function trimBack(out, start, end) {
-  while (out.length >= 2) {
-    const hit = crossing(out[out.length - 2], out[out.length - 1], start, end);
-    if (hit && between(hit, out[out.length - 2], out[out.length - 1])) {
-      out[out.length - 1] = hit;
-      return hit;
+  // Where the top can change character: the profile's own samples, where a
+  // disc comes into reach or goes out of it, and where an offset line starts
+  // and stops.
+  //
+  // The path runs from where the first segment's offset starts to where the
+  // last one's ends, which is not quite the span of the profile: off a face at
+  // the end of the part it begins a nose radius clear of it, in the air, and
+  // that is where a pass has to start from. Clipped to the profile's own span,
+  // the path began on the end face with half the nose in the bar.
+  const zLo = lines[0][0];
+  const zHi = lines[lines.length - 1][2];
+  const marks = [zLo, zHi];
+  const mark = (z) => { if (z >= zLo && z <= zHi) marks.push(z); };
+  for (let i = 0; i < n; i++) {
+    mark(p[i][0]);
+    mark(p[i][0] - rho);
+    mark(p[i][0] + rho);
+  }
+  for (const [az, , bz] of lines) { mark(az); mark(bz); }
+  marks.sort((a, b) => a - b);
+  const zs = [];
+  for (const z of marks) if (!zs.length || z - zs[zs.length - 1] > 1e-9) zs.push(z);
+
+  const out = [];
+  const put = (z, r) => {
+    if (!Number.isFinite(r)) return;
+    const last = out[out.length - 1];
+    if (last && Math.abs(last[0] - z) < 1e-12 && Math.abs(last[1] - r) < 1e-9) return;
+    out.push([z, r]);
+  };
+  // Between two marks the top is smooth, so it is bisected until the chord is
+  // within tolerance of it. Only the depth of the dip matters, which is why a
+  // chord is judged at its middle.
+  const tol = Math.max(1e-4, tolerance / 4);
+  const fill = (za, ra, zb, rb, depth) => {
+    if (depth <= 0 || zb - za < 1e-4) return;
+    const zm = (za + zb) / 2;
+    const rm = topAt(zm);
+    if (!Number.isFinite(rm) || Math.abs(rm - (ra + rb) / 2) <= tol) return;
+    fill(za, ra, zm, rm, depth - 1);
+    put(zm, rm);
+    fill(zm, rm, zb, rb, depth - 1);
+  };
+  const last = zs.length - 1;
+  for (let k = 0; k <= last; k++) {
+    const z = zs[k];
+    const left = k === 0 ? -Infinity : (k === last ? topAt(z) : below(z));
+    const right = k === last ? -Infinity : (k === 0 ? topAt(z) : above(z));
+    if (k > 0 && out.length && Number.isFinite(left)) {
+      fill(zs[k - 1], out[out.length - 1][1], z, left, 12);
     }
-    out.pop();
+    if (Number.isFinite(left)) put(z, left);
+    if (Number.isFinite(right)) put(z, right);
   }
-  out.push(start);
-  return start;
-}
 
-/** Is `x` on the segment a→b, to within a hair? */
-function between(x, a, b) {
-  const dz = b[0] - a[0];
-  const dr = b[1] - a[1];
-  const lenSq = dz * dz + dr * dr;
-  if (lenSq < 1e-18) return false;
-  const t = ((x[0] - a[0]) * dz + (x[1] - a[1]) * dr) / lenSq;
-  return t > -1e-6 && t < 1 + 1e-6;
-}
-
-/**
- * The arc the nose centre sweeps round a convex corner, from normal `a` to
- * normal `b`, chorded fine enough to stay within `tolerance` of the circle.
- *
- * Chorded on the *outside* of it. An inscribed polygon's chords cut across the
- * circle by the sagitta, and here the circle is the finished corner: every
- * chord would take that much off it. Blowing the radius up by 1/cos(half a
- * step) puts the chord midpoints on the true arc and everything else outside,
- * so the error is metal left rather than metal taken.
- */
-function arcAbout(out, corner, a, b, radius, tolerance) {
-  const from = Math.atan2(a[1], a[0]);
-  let sweep = Math.atan2(b[1], b[0]) - from;
-  while (sweep > Math.PI) sweep -= 2 * Math.PI;
-  while (sweep < -Math.PI) sweep += 2 * Math.PI;
-  const perStep = 2 * Math.acos(Math.max(-1, 1 - tolerance / radius));
-  const steps = Math.max(1, Math.ceil(Math.abs(sweep) / Math.max(1e-3, perStep)));
-  const outer = radius / Math.cos(Math.abs(sweep) / (2 * steps));
-  for (let k = 0; k <= steps; k++) {
-    const angle = from + (sweep * k) / steps;
-    out.push([corner[0] + outer * Math.cos(angle), corner[1] + outer * Math.sin(angle)]);
+  // A straight run was sampled at every mark and is the same line throughout.
+  const lean = [out[0]];
+  for (let i = 1; i + 1 < out.length; i++) {
+    const [az, ar] = lean[lean.length - 1];
+    const [bz, br] = out[i];
+    const [cz, cr] = out[i + 1];
+    const cross = (bz - az) * (cr - ar) - (br - ar) * (cz - az);
+    const along = (bz - az) * (cz - az) + (br - ar) * (cr - ar);
+    if (Math.abs(cross) < 1e-9 && along > 0) continue;
+    lean.push(out[i]);
   }
-}
-
-/** Where the infinite lines through a→b and c→d cross, or null if they do not. */
-function crossing(a, b, c, d) {
-  const r = [b[0] - a[0], b[1] - a[1]];
-  const s = [d[0] - c[0], d[1] - c[1]];
-  const denominator = r[0] * s[1] - r[1] * s[0];
-  if (Math.abs(denominator) < 1e-12) return null;
-  const t = ((c[0] - a[0]) * s[1] - (c[1] - a[1]) * s[0]) / denominator;
-  return [a[0] + r[0] * t, a[1] + r[1] * t];
+  lean.push(out[out.length - 1]);
+  return descending ? lean.reverse() : lean;
 }
 
 /**

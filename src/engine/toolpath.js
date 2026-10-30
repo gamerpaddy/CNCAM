@@ -6,6 +6,7 @@ import {
   descentOf,
 } from './cl.js';
 import { fixtureTop } from './fixtures.js';
+import { clampParams, nonNumeric } from './param-limits.js';
 import { generateCommand } from './strategies/command.js';
 import { generateFace } from './strategies/face.js';
 import { generateContour } from './strategies/contour.js';
@@ -192,6 +193,19 @@ export const READS_EARLIER = new Set(['turnBore', 'turnFinish', 'waterline', 'pa
 const CUT_FROM_TOP = new Set(['face', 'contour2d', 'pocket', 'clear2d', 'adaptive', 'slot']);
 
 /**
+ * The milling strategies that cannot start without a part — or, for a slot and an
+ * engraving, a drawing. Face and drill need neither and say so themselves.
+ * The app asks for a model before it generates any of these (op-status.js), but
+ * a project edited by hand, or a model removed after the pass was made, still
+ * arrives here — and what came out was "Cannot read properties of null".
+ */
+const NEEDS_A_PART = new Set([
+  'contour2d', 'pocket', 'clear2d', 'adaptive', 'spot', 'tap', 'threadMill', 'bore',
+  'chamfer', 'parallel3d', 'waterline',
+]);
+const NEEDS_A_PART_OR_DRAWING = new Set(['slot', 'engrave']);
+
+/**
  * Start the cut at the top of the billet, not above it.
  *
  * There is nothing to cut above the stock, and these strategies step down from
@@ -214,11 +228,76 @@ function clampTopToStock(args) {
   return { args: { ...args, params: { ...args.params, topZ: top } }, lowered: topZ - top };
 }
 
+/** The widest cutter any strategy is asked to plan for, in mm. See generateToolpath. */
+export const MAX_CUTTER_DIAMETER = 1000;
+
+/** The longest side any billet is planned for, in mm: 100m. See generateToolpath. */
+export const MAX_STOCK_EXTENT = 100000;
+
+/** What is wrong with the stock's size, as a phrase ("2000000000mm long in Y"), or null. */
+function stockTooBig(stock) {
+  if (!stock?.min || !stock?.max) return null;
+  for (let axis = 0; axis < 3; axis++) {
+    const size = stock.max[axis] - stock.min[axis];
+    if (!Number.isFinite(size)) return `not a size in ${'XYZ'[axis]}`;
+    if (size > MAX_STOCK_EXTENT) return `${Math.round(size)}mm long in ${'XYZ'[axis]}`;
+  }
+  return null;
+}
+
+/**
+ * What is wrong with the drawing's points, as a phrase, or null.
+ *
+ * The strategies that read a drawing (slot, engraving, a drill by circles) take
+ * its points as numbers. A path whose list is `null`, or holds a string, a NaN
+ * or an infinity, is not one an import can produce and a project file can carry:
+ * the first was a TypeError out of three different strategies, the NaN came out
+ * as NaN on every line of the slot, and an infinity ran an engraving out of
+ * memory (4GB, then the tab). Said once, before any of them starts.
+ */
+function unreadableDrawing(drawing) {
+  if (!Array.isArray(drawing)) return null;
+  for (const path of drawing) {
+    const points = path?.points;
+    if (!Array.isArray(points) && !ArrayBuffer.isView(points)) return 'a path with no list of points';
+    if (points.length % 2 !== 0) return 'a path with a coordinate missing (an odd number of values)';
+    for (let i = 0; i < points.length; i++) {
+      if (typeof points[i] !== 'number' || !Number.isFinite(points[i])) return 'a point that is not a number';
+    }
+  }
+  return null;
+}
+
+/**
+ * The name of the first setting of the operation or its cutter that is a number
+ * gone wrong (NaN, ±Infinity), or null. `null` is not one: it is how an optional
+ * setting says "inherit" or "work it out", and every strategy reads it so.
+ */
+function unreadableSetting({ type, params, tool }) {
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (typeof value === 'number' && !Number.isFinite(value)) return `the setting ${key}`;
+  }
+  const text = nonNumeric(params, type);
+  if (text) return `the setting ${text}`;
+  // the three heights are never optional: null reads as zero in every sum, so a
+  // cleared field cut at Z0 (and a chamfer threw on it, asking for its digits)
+  if (type !== 'command') {
+    for (const key of ['topZ', 'bottomZ', 'clearanceHeight']) {
+      if (params?.[key] === null) return `the setting ${key}`;
+    }
+  }
+  for (const [key, value] of Object.entries(tool ?? {})) {
+    if (typeof value === 'number' && !Number.isFinite(value)) return `the cutter's ${key}`;
+  }
+  return null;
+}
+
 /**
  * @param args { type, params, tool, stock, mesh?, fixtures? }
  * @returns finished CL program { version, moves, count, events }
  */
-export function generateToolpath(args) {
+export function generateToolpath(given) {
+  let args = given;
   const generate = strategies[args.type];
   if (!generate) throw new Error(`operation type not implemented: ${args.type}`);
   // A milling cutter with no width is not a cutter, and the strategies do not
@@ -230,8 +309,71 @@ export function generateToolpath(args) {
     cl.warn(`${args.tool?.name ?? 'this cutter'} has no diameter — set its size before generating`);
     return cl.finish();
   }
+  // And one no cutter is: a typed "1e9" is a legal number to every field, and
+  // the offsetting under a contour never came back from it (a millimetre of
+  // cutter is two thousand clipper units, a billion of them overflows its
+  // integers), a waterline wrote ten million moves and an engraving ran out of
+  // array. Refused the same way, for the same reason, with the limit in the words.
+  if (!BOTH_MACHINES.has(args.type) && !TURNING_OPS.includes(args.type)
+    && args.tool.diameter > MAX_CUTTER_DIAMETER) {
+    const cl = new CLBuilder();
+    cl.warn(`${args.tool.name ?? 'this cutter'} is ${args.tool.diameter}mm across — no milling `
+      + `cutter is wider than ${MAX_CUTTER_DIAMETER}mm, so this is a typing slip. Set its size before generating`);
+    return cl.finish();
+  }
+  const hasPart = !!args.mesh?.positions?.length;
+  if (!hasPart && (NEEDS_A_PART.has(args.type)
+    || NEEDS_A_PART_OR_DRAWING.has(args.type) && !args.drawing?.length)) {
+    const cl = new CLBuilder();
+    cl.warn('this operation works from the model, and there is none in the project — import one');
+    return cl.finish();
+  }
+  // A billet no workshop has is a margin typed with too many zeros, and every
+  // strategy plans over the whole of it: a facing pass of two billion mm ran out
+  // of array, and an adaptive one did not come back at all.
+  const oversize = stockTooBig(args.stock);
+  if (oversize) {
+    const cl = new CLBuilder();
+    cl.warn(`the stock is ${oversize} — no billet is bigger than ${MAX_STOCK_EXTENT}mm, so this is a `
+      + 'typing slip. Check the stock size and margins before generating');
+    return cl.finish();
+  }
+  // A setting that is not a number is not a setting: NaN reaches every move the
+  // strategy computes from it, and the program that comes out is NaN on every
+  // line. A file can carry one (JSON writes NaN as null, and hand edits write
+  // anything) — said by name, before anything is generated.
+  const unreadable = unreadableSetting(args);
+  if (unreadable) {
+    const cl = new CLBuilder();
+    cl.warn(`${unreadable} is not a number — set it before generating`);
+    return cl.finish();
+  }
+  const badDrawing = unreadableDrawing(args.drawing);
+  if (badDrawing) {
+    const cl = new CLBuilder();
+    cl.warn(`the drawing has ${badDrawing} — re-import it before generating`);
+    return cl.finish();
+  }
+  // The panel keeps every number inside its field's range; a value that did not
+  // come through the panel is held to the same range here, and the program says
+  // so. See engine/param-limits.js.
+  const { params: held, notes: heldNotes } = clampParams(args.params, args.type);
+  if (held !== args.params) args = { ...args, params: held };
   const { args: clamped, lowered } = clampTopToStock(clampSafeArgs(args));
+  // A cut that ends above where it starts has no depth to take. The panel keeps
+  // Bottom Z under Top Z, so this only meets a file that was edited by hand —
+  // and the strategies read it as a cut *at* Bottom Z, so a Bottom Z of 1e9 was
+  // a program at a billion millimetres.
+  if (CUT_FROM_TOP.has(clamped.type) && clamped.params.bottomZ > clamped.params.topZ + 1e-9) {
+    const cl = new CLBuilder();
+    cl.warn(`Bottom Z (${clamped.params.bottomZ}) is above Top Z (${clamped.params.topZ}) — `
+      + 'there is no depth to cut');
+    return cl.finish();
+  }
   const cl = generate(clamped);
+  if (heldNotes.length) {
+    cl.notes = [...(cl.notes ?? []), ...heldNotes.map((text) => ({ level: 'warn', text }))];
+  }
   const below = standingAboveTopZ(clamped);
   if (below > 0.05 && cl.count > 0) {
     const mm = (v) => Math.round(v * 1000) / 1000;

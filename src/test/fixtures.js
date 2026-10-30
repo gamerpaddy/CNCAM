@@ -137,6 +137,32 @@ export function makePocketBlock({ size = 40, pocketSize = 20, height = 10, depth
 }
 
 /**
+ * A pocket with an island left standing in it: a block with a rectangular
+ * pocket and a boss, as tall as the block, rising from the pocket floor.
+ *
+ * The island is what makes it a different part from the plain pocket. The
+ * pocket's shadow has a hole in it, and the boss sits inside that hole as an
+ * outer of its own — so anything that reads "the enclosed void" off the shadow
+ * has to know that the void is the hole *less* the boss.
+ *
+ * The boss stands on the floor as a box of its own, so its base lies in the
+ * floor face: coincident, opposite-facing, and enclosing nothing.
+ *
+ * @returns { mesh, pocket, island, top, floorZ } — pocket and island as { min, max }
+ */
+export function makeIslandPocket({
+  size = [70, 60], pocket = { min: [10, 10], max: [60, 50] },
+  island = { min: [25, 22], max: [45, 38] }, height = 12, depth = 8,
+} = {}) {
+  const floorZ = height - depth;
+  const soup = [
+    ...pocketedBoxSoup([0, 0, 0], [size[0], size[1], height], pocket, floorZ),
+    ...boxSoup([island.min[0], island.min[1], floorZ], [island.max[0], island.max[1], height]),
+  ];
+  return { mesh: meshFromSoup(new Float32Array(soup)), pocket, island, top: height, floorZ };
+}
+
+/**
  * A plate with a pocket in it, and a boss standing on the plate with a pocket
  * of its own: two pockets whose mouths are at different heights.
  *

@@ -3,6 +3,7 @@
 
 import { Document } from '../doc/document.js';
 import { plural } from '../engine/text.js';
+import { describeRepairs } from '../doc/repair.js';
 import {
   loadSaved, attachAutosave, clearSaved, sessionProjectId, setSessionProjectId,
 } from '../doc/autosave.js';
@@ -653,6 +654,7 @@ function boot() {
   ctx.actions = actions;
   window.cncam = ctx; // debug/testing handle (live reference)
 
+  reportUncaughtErrors();
   registerServiceWorker();
   showBuildBadge();
 
@@ -660,6 +662,31 @@ function boot() {
   // and picking cutters. Left until Generate, this is most of the wait: a
   // trivial job on a cold worker takes two seconds. See workers/pool.js.
   ctx.pool.warm();
+}
+
+/**
+ * Say so when something throws that nothing was waiting to catch.
+ *
+ * An action that fails inside an event handler or a promise nobody awaits used
+ * to fail into the console and nowhere else: the button did nothing, the status
+ * line said nothing, and the only evidence was a devtools panel the person at
+ * the machine does not have open. The line is the one place they are looking.
+ * The same message is not repeated while it is still on screen — one bad frame
+ * can throw sixty times a second.
+ */
+function reportUncaughtErrors() {
+  let last = '';
+  let at = 0;
+  const say = (err) => {
+    const message = (err && err.message) || String(err);
+    const now = Date.now();
+    if (message === last && now - at < 4000) return;
+    last = message;
+    at = now;
+    ctx.ui?.setStatus(`Something went wrong: ${message}`, true);
+  };
+  window.addEventListener('error', (e) => say(e.error ?? e.message));
+  window.addEventListener('unhandledrejection', (e) => say(e.reason));
 }
 
 /**
@@ -709,28 +736,58 @@ function showBuildBadge() {
  */
 async function restoreSaved() {
   const saved = await loadSaved();
+  if (saved?.unreadable) {
+    ctx.storeProjectId = null;
+    ctx.ui.setStatus(`The last session could not be read (${saved.unreadable}) — starting empty`, true);
+    return;
+  }
   if (!saved) {
     // nothing came back, so there is no job for a remembered drawer to be of
     ctx.storeProjectId = null;
     return;
   }
-  const meshes = new Map();
-  for (const [id, mesh] of saved.meshes) meshes.set(id, computeNormals(mesh));
-  ctx.doc.restore(saved.project, meshes);
+  // The saved session is restored on every boot, so one that loads and then
+  // breaks the page is not a one-off failure: it is the same failure on every
+  // reload, with no way to reach the menu that would clear it. Whatever goes
+  // wrong from here is caught, the session is thrown away and the app starts
+  // empty — and says so, because the alternative is a job that vanished.
+  //
+  // `restore` does not throw when the page cannot draw what it restored: it
+  // announces the change, and an error inside a listener of an EventTarget is
+  // reported to the window and not returned to the caller. So the window's own
+  // error event is what is listened to while it runs.
+  let uncaught = null;
+  const watch = (e) => { uncaught ??= e.error ?? new Error(e.message); };
+  window.addEventListener('error', watch);
+  try {
+    const meshes = new Map();
+    for (const [id, mesh] of saved.meshes) meshes.set(id, computeNormals(mesh));
+    ctx.doc.restore(saved.project, meshes);
+    if (uncaught) throw uncaught;
 
-  // Frame what came back. Restoring puts models in the scene without ever
-  // touching the camera, and the setup transform then shifts the camera by the
-  // same delta it shifts the part — which keeps a *framed* part framed, and
-  // sends a default camera that was never looking at the part even further from
-  // it. The result is a project that loads perfectly and shows an empty
-  // viewport, which reads as "my model did not load".
-  ctx.viewport.frameAll();
+    // Frame what came back. Restoring puts models in the scene without ever
+    // touching the camera, and the setup transform then shifts the camera by the
+    // same delta it shifts the part — which keeps a *framed* part framed, and
+    // sends a default camera that was never looking at the part even further from
+    // it. The result is a project that loads perfectly and shows an empty
+    // viewport, which reads as "my model did not load".
+    ctx.viewport.frameAll();
 
-  const total = saved.project.models.length;
-  const missing = total - meshes.size;
-  ctx.ui.setStatus(missing
-    ? `Restored last session — re-import ${missing} of ${plural(total, 'model')}`
-    : 'Restored last session');
+    const total = saved.project.models.length;
+    const missing = total - meshes.size;
+    const repaired = describeRepairs(saved.repairs);
+    ctx.ui.setStatus(missing
+      ? `Restored last session — re-import ${missing} of ${plural(total, 'model')}${repaired}`
+      : `Restored last session${repaired}`, !!repaired);
+  } catch (err) {
+    console.error(err);
+    ctx.storeProjectId = null;
+    try { ctx.doc.clear(); } catch (again) { console.error(again); }
+    clearSaved();
+    ctx.ui.setStatus(`The last session could not be restored (${err.message}) — it was discarded`, true);
+  } finally {
+    window.removeEventListener('error', watch);
+  }
 }
 
 boot();

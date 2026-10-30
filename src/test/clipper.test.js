@@ -36,3 +36,17 @@ test('offset handles reversed (CW) input the same', () => {
   assert.eq(out.length, 1);
   assert.close(Math.abs(loopArea(out[0])), 5 + Math.PI, 0.05);
 });
+
+test('an arc tolerance of nothing does not turn every round join into a hundred thousand steps', () => {
+  // Clipper divides a round join into steps of π / acos(1 − tolerance / delta),
+  // which grows without bound as the tolerance goes to zero. A contour whose
+  // Tolerance field held 0, 1e-9 or a negative number never finished offsetting.
+  const square = [0, 0, 20, 0, 20, 20, 0, 20];
+  for (const tolerance of [0, -1, 1e-9, NaN]) {
+    const started = Date.now();
+    const out = offsetLoops([square], 3, tolerance);
+    assert.ok(Date.now() - started < 2000, `tolerance ${tolerance} came back promptly`);
+    const vertices = out.reduce((n, loop) => n + loop.length / 2, 0);
+    assert.ok(vertices > 8 && vertices < 5000, `${vertices} vertices at tolerance ${tolerance}`);
+  }
+});

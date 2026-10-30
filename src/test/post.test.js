@@ -596,3 +596,21 @@ test('a command at the start of a setup runs after that setup is fixtured, not b
   assert.eq(text.match(/^M0$/gm).length, 1, 'one stop for one re-fixturing');
   assert.eq(text.match(/^G55$/gm).length, 1, 'and the offset stated once');
 });
+
+test('a tool with no usable speed or feed posts none, and says so, rather than NaN', () => {
+  // A tool file edited by hand, or an old one, can hold text, a negative or
+  // Infinity in a speed. Passed straight through they were written as
+  // `M3 SNaN`, `G1 F-1` and `FInfinity` — words no control reads as a number.
+  for (const bad of [NaN, Infinity, -5, 'abc', null]) {
+    const tool = { ...TOOL, spindleRpm: bad, feedCut: bad, feedPlunge: bad };
+    const cl = generateToolpath({
+      type: 'contour2d', name: 'cutout', tool,
+      mesh: makeBox(10, 10, 5),
+      stock: { min: [0, 0, 0], max: [10, 10, 5] },
+      params: { topZ: 5, bottomZ: 0, stepdown: 2, clearanceHeight: 15, stockToLeave: 0, tolerance: 0.01, rampAngle: 0 },
+    });
+    const { text } = buildGcode('linuxcnc', [{ name: 'cutout', cl }]);
+    const body = text.split('\n').filter((l) => !l.startsWith('(')).join('\n');
+    assert.ok(!/NaN|Infinity|F-\d/.test(body), `${String(bad)} leaked into:\n${body}`);
+  }
+});

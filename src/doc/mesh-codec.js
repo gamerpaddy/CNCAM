@@ -60,7 +60,15 @@ export function decodeMesh(record) {
     positions: decodeFloats(record.positions),
     indices: decodeInts(record.indices),
   };
-  if (record.faceRanges?.length) mesh.faceRanges = record.faceRanges;
+  // ranges are read as `{ first, last }` triangle numbers by whatever picks
+  // faces, which fell over on a `null` in the list; one that has no numbers in
+  // it names no triangles. A set with such a hole in it is not kept in part —
+  // the triangles the missing range grouped would each be a face of their own —
+  // but dropped whole, and the flood fill groups them as for any mesh with none
+  const ranges = Array.isArray(record.faceRanges) ? record.faceRanges : [];
+  if (ranges.length && ranges.every((r) => r && Number.isFinite(r.first) && Number.isFinite(r.last))) {
+    mesh.faceRanges = ranges;
+  }
   return mesh;
 }
 

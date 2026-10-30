@@ -48,7 +48,7 @@ import {
   boreProfile, hasBore, drillOversize, boreNarrowestSection,
 } from '../lathe.js';
 import { tipLengthOf, bladeHalfWidth, latheControlPoint } from '../tool-geometry.js';
-import { insertEngagement, recommendedDepthOfCut } from '../insert.js';
+import { insertEngagement, insertReach, recommendedDepthOfCut } from '../insert.js';
 import { holeApproachZ } from '../heights.js';
 
 /** Everything the strategies share: the profile, the bar, and where safety is. */
@@ -238,6 +238,27 @@ function jawFace(ctx, side = 'external') {
   return chuckBlocks(ctx, side) ? ctx.chuck.z : -Infinity;
 }
 
+/**
+ * How far the tool reaches ahead of the CL point toward the chuck: the nose
+ * radius for a tool that is its nose, more for one whose body leads — a
+ * left-hand tool cuts toward the tailstock, and fed the other way carries its
+ * whole insert in front of the nose.
+ */
+function reachAhead(tool, nose) {
+  const hull = insertReach(tool);
+  return hull ? Math.max(nose, -hull[0][0]) : nose;
+}
+
+/** Say so when the body of the tool leads the nose into a pass toward the chuck. */
+function warnIfLeading(cl, tool, nose) {
+  const ahead = reachAhead(tool, nose);
+  if (!(ahead > nose + 0.5)) return;
+  cl.warn(`${tool.name ?? 'this tool'} reaches ${round(ahead)}mm ahead of its nose toward the chuck — `
+    + 'a left-hand tool cuts toward the tailstock, and on a pass that feeds the other way its '
+    + 'insert leads, so the pass stops that far short of every shoulder and of the jaws. '
+    + 'Use a right-hand tool, or turn that part from the other end');
+}
+
 /** Rapid to a safe radius, then to Z, in that order — never diagonally into work. */
 function safeTo(cl, clearX, z) {
   const [x] = lastXY(cl);
@@ -327,7 +348,8 @@ const RECESS_MIN_DEPTH = 0.3;
  * out loud.
  *
  * @param points [z, radius] along the profile, in either direction
- * @returns [{ depth, z, radius, shoulder }] — empty when nothing is enclosed
+ * @returns [{ depth, z, radius, shoulder, from, to }] — empty when nothing is
+ *   enclosed; from and to are the two ends of the recess along the bar
  */
 export function enclosedRecesses(points) {
   const n = points.length;
@@ -369,7 +391,10 @@ export function enclosedRecesses(points) {
       radius = points[k][1];
       shoulder = Math.min(before[k], after[k]);
     }
-    out.push({ depth: deepest, z: (lo + hi) / 2, radius, shoulder });
+    out.push({
+      depth: deepest, z: (lo + hi) / 2, radius, shoulder,
+      from: Math.min(points[i][0], points[end - 1][0]), to: Math.max(points[i][0], points[end - 1][0]),
+    });
     i = end;
   }
   return out.sort((a, b) => b.depth - a.depth);
@@ -497,8 +522,15 @@ export function generateTurnRough({ mesh, tool, params, stock, fixtures }) {
   const levels = roughLevels(profile, {
     barRadius: bar.radius, finishR, step, allowance, zLo, zHi,
   });
+  // Where the *insert* has to stop, not only its nose: see reachOfPart.
+  const reach = reachOfPart(profile, { zLo, zHi, allowance, nose, tool });
+  warnIfLeading(cl, tool, nose);
+  // and never with any of it behind the jaws
+  const floor = Math.max(zLo + nose, jawFace(ctx) + reachAhead(tool, nose));
+  const cutBy = [];
   for (const at of levels) {
-    if (cutOneRoughPass(cl, { profile, at, zHi, zLo, allowance, nose, clearX, state })) passes++;
+    const pass = cutOneRoughPass(cl, { at, zHi, floor, nose, clearX, state, reach });
+    if (pass) { passes++; cutBy.push(pass); }
   }
   // Home once, at the end — and out along the bar before out in radius. The
   // last pass stops *at* the shoulder that stopped it, and that shoulder stands
@@ -519,13 +551,63 @@ export function generateTurnRough({ mesh, tool, params, stock, fixtures }) {
   // approached, and "leaving 0.3mm on" is then true of most of the part and
   // wrong by millimetres exactly where it matters. Said here rather than left
   // for whoever reads the finished part.
-  for (const recess of enclosedRecesses(profileRange(profile, zLo, zHi))) {
-    if (recess.depth <= allowance + 0.1) continue;
+  const recesses = enclosedRecesses(profileRange(profile, zLo, zHi))
+    .filter((recess) => recess.depth > allowance + 0.1);
+  for (const recess of recesses) {
     cl.info(`⌀${dia(recess.radius)} at Z${recess.z.toFixed(2)} is not roughed — it sits `
       + `${recess.depth.toFixed(2)}mm behind the ⌀${dia(recess.shoulder)} either side of it, `
       + 'which a turning pass cannot get past; it needs a grooving tool');
   }
+  // …and the stretches no pass got near that are not one of those: a diameter
+  // that falls away toward the chuck, or a spigot behind a flange, where every
+  // level the cycle runs at is stopped by the bigger diameter ahead of it.
+  for (const zone of unroughed(profileRange(profile, zLo, zHi), cutBy, { allowance, nose, step, bar })) {
+    if (recesses.some((r) => zone.to >= r.from - nose && zone.from <= r.to + nose)) continue;
+    cl.warn(`⌀${dia(zone.radius)} from Z${round(zone.from)} to Z${round(zone.to)} is not roughed — `
+      + `every level the cycle runs at is stopped by a bigger diameter ahead of it, so ⌀${dia(zone.stock)} `
+      + `is still standing there, ${round(zone.amount)}mm of radius more than a finishing pass should take. `
+      + 'It needs turning from the other end, or a grooving tool');
+  }
   return finishTurn(cl, ctx, tool, 'external');
+}
+
+/**
+ * The stretches of the part the roughing passes left well over a stepdown
+ * standing on, as [{ from, to, radius, stock, amount }] — radius is the part's,
+ * stock the diameter's the passes left, amount the difference in radius.
+ *
+ * A point of the profile is *cleared to* the lowest level any pass covered it
+ * at, less the nose that rides above that level. A pass covers what lies
+ * between where it started and where it stopped, a nose radius either side.
+ * Right up to a shoulder is never covered, and is left alone here: that corner
+ * is a nose radius of metal and belongs to the finishing pass; what is reported
+ * is a stretch longer than that.
+ *
+ * @param passes [{ centre, from, to }] — the radius of the nose centre and the
+ *   two ends of every pass, as cutOneRoughPass returned them
+ */
+function unroughed(samples, passes, { allowance, nose, step, bar }) {
+  const out = [];
+  let open = null;
+  for (const [z, r] of samples) {
+    let stock = bar.radius;
+    for (const pass of passes) {
+      if (z <= pass.from + nose && z >= pass.to - nose) stock = Math.min(stock, pass.centre - nose);
+    }
+    const amount = stock - (r + allowance);
+    if (amount > step + 0.2) {
+      if (!open) open = { from: z, to: z, radius: r, stock, amount };
+      open.from = Math.min(open.from, z);
+      open.to = Math.max(open.to, z);
+      if (amount > open.amount) Object.assign(open, { radius: r, stock, amount });
+    } else if (open) {
+      out.push(open);
+      open = null;
+    }
+  }
+  if (open) out.push(open);
+  // a stretch no longer than the nose is a corner, not a place nothing reached
+  return out.filter((zone) => zone.to - zone.from > 2 * nose + 0.5);
 }
 
 /** How much of the bar a plateau must run along to be worth a pass of its own. */
@@ -646,24 +728,18 @@ export function roughLevels(profile, {
  *
  * @param state carried across the whole cycle: what the last pass left (`prev`),
  *   and where the tool now stands (`r`, `z`)
- * @returns whether it cut anything
+ * @returns where it cut, { centre, from, to }, or false when it cut nothing
  */
-function cutOneRoughPass(cl, { profile, at, zHi, zLo, allowance, nose, clearX, state }) {
-  // How far along this radius stays clear of the part: walk the samples from
-  // the free end inward and stop where the work rises to meet the tool.
-  const samples = profileRange(profile, zLo, zHi);
-  let stopZ = zLo;
-  for (let i = samples.length - 1; i >= 0; i--) {
-    const [z, radius] = samples[i];
-    if (z > zHi + 1e-9) continue;
-    if (radius + allowance > at + 1e-9) { stopZ = z; break; }
-    stopZ = zLo;
-  }
-  if (!(zHi > stopZ + 1e-6)) return false;
-
+function cutOneRoughPass(cl, { at, zHi, floor, nose, clearX, state, reach }) {
   // the nose centre, which is a radius outside the diameter this pass leaves
   const centre = at + nose;
   const startZ = zHi + nose;
+  // How far along this radius stays clear of the part: walk the reach from the
+  // free end inward and stop where the work rises to meet the tool.
+  const stopC = Math.max(stopOnReach(reach, centre, startZ), floor);
+  // (a pass that goes less than a twentieth of a millimetre is the nose touching a
+  // corner it is level with, not a cut)
+  if (!(startZ > stopC + 0.05)) return false;
   // Rapid to the surface the last pass left and feed from there: that is the
   // last place on the way in that is certainly air.
   const entry = Math.max(centre + RADIAL_GAP, state.prev);
@@ -675,15 +751,53 @@ function cutOneRoughPass(cl, { profile, at, zHi, zLo, allowance, nose, clearX, s
     if (entry < state.r - 1e-9) cl.rapid(entry, 0, startZ);
   }
   cl.cut(centre, 0, startZ, FEED.PLUNGE);
-  cl.cut(centre, 0, stopZ + nose);
+  cl.cut(centre, 0, stopC);
   // lift off the wall before travelling back, so the tool does not rub its way out
-  cl.rapid(centre + RADIAL_GAP, 0, stopZ + nose);
+  cl.rapid(centre + RADIAL_GAP, 0, stopC);
 
   state.started = true;
   state.prev = centre;
   state.r = centre + RADIAL_GAP;
-  state.z = stopZ + nose;
-  return true;
+  state.z = stopC;
+  return { centre, from: startZ, to: stopC };
+}
+
+/**
+ * The lowest the nose centre can stand, at each Z, with the whole insert clear of
+ * the part and what it is to be left — `[[z, r], …]` ascending in Z. A constant-
+ * radius pass can go as far toward the chuck as this stays at or under it.
+ *
+ * It is the same curve the finishing pass follows (see offsetProfile), asked
+ * for the part with its allowance on. Roughing stopped on the nose alone, which
+ * is where an insert's end edge meets a shoulder only if the edge is square to
+ * the bar: a tool with a lead angle under 90° leans its end edge *forward*, and
+ * reached into the shoulder by the height of the cut times the lean.
+ */
+function reachOfPart(profile, { zLo, zHi, allowance, nose, tool }) {
+  const samples = profileRange(profile, zLo, zHi).map(([z, r]) => [z, r + allowance]);
+  if (samples.length < 2) return [];
+  // The part ends at the top of the range, and past it there is the end face
+  // and then air: a face in the way of the nose, down to the axis. Without it
+  // the nose centre was free to run in past the corner at any radius under it.
+  samples.push([samples[samples.length - 1][0], 0]);
+  return offsetProfile(samples, nose, undefined, insertReach(tool));
+}
+
+/**
+ * Where a constant-radius pass at `level` has to stop, coming from the free end:
+ * the Z of the first place going toward the chuck that `reach` rises above it,
+ * interpolated between the two points that straddle it. -Infinity when it never
+ * does.
+ */
+function stopOnReach(reach, level, fromZ) {
+  for (let i = reach.length - 1; i >= 0; i--) {
+    const [z, r] = reach[i];
+    if (z > fromZ + 1e-9 || !(r > level + 1e-9)) continue;
+    const next = reach[i + 1];
+    if (!next || next[0] > fromZ + 1e-9 || !(next[1] < level)) return z;
+    return z + ((next[0] - z) * (r - level)) / (r - next[1]);
+  }
+  return -Infinity;
 }
 
 // --- finishing ---
@@ -715,17 +829,24 @@ export function generateTurnFinish({
   const step = Math.max(0.01, params.tolerance ?? 0.05);
   const zEnd = limitToChuck(cl, ctx);
 
-  const raw = profilePoints(profile, ctx.zStart, zEnd, { step });
+  // Only the part has a profile to follow. A Top Z a mistyped few zeros past the
+  // end of the bar was sampled at every hundredth of a millimetre all the way
+  // out there — twenty million points for Z1000000, and the tab ran out of
+  // memory before a move was made.
+  const onPart = (z) => Math.min(profile.zMax, Math.max(profile.zMin, z));
+  const raw = profilePoints(profile, onPart(ctx.zStart), onPart(zEnd), { step });
   if (raw.length < 2) {
     cl.warn('finishing found no profile in the Z range');
     return finishTurn(cl, ctx, tool, 'external');
   }
   const withAllowance = raw.map(([z, r]) => [z, r + allowance]);
-  const whole = offsetProfile(withAllowance, nose);
+  const body = insertReach(tool);
+  const whole = offsetProfile(withAllowance, nose, undefined, body);
   // The nose centre stops a radius in front of the jaws, as the roughing pass's
   // does, so that none of the nose is behind them — and the retract that
   // follows goes out along the jaw face rather than through it.
-  const path = inFrontOf(whole, jawFace(ctx) + nose);
+  warnIfLeading(cl, tool, nose);
+  const path = inFrontOf(whole, jawFace(ctx) + reachAhead(tool, nose));
   if (path.length < 2) {
     cl.warn(`there is nothing to finish in front of ${ctx.chuck.name} — the nose `
       + `has to stay clear of the jaws at Z${round(ctx.chuck.z)}`);
@@ -750,7 +871,10 @@ export function generateTurnFinish({
   // from clear air, at the feed, and says what is missing.
   // (the innermost the nose reaches: a stub the facing left in the middle of
   // the end is in its way if it is wider than that, not wider than its centre)
-  const proud = barEndAfter(ctx.bar, earlier, path[0][1] - nose) - path[0][0];
+  // (and never less than the axis: a part that ends in a point has a nose centre
+  // nearer the axis than the nose is wide, and "facing reaches in to a negative
+  // radius" is not a question the facing operation can fail)
+  const proud = barEndAfter(ctx.bar, earlier, Math.max(0, path[0][1] - nose)) - path[0][0];
   if (proud > 1e-6) {
     cl.warn(`the bar still stands ${round(proud)}mm past where this pass starts, Z${round(path[0][0])} `
       + `— nothing ahead of it faces the end, and the nose runs into it on the way in, so it is fed `
@@ -765,22 +889,98 @@ export function generateTurnFinish({
 
   cl.info(`finished ${Math.abs(ctx.zStart - (stopped ? end : zEnd)).toFixed(2)}mm of profile`
     + (nose > 0 ? `, compensated for a ${nose}mm nose` : ' with no nose compensation'));
-  // What a finishing insert is actually being asked to take.
+  // What the insert could not get at.
   //
-  // A finish pass follows the profile wherever it goes, including down into a
-  // recess no roughing cycle could open — and then the cut it takes there is
-  // the whole depth of the recess in one bite. Measured on the test shaft: a
-  // DCMT 07 with a 0.4mm nose driven 3.09mm into the ⌀24 groove behind the ⌀30
-  // shoulder, with the operation reporting only that it had finished 90mm of
-  // profile. Nothing else in the program says so either, because the pass that
-  // should have opened it is one nobody added.
-  for (const recess of enclosedRecesses(raw)) {
-    if (recess.depth <= Math.max(nose, allowance) + 0.1) continue;
+  // A finish pass used to follow the profile wherever it went, including down
+  // into a recess no roughing cycle could open — and the cut it took there was
+  // the whole depth of the recess in one bite: a DCMT 07 with a 0.4mm nose driven
+  // 3.09mm into the ⌀24 groove behind the ⌀30 shoulder on the test shaft, with
+  // the operation reporting only that it had finished 90mm of profile. The pass
+  // is planned for the insert and not for its nose now (see insertReach), so it
+  // crosses a recess the insert's body cannot get into, and says that it did.
+  // A groove ahead of this pass that reaches the floor has opened it already,
+  // and then there is nothing to say.
+  const recesses = enclosedRecesses(raw).filter((r) => r.depth > Math.max(nose, allowance) + 0.1);
+  for (const recess of recesses) {
+    if (groovedAhead(earlier, recess, allowance)) continue;
     cl.warn(`⌀${dia(recess.radius)} at Z${recess.z.toFixed(2)} is ${recess.depth.toFixed(2)}mm `
       + `below the ⌀${dia(recess.shoulder)} either side of it — no turning pass can reach in `
-      + 'there, so this insert takes the whole depth in one cut; open it with a grooving tool first');
+      + 'there, so this pass crosses it and leaves it as it is; open it with a grooving tool first');
+  }
+  // …and the places the insert is held off the part that are not a recess: a
+  // diameter that falls away toward the chuck faster than the edge behind the
+  // nose does, a spigot behind a flange. Same reading, same amount.
+  for (const held of heldOff(whole, offsetProfile(withAllowance, nose))) {
+    if (recesses.some((r) => held.to >= r.from - nose && held.from <= r.to + nose)) continue;
+    if (groovedAhead(earlier, { from: held.from, to: held.to, radius: held.radius }, allowance)) continue;
+    const where = held.to - held.from > 0.05
+      ? `from Z${round(held.from)} to Z${round(held.to)}` : `at Z${round(held.from)}`;
+    cl.warn(`the insert cannot follow ⌀${dia(held.radius)} ${where} — `
+      + 'its body behind the nose would cut into the part there, so the pass stays up to '
+      + `${held.amount.toFixed(2)}mm off the surface and leaves that standing. A sharper insert `
+      + 'with more lead, a grooving tool, or turning that part from the other end reaches it');
   }
   return finishTurn(cl, ctx, tool, 'external');
+}
+
+/**
+ * Where a path that keeps the whole insert clear of the part runs above the path
+ * that keeps only the nose clear, and by how much: the places the insert is held
+ * off the surface it was asked to follow.
+ *
+ * @param held the path for the insert, [[z, r], …]
+ * @param ideal the path for the nose alone, in the same order
+ * @returns [{ from, to, amount, radius }] — Z along the bar, the most the path
+ *   stands off the nose-only one, and the part's radius where that is
+ */
+function heldOff(held, ideal, threshold = 0.02) {
+  // the higher of the ideal path's two sides at a vertical step
+  const idealAt = (z) => {
+    let best = -Infinity;
+    for (let i = 0; i + 1 < ideal.length; i++) {
+      const [az, ar] = ideal[i];
+      const [bz, br] = ideal[i + 1];
+      const lo = Math.min(az, bz);
+      const hi = Math.max(az, bz);
+      if (z < lo - 1e-9 || z > hi + 1e-9) continue;
+      best = Math.max(best, hi - lo < 1e-9 ? Math.max(ar, br) : ar + ((br - ar) * (z - az)) / (bz - az));
+    }
+    return best;
+  };
+  const out = [];
+  let open = null;
+  const close = () => { if (open) out.push(open); open = null; };
+  for (const [z, r] of held) {
+    const base = idealAt(z);
+    const excess = Number.isFinite(base) ? r - base : 0;
+    if (excess > threshold) {
+      if (!open) open = { from: z, to: z, amount: 0, radius: base };
+      open.from = Math.min(open.from, z);
+      open.to = Math.max(open.to, z);
+      if (excess > open.amount) { open.amount = excess; open.radius = base; }
+    } else {
+      close();
+    }
+  }
+  close();
+  return out;
+}
+
+/**
+ * Has a grooving operation ahead of this one already opened `recess`: one that
+ * spans it along the bar and goes down to its floor, less what it was told to
+ * leave?
+ */
+function groovedAhead(earlier, recess, allowance = 0) {
+  if (!Array.isArray(earlier)) return false;
+  return earlier.some((op) => {
+    if (op?.type !== 'turnGroove' || op.params?.grooveInternal) return false;
+    const { topZ, bottomZ, grooveRadius } = op.params ?? {};
+    if (!Number.isFinite(topZ) || !Number.isFinite(bottomZ) || !Number.isFinite(grooveRadius)) return false;
+    const left = Math.max(0, op.params.stockToLeave ?? 0);
+    return bottomZ <= recess.from + 0.5 && topZ >= recess.to - 0.5
+      && grooveRadius + left <= recess.radius + allowance + 0.05;
+  });
 }
 
 /**
@@ -1044,7 +1244,15 @@ function plungeRadially(cl, { from, to, peck, internal, clear, lanes = null }) {
   const escape = internal ? clear - 0.5 : clear + 0.5;
   const total = Math.abs(to - from);
   const sign = to > from ? 1 : -1;
-  const bite = peck > 0 ? Math.min(peck, total) : total;
+  // A peck is a bite of a few tenths of a millimetre; one of a billionth is a
+  // typing slip, and the loop below took it literally — six billion pecks, and
+  // the tab never came back. No cut anybody means is more than this many.
+  const MAX_PECKS = 1000;
+  const bite = peck > 0 ? Math.min(Math.max(peck, total / MAX_PECKS), total) : total;
+  if (peck > 0 && peck < total / MAX_PECKS - 1e-12 && !cl.notes.some((n) => /pecks — pecking/.test(n.text))) {
+    cl.warn(`a peck of ${peck}mm over ${Math.round(total * 100) / 100}mm of depth is more than `
+      + `${MAX_PECKS} pecks — pecking ${Math.round(bite * 1000) / 1000}mm instead`);
+  }
   let at = from;
   let n = 0;
   while (Math.abs(at - to) > 1e-9) {

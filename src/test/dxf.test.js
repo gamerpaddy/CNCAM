@@ -309,3 +309,25 @@ test('a spline given only by the points it passes through still comes in', () =>
   const b = boundsOf(paths);
   assert.eq(`${b.min.join()} ${b.max.join()}`, '0,0 30,5', 'through the points it was given');
 });
+
+test('an arc or ellipse whose start angle is enormous does not hang the import', () => {
+  // The end angle was brought above the start by adding a turn at a time. With
+  // a start of 1e300 adding 2π to a small end changes nothing, so the loop never
+  // ended — on one ARC, in a file that otherwise read fine, freezing the tab.
+  const arc = parseDXF(dxf(['0', 'ARC', '8', 'a', '10', '0', '20', '0', '40', '5',
+    '50', '1e300', '51', '10']));
+  assert.eq(arc.paths.length, 1, 'the arc comes in');
+  assert.ok(arc.paths[0].points.every(Number.isFinite), 'with real coordinates');
+  const ellipse = parseDXF(dxf(['0', 'ELLIPSE', '8', 'a', '10', '0', '20', '0', '11', '10',
+    '21', '0', '40', '0.5', '41', '1e300', '42', '0.5']));
+  assert.eq(ellipse.paths.length, 1, 'and so does the ellipse');
+  // and the ordinary readings are unchanged: equal angles are the whole circle,
+  // an end below the start runs the long way round counter-clockwise
+  const full = parseDXF(dxf(['0', 'ARC', '10', '0', '20', '0', '40', '5', '50', '30', '51', '30']));
+  const b = boundsOf(full.paths);
+  assert.close(b.max[0] - b.min[0], 10, 0.05, 'a start equal to its end is a full circle');
+  const wrap = parseDXF(dxf(['0', 'ARC', '10', '0', '20', '0', '40', '5', '50', '270', '51', '90']));
+  const w = boundsOf(wrap.paths);
+  assert.close(w.max[0], 5, 1e-6, '270 to 90 goes through 0 degrees, the right-hand half');
+  assert.ok(w.min[0] > -1e-6, 'and not the left');
+});

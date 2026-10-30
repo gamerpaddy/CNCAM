@@ -292,6 +292,9 @@ export function stockOutline(stock, grow = 0, segments = 96) {
   ]];
 }
 
+/** The most depth levels one cut may have: 0.01mm of stepdown down a 50mm pocket. */
+export const MAX_DEPTH_PASSES = 5000;
+
 /**
  * Depth pass sequence: topZ (exclusive) down to bottomZ (always included last).
  *
@@ -311,6 +314,14 @@ export function depthPasses(topZ, bottomZ, stepdown, options = {}) {
   // the tolerance keeps a depth that is an exact multiple of the stepdown from
   // rounding up to one more pass than it needs
   const passes = Math.max(1, Math.ceil(total / stepdown - 1e-9));
+  // A stepdown of 1e-9, or a Bottom Z a billion below the top, is a few hundred
+  // million levels — which used to be built one at a time until the array
+  // refused with "Invalid array length", after eight seconds. Said as what it
+  // is, at once: no cut anybody means is this many passes.
+  if (!(passes <= MAX_DEPTH_PASSES)) {
+    throw new Error(`a stepdown of ${stepdown}mm over ${Math.round(total * 1000) / 1000}mm of depth `
+      + `is ${Number.isFinite(passes) ? passes.toLocaleString('en') : 'endless'} passes — check the Stepdown, Top Z and Bottom Z`);
+  }
   const step = total / passes;
   for (let i = 1; i < passes; i++) depths.push(topZ - step * i);
   depths.push(bottomZ);

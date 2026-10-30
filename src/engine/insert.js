@@ -434,7 +434,21 @@ export function toolPose(tool) {
   }
   // OD turning: lay the major edge at the lead angle, body trailing to +Z/+X,
   // then clock the whole tool by the mount angle.
-  const rot = eps / 2 - lean + mount;
+  //
+  // Past 90° the lead is the angle of the *end* edge, the one that faces a
+  // shoulder, and the edge that trails along the finished surface is what is left
+  // of the corner: (180 − lead) − corner, off the axis. For the 80° insert of
+  // a roughing tool that is the 5° the old rule laid every insert's trailing edge
+  // at, but it is not for any other corner, and a profiling tool is exactly
+  // where it matters — a 55° insert on a 93° holder trails at 32°, a 35° one on
+  // 107.5° at 37.5°, and these are the tools that are bought to copy a taper
+  // back toward the chuck. Laid at 5° regardless, a DCMT was drawn, engaged and
+  // planned as a tool that could not turn a 10° back-taper. The old rule stays as
+  // the floor, so a corner too wide for the holder's lead (a square insert on a
+  // 95° holder is not a real tool) is given its clearance instead of a trailing
+  // edge that dips below the nose.
+  const trail = ground > 90 ? Math.max(ground - 90, 180 - ground - eps) : 90 - lean;
+  const rot = trail - 90 + eps / 2 + mount;
   return { rotationDeg: rot, shank: bodyDir(rot), approach: 'external', flipZ: hand === 'L' };
 }
 
@@ -508,6 +522,87 @@ export function latheToolOutline(tool, { holderLength = null, bladeDepth = null 
     for (const s of sections) s.points = s.points.map(([z, x]) => [-z, x]);
   }
   return sections;
+}
+
+/**
+ * What of the part an insert can get at: the lowest the insert reaches at each
+ * distance along the bar from its nose centre — `[[dz, dr], …]`, ascending in
+ * `dz`, `dr` the radial offset of the lowest point of the metal there.
+ *
+ * The nose centre is the point the CL names, so this is the shape that has to
+ * stay out of the part while that point is driven along a path. A turning pass
+ * has always been planned as if the tool were its nose alone, a disc of the nose
+ * radius, and that is right in the open: it is wrong the moment the surface
+ * falls away behind the nose. A 95° insert is a nose with an edge running back
+ * from it at 5° to the axis, twelve millimetres long, and a diameter that
+ * steps down toward the chuck at any steeper slope than that is *under* that
+ * edge — the nose followed the profile into it and the flank went through the
+ * metal behind. Measured with a DCMT on a part that is ⌀32 at the free end and
+ * falls away at 28° toward the chuck: the finishing pass put the insert 2.8mm
+ * into the taper, and the 45° chamfer on a part's chuck end 0.9mm into the
+ * diameter above it.
+ *
+ * Only the insert, not the holder behind it. The holder is drawn along the
+ * insert's bisector (see `toolPose`) to say which side of the cut the body is
+ * on, not to say where a particular shank runs, and a clearance that came from
+ * a drawing of one would be a guess about a holder nobody described.
+ *
+ * Only an outside turning insert: a boring bar reaches the other way, and a
+ * blade, a thread form and a drill are not planned from their flanks. Null for
+ * those, and for a tool with no body to speak of.
+ *
+ * @returns [[dz, dr], …] the lower hull of the insert, or null
+ */
+export function insertReach(tool) {
+  if ((tool?.type ?? 'turning') !== 'turning') return null;
+  const insert = latheToolOutline(tool).find((s) => s.kind === 'insert');
+  if (!insert || insert.points.length < 3) return null;
+  const pts = insert.points;
+  const n = pts.length;
+
+  // The outline is seated on the filleted point nearest the sharp corner, which
+  // is the bottom of the nose arc, not the centre of it; the CL names the
+  // centre. The arc's vertices are consecutive and all on the circle, so three
+  // of them give the centre exactly, with no assumption about which way the
+  // corner points — a custom insert's corner can point anywhere.
+  const nose = Math.max(0, tool?.noseRadius ?? 0);
+  let tipAt = 0;
+  for (let i = 1; i < n; i++) {
+    if (Math.hypot(pts[i][0], pts[i][1]) < Math.hypot(pts[tipAt][0], pts[tipAt][1])) tipAt = i;
+  }
+  let centre = [0, 0];
+  if (nose > 0.01) {
+    const a = pts[(tipAt - 2 + n) % n];
+    const b = pts[tipAt];
+    const c = pts[(tipAt + 2) % n];
+    const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+    if (Math.abs(d) > 1e-9) {
+      centre = [
+        ((a[0] ** 2 + a[1] ** 2) * (b[1] - c[1]) + (b[0] ** 2 + b[1] ** 2) * (c[1] - a[1])
+          + (c[0] ** 2 + c[1] ** 2) * (a[1] - b[1])) / d,
+        ((a[0] ** 2 + a[1] ** 2) * (c[0] - b[0]) + (b[0] ** 2 + b[1] ** 2) * (a[0] - c[0])
+          + (c[0] ** 2 + c[1] ** 2) * (b[0] - a[0])) / d,
+      ];
+    }
+  }
+  const rel = pts.map(([z, x]) => [z - centre[0], x - centre[1]]);
+
+  // The lower hull, by Z: the lowest metal at each offset along the bar. For the
+  // convex inserts of the catalogue that is the underside of the outline; for a
+  // hand-drawn one with a notch in it the hull fills the notch, which can only
+  // make the insert look bigger than it is, never smaller.
+  const sorted = [...rel].sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+  const hull = [];
+  for (const q of sorted) {
+    while (hull.length >= 2) {
+      const [o, a] = [hull[hull.length - 2], hull[hull.length - 1]];
+      if ((a[0] - o[0]) * (q[1] - o[1]) - (a[1] - o[1]) * (q[0] - o[0]) <= 1e-12) hull.pop();
+      else break;
+    }
+    if (hull.length && Math.abs(hull[hull.length - 1][0] - q[0]) < 1e-9) continue;
+    hull.push(q);
+  }
+  return hull.length >= 2 ? hull : null;
 }
 
 /**

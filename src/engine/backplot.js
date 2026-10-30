@@ -304,8 +304,8 @@ function movesOverClamps(cl, fixtures) {
  *   moves it took to get there (which says how far the walks can have slipped)
  */
 export function comparePaths(a, b) {
-  const A = arcLengths(trimRapids(collapsePecks(pathPoints(a))));
-  const B = arcLengths(trimRapids(collapsePecks(pathPoints(b))));
+  const A = arcLengths(trimRapids(collapsePecks(withoutRepeats(pathPoints(a)))));
+  const B = arcLengths(trimRapids(collapsePecks(withoutRepeats(pathPoints(b)))));
   // Two paths with no motion in them agree perfectly, and an operation that
   // machines nothing is common enough — a drill that matched no hole, a rest
   // pass with nothing left to take — that calling it an infinite discrepancy
@@ -335,6 +335,31 @@ export function comparePaths(a, b) {
     length: A.total,
     steps: Math.max(A.points.length, B.points.length),
   };
+}
+
+/**
+ * A path with its standing still taken out.
+ *
+ * A move that ends where the last one ended is a move the post does not write —
+ * there is no line to print for it — so the CL has it and the file does not. It
+ * is harmless as motion, and it is not harmless to the comparison: a waterline
+ * level ends with a rapid up, a *feed* of no length at the top, and a rapid
+ * down, and `collapsePecks` starts a hole where the feeding starts. With the
+ * empty feed there the CL's hole began at the top of the lift and the file's at
+ * the bottom of it, the two paths parted by the height of every level change,
+ * and a correct program on a plate with holes in it was reported as 114mm of
+ * "bug in the post". Compared to the printing resolution, which is also how
+ * close two printed positions have to be to be one line.
+ */
+function withoutRepeats(points) {
+  const out = [];
+  for (const p of points) {
+    const q = out[out.length - 1];
+    if (q && Math.abs(p[0] - q[0]) < SAME_XY && Math.abs(p[1] - q[1]) < SAME_XY
+      && Math.abs(p[2] - q[2]) < SAME_XY) continue;
+    out.push(p);
+  }
+  return out;
 }
 
 /** Enough to put a sample on every move of a long program, and no more. */
@@ -468,9 +493,14 @@ function pecked(points, from, to) {
 
 /**
  * Close enough to be the same hole. Coordinates are printed to three decimals,
- * so two blocks that name one position can differ by half a thousandth.
+ * so two blocks that name one position can differ by half a thousandth — and
+ * the toolpath itself names "the same place" twice with a thousandth between
+ * them where a link was computed from the end of one pass and the start of the
+ * next. At a thousandth exactly, a correct waterline on a part with a boss in it
+ * was a hole on one side of the comparison and not on the other, ten
+ * millimetres of "post bug" apart.
  */
-const SAME_XY = 1e-3;
+const SAME_XY = 3e-3;
 
 /** Drop the linking at either end, keeping the path through the metal. */
 function trimRapids(points) {

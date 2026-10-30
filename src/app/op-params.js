@@ -295,7 +295,7 @@ export const OP_PARAM_GROUPS = [
           + 'depth is worked out from the cutter\'s point angle.',
       },
       {
-        key: 'threadPitch', label: 'Pitch (mm)', min: 0, step: 0.05,
+        key: 'threadPitch', label: 'Pitch (mm)', min: 0, max: 50, step: 0.05,
         ops: ['tap', 'threadMill'],
         hint: 'Millimetres per turn. Left at 0 it is the cutter\'s own pitch — a tap '
           + 'has one thread and only one, and a thread mill is sold by the pitch it '
@@ -404,7 +404,7 @@ export const OP_PARAM_GROUPS = [
         hint: 'Width of cut the pass holds to — small bites buy full-depth passes at high feed (0.1–0.3 is usual)',
       },
       {
-        key: 'stockToLeave', label: 'Stock to leave (mm)', min: 0,
+        key: 'stockToLeave', label: 'Stock to leave (mm)', min: 0, max: 100,
         // turnGroove reads it — for the floor and, where the groove is wider
         // than the blade, for both shoulders — and was the one operation in
         // the app that read it without being asked
@@ -641,7 +641,7 @@ export const OP_PARAM_GROUPS = [
           + 'there the tool going as deep as it can reach is the right answer.',
       },
       {
-        key: 'boundaryExtra', label: 'Overrun past the part (mm)', min: 0, step: 0.5,
+        key: 'boundaryExtra', label: 'Overrun past the part (mm)', min: 0, max: 1000, step: 0.5,
         ops: ['parallel3d'],
         when: (op) => (op.params.parallelBoundary ?? 'part') !== 'stock',
         hint: 'On top of the cutter radius. Worth a little where the wall has to '
@@ -746,7 +746,7 @@ export const OP_PARAM_GROUPS = [
     title: 'Thread',
     fields: [
       {
-        key: 'threadPitch', label: 'Pitch (mm)', min: 0.1, step: 0.05, ops: ['turnThread'],
+        key: 'threadPitch', label: 'Pitch (mm)', min: 0.1, max: 50, step: 0.05, ops: ['turnThread'],
         hint: 'The distance from one crest to the next. M10×1.5 is a 1.5mm pitch.',
       },
       {

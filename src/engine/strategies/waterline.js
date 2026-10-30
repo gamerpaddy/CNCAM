@@ -90,10 +90,24 @@ export function profileSteps(tool, spacing, maxBands = 12) {
 
   // the profile as [radius, height], densely enough to read either way
   const points = cuttingPoints(tool, 48).filter(([, z]) => z <= tip + 1e-9);
-  /** The widest the cutter is anywhere at or below `h`. */
+  /**
+   * The widest the cutter is anywhere at or below `h` — read along the profile,
+   * not off its corner points. A cone is two of them (the tip and the shoulder),
+   * and asking only the points at or below `h` made it a needle until the very
+   * top: a 90° chamfer mill was planned at its own tip radius, band after band,
+   * and stood on the wall it should have stood 5mm off.
+   */
   const radiusBelow = (h) => {
     let widest = 0;
-    for (const [pr, pz] of points) if (pz <= h + 1e-9 && pr > widest) widest = pr;
+    for (let i = 0; i < points.length; i++) {
+      const [pr, pz] = points[i];
+      if (pz <= h + 1e-9 && pr > widest) widest = pr;
+      if (i === 0) continue;
+      const [qr, qz] = points[i - 1];
+      if (qz < h - 1e-9 && pz > h + 1e-9) {
+        widest = Math.max(widest, qr + ((pr - qr) * (h - qz)) / (pz - qz));
+      }
+    }
     return Math.min(r, widest);
   };
 

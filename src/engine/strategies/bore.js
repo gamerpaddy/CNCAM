@@ -21,7 +21,7 @@ import { computeBounds } from '../../geom/mesh.js';
 import { applyCutting } from '../cutting.js';
 import { approach, entryPlane, holeSurfaceZ } from '../heights.js';
 import { regionAllowsPoint } from '../regions.js';
-import { findHoles } from './drill.js';
+import { findHoles, orderHoles } from './drill.js';
 
 export function generateBore({
   mesh, tool, params, regions, stock,
@@ -84,7 +84,7 @@ export function generateBore({
   }
 
   const perHole = (params.depthMode ?? 'bottomZ') === 'hole';
-  sized.sort((a, b) => a.cy - b.cy || a.cx - b.cx);
+  orderHoles(sized);
 
   const done = [];
   let tooDeep = 0;

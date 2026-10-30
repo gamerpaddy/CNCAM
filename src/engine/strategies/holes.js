@@ -20,7 +20,7 @@ import { applyCutting, effectiveCutting } from '../cutting.js';
 import { holeApproachZ } from '../heights.js';
 import { regionAllowsPoint } from '../regions.js';
 import { tipAngleOf, fluteLengthOf, shankWidthBetween } from '../tool-geometry.js';
-import { findHoles, findBosses } from './drill.js';
+import { findHoles, findBosses, orderHoles } from './drill.js';
 
 /**
  * How much smaller than the thread the hole is, as a share of the pitch.
@@ -87,7 +87,7 @@ function holesFor(cl, {
     cl.info(`${many(matched.length - holes.length)} skipped — under a clamp `
       + 'or outside the picked regions');
   }
-  holes.sort((a, b) => a.cy - b.cy || a.cx - b.cx);
+  orderHoles(holes);
   return { holes, found, topZ, bounds };
 }
 
@@ -140,10 +140,15 @@ export function generateSpot({
   const clearance = params.clearanceHeight;
   const retractZ = holeApproachZ(topZ, stock, params, 0.5);
   const maxR = Math.max(0.05, tool.diameter / 2);
+  // A centre drill or a chamfer mill does not end in a point but in a flat of
+  // its own: the cone starts that wide, and only the rest of the width is the
+  // point's to make. Chamfering and engraving read the same field the same way.
+  const tipR = Math.min(Math.max(0, (tool.tipDiameter ?? 0) / 2), maxR * 0.9);
 
   cl.rapid(holes[0].cx, holes[0].cy, clearance);
   let clipped = 0;
   let widest = 0;
+  let flatter = 0;
   for (const h of holes) {
     // the cone is as wide as asked, or as wide as the hole when nothing was
     // asked — which is the chamfer case
@@ -155,7 +160,8 @@ export function generateSpot({
     // the second reason to run the operation at all.
     if ((wanted > 0 ? wanted : h.r * 2) > maxR * 2 + 1e-9) clipped++;
     widest = Math.max(widest, across);
-    const depth = (across / 2) / Math.tan(half);
+    if (across / 2 <= tipR) flatter++;
+    const depth = Math.max(0, across / 2 - tipR) / Math.tan(half);
     cl.drill(h.cx, h.cy, h.top - depth, { retractZ, peck: 0, dwell: params.dwell ?? 0 });
   }
   // What the cones actually came out at, not what was asked for.
@@ -163,6 +169,10 @@ export function generateSpot({
     ? `⌀${widest.toFixed(2)} with a ${angle}° point — as wide as this cutter goes`
     : `${wanted > 0 ? `⌀${wanted}` : 'to the hole diameter'} with a ${angle}° point`;
   cl.info(`${plural(holes.length, 'hole')} spotted ${across}`);
+  if (flatter > 0) {
+    cl.warn(`${plural(flatter, 'spot')} ${verb(flatter, 'is', 'are')} no wider than the cutter's own `
+      + `⌀${(tipR * 2).toFixed(2)} flat tip, so the tip only touches the surface`);
+  }
   if (clipped > 0) {
     cl.warn(`${wanted > 0 ? `⌀${params.spotDiameter} is`
       : `${plural(clipped, 'hole')} ${verb(clipped, 'is', 'are')}`} `
@@ -203,7 +213,7 @@ export function generateTap({
   }
 
   const drill = tapDrillDiameter(tool.diameter, pitch);
-  const { holes, topZ } = holesFor(cl, {
+  const { holes, topZ, bounds } = holesFor(cl, {
     mesh,
     tool,
     params,
@@ -236,16 +246,38 @@ export function generateTap({
   cl.tapping(pitch, params.threadHand ?? 'right');
   cl.rapid(holes[0].cx, holes[0].cy, clearance);
   let shortened = 0;
+  let brokeThrough = 0;
   for (const h of holes) {
     const floor = perHole ? Math.max(h.bottom, params.bottomZ) : params.bottomZ;
-    const blind = h.bottom > -Infinity && h.bottom > params.bottomZ - 1e-6;
-    const z = blind ? floor + lead : floor;
+    // A hole has a floor of its own unless the scan found it still going at the
+    // end of the range (see drill.js findHoles). The test used to be "reaches
+    // Bottom Z", which a through hole does too — so every through hole in a
+    // plate was tapped as though it were blind, stopping a lead short of the
+    // underside whatever Bottom Z said.
+    const blind = !h.runsOn;
+    // and never below that floor, even when Bottom Z is deeper: a tap that is
+    // asked for "every hole to Z0" on a hole whose floor is at Z8 is driven into
+    // the metal under it
+    let z = blind ? Math.max(floor, h.bottom) + lead : floor;
     if (blind && lead > 0) shortened++;
+    // The other end of the same fact. A tap's first threads are ground away to
+    // lead it in, so what comes out of the underside of a through hole is a tap
+    // whose lead is still cutting: stopped on the underside, the last two
+    // threads of a plate are never formed. It goes on by the lead, as the
+    // drill goes on by its point (see drill.js).
+    if (!blind && lead > 0 && z <= bounds.min[2] + 2e-3) {
+      z -= lead;
+      brokeThrough++;
+    }
     cl.drill(h.cx, h.cy, z, { retractZ, peck: 0, dwell: 0 });
   }
   cl.tapping(0);
   cl.info(`${plural(holes.length, 'hole')} tapped M${tool.diameter}×${pitch}`
     + (feed > 0 ? ` at ${feed.toFixed(0)} mm/min — ${spindleRpm} rpm × ${pitch}mm` : ''));
+  if (brokeThrough > 0) {
+    cl.info(`${plural(brokeThrough, 'through hole')} tapped ${lead.toFixed(2)}mm past the `
+      + `underside, so the tap's ${tool.leadThreads ?? 2}-thread lead is out and the last threads are whole`);
+  }
   if (shortened > 0) {
     cl.info(`${plural(shortened, 'blind hole')} stopped ${lead.toFixed(2)}mm short — `
       + `the tap's ${tool.leadThreads ?? 2}-thread lead cuts nothing below that`);

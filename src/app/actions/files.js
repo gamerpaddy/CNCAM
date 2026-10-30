@@ -6,6 +6,7 @@
 
 import { createModel, createDrawing, uid } from '../../doc/schema.js';
 import { plural } from '../../engine/text.js';
+import { describeRepairs } from '../../doc/repair.js';
 import { openFile, saveFile, ACCEPT } from '../../io/files.js';
 import { parseSTL } from '../../io/stl.js';
 import { parseOBJ } from '../../io/obj.js';
@@ -211,16 +212,16 @@ export function makeFileActions(ctx, program) {
     file ??= await openFile(ACCEPT.project);
     if (!file) return;
     try {
-      const { models, restored } = doc.loadJSON(new TextDecoder().decode(file.buffer));
+      const { models, restored, repairs } = doc.loadJSON(new TextDecoder().decode(file.buffer));
       // A file opened from disk is not (yet) one of the projects this browser
       // keeps, so the next save into the store starts its own history rather
       // than adding a version to whatever was open before.
       ctx.storeProjectId = null;
       ctx.viewport.frameAll();
       const missing = models - restored;
-      ctx.ui.setStatus(missing
+      ctx.ui.setStatus((missing
         ? `Project loaded — ${missing} of ${plural(models, 'model')} saved without geometry, re-import them`
-        : 'Project loaded');
+        : 'Project loaded') + describeRepairs(repairs), missing > 0 || repairs.length > 0);
     } catch (err) {
       ctx.ui.setStatus(`Open failed: ${err.message}`, true);
     }
@@ -254,15 +255,16 @@ export function makeFileActions(ctx, program) {
       onOpen: (json, meta) => {
         if (ctx.simulation) program.closeSimulation();
         try {
-          const { models, restored } = doc.loadJSON(json);
+          const { models, restored, repairs } = doc.loadJSON(json);
           ctx.storeProjectId = meta.id;
           invalidateFaces();
           program.refreshGcodePreview(false);
           ctx.viewport.frameAll();
           const missing = models - restored;
           ctx.ui.setStatus(`${meta.name} v${meta.version} opened`
-            + (missing ? ` — ${missing} of ${plural(models, 'model')} saved without geometry, re-import them` : ''),
-          missing > 0);
+            + (missing ? ` — ${missing} of ${plural(models, 'model')} saved without geometry, re-import them` : '')
+            + describeRepairs(repairs),
+          missing > 0 || repairs.length > 0);
         } catch (err) {
           ctx.ui.setStatus(`Could not open it: ${err.message}`, true);
         }
