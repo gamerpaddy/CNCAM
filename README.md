@@ -330,15 +330,7 @@ some of it.
 
 ## Licence
 
-CNCAM is released under the [WTFPL](LICENSE). Do whatever you want with it. Use
-it, change it, sell it, fork it, strip my name off it, I genuinely do not care.
-There is no attribution requirement and nothing to ask permission for.
-
-Two footnotes live in [NOTICE](NOTICE), neither of which restricts you.
-
-The first is a plain no-warranty disclaimer. The WTFPL grants permission and
-says nothing about liability, and this program writes G-code for machines that
-can hurt people, so it is worth stating that nothing here is guaranteed.
+CNCAM is released under the [WTFPL](LICENSE). Do whatever you want with it. But dont blame me if something goes wrong.
 
 The second is the vendored libraries. Those are other people's work and keep
 their own licences, so those apply if you redistribute them. three.js is MIT and
