@@ -6,11 +6,20 @@ import { MOVE_STRIDE, OP, FEED } from '../engine/cl.js';
 // Cutting in a clear blue, plunging in amber, and the rapids in orange a step
 // quieter than either: the metal being cut is what a backplot is read for, and
 // on a job with a lot of retracts the rapids are most of the lines on screen.
-const COLORS = {
-  rapid: new THREE.Color(0xe38a4e).multiplyScalar(0.8),
-  cut: new THREE.Color(0x5aa8ec),
-  plunge: new THREE.Color(0xe8c25e),
+// The table itself lives in path-colors.js (see there for why).
+import { PATH_COLORS } from './path-colors.js';
+export { PATH_COLORS };
+
+// The other ways of colouring the metal-cutting lines (the `colorBy` style).
+// Rapids keep their own colour in every one of them: they are the lines that
+// must never be taken for metal being cut, whatever the cut ones are saying.
+const FEED_COLORS = {
+  [FEED.CUT]: new THREE.Color(0x5aa8ec),
+  [FEED.RAMP]: new THREE.Color(0x5fd08a),
+  [FEED.LEAD]: new THREE.Color(0xb68cf0),
+  [FEED.PLUNGE]: new THREE.Color(0xe8c25e),
 };
+const SCRATCH = new THREE.Color();
 
 /** How loud the backplot is, as a multiplier on every colour. */
 const BRIGHTNESS = { dim: 0.55, normal: 1, bright: 1.45 };
@@ -35,7 +44,8 @@ const UNFOCUSED = 0.22;
  * Each vertex carries the index of the program it came from, so one of them
  * can be brought forward (see `focusToolpath`) without rebuilding anything.
  *
- * @param style { rapids, brightness } — dropping rapids leaves only the metal
+ * @param style { rapids, brightness, colors: { cut, rapid, plunge } as hex,
+ *   colorBy: 'move' | 'operation' | 'depth' | 'feed' } — dropping rapids leaves only the metal
  *   being cut, which is what you want when checking a path rather than its
  *   linking; eleven overlapping paths in one colour is the normal state of a
  *   finished job.
@@ -43,15 +53,24 @@ const UNFOCUSED = 0.22;
 export function buildToolpathObject(clPrograms, style = {}) {
   const showRapids = style.rapids !== false;
   const gain = BRIGHTNESS[style.brightness] ?? 1;
+  // a colour the person chose, falling back to the built-in for any not given
+  const colorOf = (name) => new THREE.Color(style.colors?.[name] ?? PATH_COLORS[name]);
   const palette = {};
-  for (const [name, color] of Object.entries(COLORS)) {
+  for (const name of Object.keys(PATH_COLORS)) {
+    const color = colorOf(name);
     palette[name] = [
       Math.min(1, color.r * gain), Math.min(1, color.g * gain), Math.min(1, color.b * gain),
     ];
   }
 
-  // pass one: how many segments
+  const colorBy = style.colorBy ?? 'move';
+
+  // pass one: how many segments — and, for the depth ramp, how deep the metal
+  // cutting goes, so the ramp spans what is actually there rather than the
+  // rapid heights above it
   let segments = 0;
+  let cutLow = Infinity;
+  let cutHigh = -Infinity;
   for (const cl of clPrograms) {
     const d = cl.moves;
     let started = false;
@@ -60,12 +79,43 @@ export function buildToolpathObject(clPrograms, style = {}) {
       if (d[o] === OP.DRILL) {
         segments += (started && showRapids ? 1 : 0) + 1 + (showRapids ? 1 : 0);
         started = true;
+        if (d[o + 3] < cutLow) cutLow = d[o + 3];
+        if (d[o + 3] > cutHigh) cutHigh = d[o + 3];
         continue;
       }
       if (started && (showRapids || d[o] !== OP.RAPID)) segments++;
+      if (d[o] !== OP.RAPID) {
+        if (d[o + 3] < cutLow) cutLow = d[o + 3];
+        if (d[o + 3] > cutHigh) cutHigh = d[o + 3];
+      }
       started = true;
     }
   }
+
+  /**
+   * The colour of one metal-cutting segment, written into a scratch array — a
+   * fresh one per segment is the allocation this file was rewritten to avoid.
+   * `z` is the segment's height, for the depth ramp.
+   */
+  const ink = [0, 0, 0];
+  const cutInk = (feedClass, owner, z) => {
+    if (colorBy === 'operation') {
+      // golden-angle hues: neighbouring operations are as far apart as the
+      // wheel allows, however many there are
+      SCRATCH.setHSL((owner * 0.618034) % 1, 0.65, 0.62);
+    } else if (colorBy === 'depth') {
+      const t = cutHigh > cutLow ? (z - cutLow) / (cutHigh - cutLow) : 1;
+      SCRATCH.setHSL(0.62 - 0.57 * Math.min(1, Math.max(0, t)), 0.8, 0.6);   // blue deep, orange high
+    } else if (colorBy === 'feed') {
+      SCRATCH.copy(FEED_COLORS[feedClass] ?? FEED_COLORS[FEED.CUT]);
+    } else {
+      return feedClass === FEED.PLUNGE ? palette.plunge : palette.cut;
+    }
+    ink[0] = Math.min(1, SCRATCH.r * gain);
+    ink[1] = Math.min(1, SCRATCH.g * gain);
+    ink[2] = Math.min(1, SCRATCH.b * gain);
+    return ink;
+  };
 
   // pass two: the same walk, writing
   const positions = new Float32Array(segments * 6);
@@ -97,7 +147,7 @@ export function buildToolpathObject(clPrograms, style = {}) {
         const top = d[o + 4];
         const bottom = d[o + 3];
         if (started && showRapids) seg(px, py, pz, x, y, top, palette.rapid, owner);
-        seg(x, y, top, x, y, bottom, palette.plunge, owner);
+        seg(x, y, top, x, y, bottom, cutInk(FEED.PLUNGE, owner, (top + bottom) / 2), owner);
         if (showRapids) seg(x, y, bottom, x, y, top, palette.rapid, owner);
         px = x; py = y; pz = top;
         started = true;
@@ -108,8 +158,7 @@ export function buildToolpathObject(clPrograms, style = {}) {
       const z = d[o + 3];
       const rapid = d[o] === OP.RAPID;
       if (started && (showRapids || !rapid)) {
-        const color = rapid ? palette.rapid
-          : d[o + 7] === FEED.PLUNGE ? palette.plunge : palette.cut;
+        const color = rapid ? palette.rapid : cutInk(d[o + 7], owner, (pz + z) / 2);
         seg(px, py, pz, x, y, z, color, owner);
       }
       px = x; py = y; pz = z;

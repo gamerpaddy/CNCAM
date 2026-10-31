@@ -813,7 +813,7 @@ test('every field of the cutter but its name and its photo is part of the finger
 
   const before = opFingerprint(doc, op, setup);
   for (const [key, value] of Object.entries(tool)) {
-    if (key === 'id' || key === 'name' || key === 'image') continue;
+    if (key === 'id' || key === 'name' || key === 'image' || key === 'coating') continue;
     const changed = typeof value === 'number' ? value + 1
       : typeof value === 'string' ? `${value}x`
         : typeof value === 'boolean' ? !value : [...(value ?? []), { diameter: 1, length: 1 }];

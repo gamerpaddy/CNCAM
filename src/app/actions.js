@@ -12,6 +12,7 @@
 
 import { openHelp } from './help.js';
 import { openOptions as dialogOptions } from './options-dialog.js';
+import { openPalette } from './command-palette.js';
 import { setSetting } from './settings.js';
 import { PROJECTION_LABELS, PROJECTION_HINTS } from '../view/views.js';
 import { makeSetupSpace } from './actions/setup-space.js';
@@ -77,6 +78,10 @@ export function makeActions(ctx) {
     return ctx.viewport.projection;
   }
 
+  function showPalette() {
+    openPalette(ctx);
+  }
+
   function openOptions() {
     dialogOptions({
       onChange: (key) => {
@@ -85,6 +90,14 @@ export function makeActions(ctx) {
         if (key === 'hintStyle') ctx.rerenderProps?.();
       },
       onStatus: (message, isError = false) => ctx.ui.setStatus(message, isError),
+      // rows that act on the window itself rather than store a value
+      onAction: (key) => {
+        if (key === 'resetLayout') {
+          ctx.ui.resetPanels();
+          return 'Panels are back at their default sizes';
+        }
+        return null;
+      },
     });
   }
 
@@ -110,6 +123,7 @@ export function makeActions(ctx) {
     setProjection,
     liveProjection,
     openOptions,
+    openPalette: showPalette,
     viewportResized,
     undo,
     redo,

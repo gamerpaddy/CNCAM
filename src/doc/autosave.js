@@ -133,7 +133,11 @@ export function clearSaved() {
  * Failures are reported once and then tolerated — losing the autosave is an
  * annoyance, but it must never break the session that is running.
  */
-export function attachAutosave(doc, { onError } = {}) {
+export function attachAutosave(doc, { onError, delay = SAVE_DELAY } = {}) {
+  // `delay` is how long the document must be quiet before it is written (ms):
+  // a preference, because serialising a large model on every pause is a cost a
+  // slow disk may want paid less often. A pending save is still made when the
+  // page is hidden, whatever the delay.
   let timer = null;
   let warned = false;
   let writing = null;
@@ -168,7 +172,7 @@ export function attachAutosave(doc, { onError } = {}) {
 
   const onChange = () => {
     if (timer) clearTimeout(timer);
-    timer = setTimeout(save, SAVE_DELAY);
+    timer = setTimeout(save, delay);
   };
 
   // A save still waiting on its debounce when the page goes away is an edit

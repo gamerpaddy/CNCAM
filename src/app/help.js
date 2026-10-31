@@ -50,6 +50,11 @@ const WORKFLOW = [
     + 'same menu writes a file per operation, and an operation\'s own menu in the '
     + 'tree exports just that one. The dialect comes from the machine you chose. '
     + 'New, Open and Save are under File.'],
+  ['Make it yours', 'Ctrl+K finds any command by typing — a named view, the '
+    + 'projection, a colour scheme, "check a G-code file". Options (Ctrl+,) holds the '
+    + 'colour scheme, accent, interface size, viewport backdrop and toolpath colours, '
+    + 'and can save all of them to a file to carry to another machine. The button '
+    + 'beside the summary at the bottom says what to do next.'],
 ];
 
 export function openHelp(ctx) {

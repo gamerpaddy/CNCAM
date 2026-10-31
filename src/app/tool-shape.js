@@ -22,6 +22,7 @@
 
 import {
   toolSections, toolLength, toolMaxRadius, fluteLengthOf, cuttingPoints, tipAngleOf,
+  cuttingRadiusOf,
 } from '../engine/tool-geometry.js';
 import {
   isLatheTool, latheToolOutline, latheToolBounds, insertIcOf, INSERT_SHAPES,
@@ -30,6 +31,19 @@ import {
 import { isPhoto, photoElement } from './tool-photo.js';
 
 const NS = 'http://www.w3.org/2000/svg';
+
+// How every drawing here is painted: 'shaded', 'flat' or 'outline'. Held in the
+// module and pushed in by applySettings (main.js) rather than read from the
+// preferences here — this file is drawn from node by the tests, and the
+// preferences pull in the viewport.
+let previewStyle = 'shaded';
+let calloutsOn = true;
+export function setToolDrawing({ style, callouts }) {
+  previewStyle = ['shaded', 'flat', 'outline'].includes(style) ? style : 'shaded';
+  calloutsOn = callouts !== false;
+}
+/** Whether the large previews carry dimension lines (the toolCallouts preference). */
+export function toolCalloutsEnabled() { return calloutsOn; }
 
 let uid = 0;
 
@@ -64,6 +78,57 @@ export const TYPE_COLORS = {
   parting: INSERT,
   threading: INSERT,
 };
+
+/**
+ * What a cutter is made of, as a colour and a name.
+ *
+ * 'auto' is the family's usual grind (TYPE_COLORS above) and is what every tool
+ * made before this field existed reads as, so nothing changes colour until
+ * somebody says what theirs is. The others are the finishes a machinist can see
+ * on the bench: bare carbide and HSS, the violet-grey of TiAlN, the near-black
+ * of DLC and the pale shimmer of a diamond coating. It is a label — it moves no
+ * path, which is why it is left out of the operation fingerprint.
+ */
+export const COATINGS = {
+  auto: { label: 'Standard', color: null, note: 'The usual grind for this kind of tool' },
+  hss: { label: 'HSS', color: '#c7c0b1', note: 'High-speed steel: drills, taps, budget end mills' },
+  carbide: { label: 'Carbide', color: '#bcc4cd', note: 'Uncoated solid carbide' },
+  tialn: { label: 'TiAlN', color: '#9a7fa8', note: 'Violet-grey coating for steel and hot cuts' },
+  dlc: { label: 'DLC', color: '#6b7380', note: 'Diamond-like carbon, near black: aluminium, plastics' },
+  diamond: { label: 'Diamond', color: '#c4e8ee', note: 'Diamond coated: graphite, composites' },
+};
+const LEGEND_ORDER = ['hss', 'carbide', 'tialn', 'dlc', 'diamond'];
+
+/** The coating key a tool answers to — unknown strings read as 'auto'. */
+export function coatingOf(tool) {
+  return COATINGS[tool?.coating] ? tool.coating : 'auto';
+}
+
+/** The body colour of a tool: its coating if it names one, else its family's. */
+export function toolColor(tool) {
+  return COATINGS[coatingOf(tool)].color ?? TYPE_COLORS[tool?.type] ?? TYPE_COLORS.flat;
+}
+
+/**
+ * The key to the colours: a swatch and a name per finish, the tool's own lit.
+ * Built from the table above, so the legend cannot list a finish the drawing
+ * does not know how to paint.
+ */
+export function coatingLegend(tool = null) {
+  const active = tool ? coatingOf(tool) : null;
+  const box = document.createElement('div');
+  box.className = 'coating-legend';
+  for (const key of LEGEND_ORDER) {
+    const item = document.createElement('span');
+    item.className = `coating-legend-item${key === active ? ' active' : ''}`;
+    item.title = COATINGS[key].note;
+    const chip = document.createElement('i');
+    chip.style.background = COATINGS[key].color;
+    item.append(chip, COATINGS[key].label);
+    box.append(item);
+  }
+  return box;
+}
 
 const SHANK_COLOR = '#7f8691';
 const HOLDER_COLOR = '#4c525c';
@@ -213,7 +278,7 @@ export function toolIcon(tool, {
     svg.setAttribute('preserveAspectRatio', 'xMidYMax meet');
   }
 
-  const cutting = color ?? TYPE_COLORS[tool.type] ?? TYPE_COLORS.flat;
+  const cutting = color ?? toolColor(tool);
   const scale = Math.max(vbWFinal, vbHFinal);
   drawSections(svg, sections, {
     cutting, horizontal, stroke: scale * 0.012, fluteTop, tool,
@@ -320,7 +385,7 @@ function latheIcon(tool, {
   const id = `lt${++uid}`;
   const defs = document.createElementNS(NS, 'defs');
   const group = document.createElementNS(NS, 'g');
-  const insertColor = color ?? TYPE_COLORS[tool.type] ?? TYPE_COLORS.turning;
+  const insertColor = color ?? toolColor(tool);
   const stroke = Math.max(vbW, vbH) * 0.012;
 
   // The bite goes on *under* the tool, so the insert paints over it and the
@@ -329,13 +394,9 @@ function latheIcon(tool, {
 
   sections.forEach((section, i) => {
     const base = section.kind === 'insert' ? insertColor : HOLDER_COLOR;
-    const gradient = cylinderGradient(`${id}-${i}`, base);
-    defs.append(gradient);
     const path = document.createElementNS(NS, 'path');
     path.setAttribute('d', closedPath(section.points));
-    path.setAttribute('fill', `url(#${id}-${i})`);
-    path.setAttribute('stroke', 'rgba(255,255,255,0.5)');
-    path.setAttribute('stroke-width', String(stroke));
+    paintPart(path, defs, `${id}-${i}`, base, stroke);
     path.setAttribute('stroke-linejoin', 'round');
     path.setAttribute('class', `tool-part tool-part-${section.kind}`);
     group.append(path);
@@ -416,7 +477,7 @@ function closedPath(points) {
  * answered by a drawing that stops at the top of the flutes. Drawn to one
  * scale, because the whole point is the proportion between the three.
  */
-export function toolAssembly(tool, { width = 150, height = 190 } = {}) {
+export function toolAssembly(tool, { width = 150, height = 190, callouts = false } = {}) {
   // For a lathe tool the "whole assembly" question is how far the bar sticks
   // out and which way the insert faces, and both are already the drawing above
   // — just with the real shank length rather than a stub of it.
@@ -439,19 +500,145 @@ export function toolAssembly(tool, { width = 150, height = 190 } = {}) {
   svg.setAttribute('aria-hidden', 'true');
   // a margin in tool units, so the outline is never clipped by its own stroke
   const pad = Math.max(length, maxR * 2) * 0.06;
-  const vbW = Math.max(maxR * 2 + pad * 2, (length + pad * 2) * (width / height));
-  const vbH = Math.max(length + pad * 2, vbW * (height / width));
-  svg.setAttribute('viewBox', `${-vbW / 2} ${-vbH + pad} ${vbW} ${vbH}`);
-  svg.setAttribute('preserveAspectRatio', 'xMidYMax meet');
+  // Room for the dimension lines, in units of the text they carry: one for the
+  // overall length on the left, two columns on the right, and the diameter
+  // under the tip. Sized from the tool so the lettering is the same fraction of
+  // the drawing whether the cutter is a 3mm ball or a 100mm face mill.
+  const fs = callouts ? Math.max(length, maxR * 2.4) * 0.05 : 0;
+  const room = callouts
+    ? { left: fs * 3.4, right: fs * 6.2, bottom: fs * 4.6 }
+    : { left: 0, right: 0, bottom: 0 };
+  const contentW = maxR * 2 + pad * 2 + room.left + room.right;
+  const contentH = length + pad * 2 + room.bottom;
+  const vbW = Math.max(contentW, contentH * (width / height));
+  const vbH = Math.max(contentH, vbW * (height / width));
+  const x0 = -(maxR + pad + room.left) - (vbW - contentW) / 2;
+  svg.setAttribute('viewBox', `${x0} ${-vbH + pad + room.bottom} ${vbW} ${vbH}`);
+  svg.setAttribute('preserveAspectRatio', callouts ? 'xMidYMid meet' : 'xMidYMax meet');
 
   drawSections(svg, sections, {
-    cutting: TYPE_COLORS[tool.type] ?? TYPE_COLORS.flat,
+    cutting: toolColor(tool),
     horizontal: false,
     stroke: vbW * 0.006,
     fluteTop: fluteLengthOf(tool),
     tool,
   });
+  if (callouts) svg.append(dimensionLayer(tool, fs, vbW * 0.004));
   return svg;
+}
+
+/**
+ * The numbers a machinist reads off a cutter, as measured from its geometry.
+ *
+ * Every figure comes from `engine/tool-geometry.js` — the same sections the 3D
+ * cutter is revolved from and the reach check evaluates — so the callouts on
+ * the drawing cannot disagree with the tool that cuts. `stickout` is tip to
+ * the face of the holder, which is the number that decides how deep a pocket
+ * can go before the holder meets the wall.
+ */
+export function toolDimensions(tool) {
+  const sections = toolSections(tool);
+  const shank = sections.find((sec) => sec.kind === 'shank');
+  const holder = sections.find((sec) => sec.kind === 'holder');
+  const topOf = (sec) => sec.points[sec.points.length - 1][1];
+  const shankR = shank ? Math.max(...shank.points.map(([r]) => r)) : null;
+  return {
+    diameter: 2 * cuttingRadiusOf(tool),
+    flute: fluteLengthOf(tool),
+    shankDiameter: shankR ? 2 * shankR : null,
+    // the holder starts where the shank ends; no holder means the shank is all there is
+    stickout: holder ? topOf(shank ?? sections[0]) : null,
+    overall: toolLength(tool),
+    cornerRadius: tool?.type === 'bull' && tool.cornerRadius > 0 ? tool.cornerRadius : null,
+    tipAngle: ['drill', 'chamfer', 'spot'].includes(tool?.type) ? tipAngleOf(tool) : null,
+    holderDiameter: holder ? 2 * Math.max(...holder.points.map(([r]) => r)) : null,
+  };
+}
+
+/** Trim a millimetre figure to what is worth reading: 6, 6.35, 12.7. */
+function mm(v) { return String(Math.round(v * 100) / 100); }
+
+/**
+ * Dimension lines over the assembly drawing: diameter under the tip, flute and
+ * stickout on the right, overall length on the left, with the corner radius and
+ * point angle in the line under the diameter. Drawn in the drawing's own
+ * coordinates (X across, Y down from the tip), so they sit exactly where the
+ * metal ends.
+ */
+function dimensionLayer(tool, fs, stroke) {
+  const d = toolDimensions(tool);
+  const g = document.createElementNS(NS, 'g');
+  g.setAttribute('class', 'tool-callouts');
+  g.setAttribute('fill', 'none');
+  g.setAttribute('stroke', 'currentColor');
+  g.setAttribute('stroke-width', String(stroke));
+  g.setAttribute('font-size', String(fs));
+
+  const line = (x1, y1, x2, y2, dashed = false) => {
+    const el = document.createElementNS(NS, 'path');
+    el.setAttribute('d', `M ${round(x1)} ${round(y1)} L ${round(x2)} ${round(y2)}`);
+    if (dashed) el.setAttribute('stroke-dasharray', `${fs * 0.3} ${fs * 0.3}`);
+    g.append(el);
+  };
+  // a dimension line with a tick at each end — ticks, not arrows, so a short
+  // dimension on a small cutter does not vanish under its own arrowheads
+  const dim = (x1, y1, x2, y2) => {
+    line(x1, y1, x2, y2);
+    const horizontal = y1 === y2;
+    for (const [x, y] of [[x1, y1], [x2, y2]]) {
+      if (horizontal) line(x, y - fs * 0.35, x, y + fs * 0.35);
+      else line(x - fs * 0.35, y, x + fs * 0.35, y);
+    }
+  };
+  const text = (label, x, y, { rotate = false } = {}) => {
+    const t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', String(round(x)));
+    t.setAttribute('y', String(round(y)));
+    t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('fill', 'currentColor');
+    t.setAttribute('stroke', 'none');
+    if (rotate) t.setAttribute('transform', `rotate(-90 ${round(x)} ${round(y)})`);
+    t.textContent = label;
+    g.append(t);
+  };
+
+  const cutR = d.diameter / 2;
+  const holderR = (d.holderDiameter ?? d.diameter) / 2;
+  const widest = Math.max(holderR, d.shankDiameter ? d.shankDiameter / 2 : 0, cutR);
+
+  // diameter, under the tip
+  const yDia = fs * 1.5;
+  line(-cutR, 0, -cutR, yDia + fs * 0.4, true);
+  line(cutR, 0, cutR, yDia + fs * 0.4, true);
+  dim(-cutR, yDia, cutR, yDia);
+  text(`⌀${mm(d.diameter)}`, 0, yDia + fs * 1.3);
+  const extra = [];
+  if (d.cornerRadius) extra.push(`R${mm(d.cornerRadius)}`);
+  if (d.tipAngle) extra.push(`${mm(d.tipAngle)}°`);
+  if (extra.length) text(extra.join('  '), 0, yDia + fs * 2.5);
+
+  // flute length, just off the flutes on the right
+  const xFlute = cutR + fs * 1.6;
+  line(cutR, -d.flute, xFlute + fs * 0.4, -d.flute, true);
+  dim(xFlute, 0, xFlute, -d.flute);
+  text(`${mm(d.flute)}`, xFlute + fs * 1.1, -d.flute / 2, { rotate: true });
+
+  // stickout, clear of the holder
+  if (d.stickout) {
+    const xStick = widest + fs * 1.8;
+    line(d.shankDiameter ? d.shankDiameter / 2 : cutR, -d.stickout, xStick + fs * 0.4, -d.stickout, true);
+    dim(xStick, 0, xStick, -d.stickout);
+    text(`stickout ${mm(d.stickout)}`, xStick + fs * 1.1, -d.stickout / 2, { rotate: true });
+  }
+
+  // overall length, on the far side
+  const xAll = -(widest + fs * 1.8);
+  line(-holderR, -d.overall, xAll - fs * 0.4, -d.overall, true);
+  line(-cutR, 0, xAll - fs * 0.4, 0, true);
+  dim(xAll, 0, xAll, -d.overall);
+  text(`overall ${mm(d.overall)}`, xAll - fs * 0.5, -d.overall / 2, { rotate: true });
+
+  return g;
 }
 
 /** Paint a silhouette: one shaded body per section, then the flutes on top. */
@@ -470,15 +657,9 @@ function drawSections(svg, sections, { cutting, horizontal, stroke, fluteTop, to
 
   const FILLS = { cutting, shank: SHANK_COLOR, holder: HOLDER_COLOR };
   sections.forEach((section, i) => {
-    const gradient = cylinderGradient(`${id}-${i}`, FILLS[section.kind] ?? cutting);
-    defs.append(gradient);
     const path = document.createElementNS(NS, 'path');
     path.setAttribute('d', mirroredPath(section.points));
-    path.setAttribute('fill', `url(#${id}-${i})`);
-    // a light edge, not a dark one: these sit on a dark panel, where a black
-    // outline merges into the background and eats the shape
-    path.setAttribute('stroke', 'rgba(255,255,255,0.5)');
-    path.setAttribute('stroke-width', String(stroke));
+    paintPart(path, defs, `${id}-${i}`, FILLS[section.kind] ?? cutting, stroke);
     path.setAttribute('stroke-linejoin', 'round');
     path.setAttribute('class', `tool-part tool-part-${section.kind}`);
     group.append(path);
@@ -488,6 +669,36 @@ function drawSections(svg, sections, { cutting, horizontal, stroke, fluteTop, to
   if (flutes) group.append(flutes);
 
   svg.append(defs, group);
+}
+
+/**
+ * Paint one part of a drawing in the style the person chose.
+ *
+ * One place, because every drawing — milling, lathe, icon, assembly — has to
+ * agree on what "shaded", "flat" and "outline" mean. A light edge in the first
+ * two, not a dark one: these sit on a dark panel, where a black outline merges
+ * into the background and eats the shape. Outline drops the fill to a wash of
+ * the body colour and draws the edge in it, which is how a drawing looks on a
+ * setup sheet.
+ */
+function paintPart(path, defs, id, base, stroke) {
+  const style = previewStyle;
+  if (style === 'outline') {
+    path.setAttribute('fill', base);
+    path.setAttribute('fill-opacity', '0.1');
+    path.setAttribute('stroke', base);
+    path.setAttribute('stroke-width', String(stroke * 1.5));
+    return;
+  }
+  if (style === 'flat') {
+    path.setAttribute('fill', base);
+    path.setAttribute('stroke', 'rgba(255,255,255,0.35)');
+  } else {
+    defs.append(cylinderGradient(id, base));
+    path.setAttribute('fill', `url(#${id})`);
+    path.setAttribute('stroke', 'rgba(255,255,255,0.5)');
+  }
+  path.setAttribute('stroke-width', String(stroke));
 }
 
 /**

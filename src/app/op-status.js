@@ -178,7 +178,7 @@ export function opFingerprint(doc, op, setup = null) {
     // a cutter you had already generated with marked all of its passes out of
     // date, for a change that cannot move a single move.
     tool && Object.fromEntries(
-      Object.entries(tool).filter(([k]) => k !== 'id' && k !== 'name' && k !== 'image')),
+      Object.entries(tool).filter(([k]) => k !== 'id' && k !== 'name' && k !== 'image' && k !== 'coating')),
     drawing && [drawing.paths, drawing.placement],
     // The models this setup machines, resolved — not the raw `modelIds`, which
     // is empty on every setup the app makes and so never changes. Importing or

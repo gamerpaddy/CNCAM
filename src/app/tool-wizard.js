@@ -18,7 +18,10 @@
 
 import { el, dialogCloseButton } from './layout.js';
 import { numberInput, parseNumber, formatNumber } from './number-input.js';
-import { toolIcon, toolAssembly, describeTool, TYPE_COLORS } from './tool-shape.js';
+import {
+  toolIcon, toolAssembly, describeTool, TYPE_COLORS, COATINGS, coatingLegend, toolDimensions,
+  toolCalloutsEnabled,
+} from './tool-shape.js';
 import {
   isPhoto, photoElement, pickPhotoFile, capturePhoto, photoFromTransfer,
 } from './tool-photo.js';
@@ -186,6 +189,15 @@ const SIZE_FIELDS = [
     when: (t) => !isLathe(t),
     hint: 'Tip to the bottom of the holder. Everything past this is holder, and holders crash.',
   },
+  // What it is made of. A label, not geometry: it colours the drawing and the
+  // library card and filters the picker, and moves no toolpath.
+  {
+    key: 'coating', label: 'Material / coating', type: 'select',
+    options: Object.keys(COATINGS),
+    labels: Object.fromEntries(Object.entries(COATINGS).map(([k, c]) => [k, c.label])),
+    hint: 'Carbide, HSS, TiAlN, DLC or diamond. Colours the drawing so the library '
+      + 'reads like the drawer it is; it does not change the toolpath.',
+  },
 ];
 
 function isLathe(draft) { return isLatheTool(draft.type); }
@@ -258,6 +270,7 @@ export function openToolWizard({
     // A photograph of the real cutter, or null for the drawing. Not derived
     // from anything and not affected by any other field — see app/tool-photo.js.
     image: null,
+    coating: 'auto',
   };
   // Editing a tool that exists is the same set of questions, and asking them in
   // the panel's flat list of eighteen fields — with no drawing, no warnings and
@@ -296,6 +309,7 @@ export function openToolWizard({
       feedPlunge: editing.feedPlunge ?? draft.feedPlunge,
       name: editing.name ?? '',
       image: isPhoto(editing.image) ? editing.image : null,
+      coating: COATINGS[editing.coating] ? editing.coating : 'auto',
       nameEdited: true,
       fluteEdited: true,
       shankEdited: true,
@@ -452,6 +466,7 @@ export function openToolWizard({
       feedCut: draft.feedCut,
       feedPlunge: draft.feedPlunge,
       image: draft.image,
+      coating: draft.coating,
     }, number);
   }
 
@@ -659,15 +674,27 @@ export function openToolWizard({
     // description beside *that* leaves it about forty pixels of column to wrap
     // into, which was a 500px-tall paragraph and the reason the lathe wizard
     // needed 909px of a 619px dialog and came up with scroll bars.
-    preview.classList.toggle('stacked', lathe);
+    //
+    // With the dimension callouts on, a milling tool is drawn wider (the lines
+    // and their lettering need the room) and the text goes underneath too.
+    const callouts = toolCalloutsEnabled() && !lathe;
+    preview.classList.toggle('stacked', lathe || callouts);
+    const dims = lathe ? null : toolDimensions(tool);
     preview.replaceChildren(
       lathe
         ? toolAssembly(tool, { width: 210, height: 108 })
-        : toolAssembly(tool, { width: 108, height: 210 }),
+        : callouts
+          ? toolAssembly(tool, { width: 232, height: 250, callouts: true })
+          : toolAssembly(tool, { width: 108, height: 210 }),
       el('div', { class: 'wiz-preview-text' }, [
         el('div', { class: 'wiz-preview-name' }, [tool.name]),
         el('div', { class: 'prop-note' }, [describeTool(tool)]),
         el('div', { class: 'prop-note' }, [reachText]),
+        ...(dims?.shankDiameter ? [el('div', { class: 'prop-note' }, [
+          `Shank ⌀${Math.round(dims.shankDiameter * 100) / 100}`
+          + (dims.holderDiameter ? ` · holder ⌀${Math.round(dims.holderDiameter * 100) / 100}` : ''),
+        ])] : []),
+        coatingLegend(tool),
         ...(isInsert(draft) && INSERT_NOTES[draft.insert]
           ? [el('div', { class: 'prop-note' }, [INSERT_NOTES[draft.insert]])] : []),
         ...toolWarnings(tool).map((w) => el('div', { class: 'prop-note warn' }, [w])),

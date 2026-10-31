@@ -364,6 +364,7 @@ export function toolFromPreset(preset, number = 1) {
     // export, and on every trip through a catalogue. See app/tool-photo.js.
     image: typeof merged.image === 'string' && merged.image.startsWith('data:image/')
       ? merged.image : null,
+    coating: typeof merged.coating === 'string' && merged.coating ? merged.coating : 'auto',
     minBore: merged.minBore ?? 0,
     maxDepth: merged.maxDepth ?? 0,
     cornerRadius: merged.cornerRadius ?? 0,

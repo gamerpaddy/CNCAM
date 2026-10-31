@@ -26,18 +26,60 @@
 // added in one go, since setting up a job usually means pulling several.
 
 import { el, dialogCloseButton } from './layout.js';
-import { toolIcon, describeTool } from './tool-shape.js';
+import {
+  toolIcon, toolAssembly, describeTool, coatingLegend, coatingOf, COATINGS,
+  toolCalloutsEnabled,
+} from './tool-shape.js';
+import { getSetting, setSetting } from './settings.js';
+import { TOOL_TYPE_LABELS } from '../doc/schema.js';
 import {
   presetsFor, userCatalogsFor, removeUserTool, machineCanHold, BUILTIN_CATALOGS,
   catalogById, createCatalog, renameCatalog, deleteCatalog, saveUserTool,
   loadCatalogs, DEFAULT_CATALOG,
-  serializeLibrary, deserializeCatalog,
+  serializeLibrary, deserializeCatalog, toolFromPreset, cuttingReadout,
 } from '../doc/tool-library.js';
 import { openContextMenu } from './context-menu.js';
 import { openToolWizard } from './tool-wizard.js';
 import { isPhoto, pickPhotoFile, capturePhoto } from './tool-photo.js';
 
 const ALL = 'all';
+
+// Favourites and recents are per-browser conveniences, like the library itself:
+// kept by name, because a catalogue entry has no id until it is in a project.
+// Every read and write is guarded — private windows and blocked storage throw.
+const FAVOURITES_KEY = 'cncam.toolFavourites';
+const RECENT_KEY = 'cncam.toolRecent';
+const RECENT_MAX = 16;
+
+function readList(key) {
+  try {
+    const list = JSON.parse(localStorage.getItem(key) ?? '[]');
+    return Array.isArray(list) ? list.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+function writeList(key, list) {
+  try { localStorage.setItem(key, JSON.stringify(list)); } catch { /* the star lasts this session only */ }
+}
+
+/** Remember that these were pulled into a project, newest first. */
+function rememberTools(tools) {
+  const names = tools.map((t) => t.name);
+  writeList(RECENT_KEY, [...names, ...readList(RECENT_KEY).filter((n) => !names.includes(n))]
+    .slice(0, RECENT_MAX));
+}
+
+// The size bands are where tools are bought in: 3mm and under for fine work,
+// the middle two for most of a job, and everything big enough to rough with.
+const SIZE_BANDS = [
+  { id: 'xs', label: '≤ 3', test: (d) => d <= 3 },
+  { id: 's', label: '3 – 6', test: (d) => d > 3 && d <= 6 },
+  { id: 'm', label: '6 – 12', test: (d) => d > 6 && d <= 12 },
+  { id: 'l', label: '> 12', test: (d) => d > 12 },
+];
+
+const shortType = (type) => (TOOL_TYPE_LABELS[type] ?? type).split(' (')[0];
 
 /**
  * @param machine 'mill' | 'turn' — which cutters this machine can hold
@@ -52,6 +94,7 @@ export function openToolPicker({
 }) {
   const dialog = el('dialog', { class: 'lib-dialog' });
   const body = el('div', { class: 'lib-body' });
+  const main = el('div', { class: 'lib-main' });
   const count = el('span', { class: 'lib-count' }, ['']);
   const catalogBar = el('div', { class: 'lib-catalogs' });
   let checkboxes = [];
@@ -64,12 +107,29 @@ export function openToolPicker({
   const picked = new Map();          // key → tool
   const keyOf = (tool, source) => `${source ?? ''}/${tool.name}`;
   let query = '';
+  // The filters narrow what is on screen and nothing else — they are not saved,
+  // because a picker that opens already filtered looks like a library that has
+  // lost half its tools. The layout and the order are kept: those are taste.
+  const typeFilter = new Set();
+  let sizeFilter = null;
+  let onlyFavourites = false;
+  let onlyRecent = false;
+  let view = getSetting('toolPickerView') === 'list' ? 'list' : 'grid';
+  let sortBy = getSetting('toolPickerSort');
+  let favourites = new Set(readList(FAVOURITES_KEY));
+  let recent = readList(RECENT_KEY);
   // which drawer is open. 'all' is every one of them at once, which is what the
   // dialog did before catalogues existed and is still the right default: most
   // people have one drawer and never touch this.
   let selected = ALL;
 
   function say(message, isError = false) { onStatus?.(message, isError); }
+
+  /** Every way a tool gets into the project goes through here, so it is remembered. */
+  function addTools(tools) {
+    rememberTools(tools);
+    onAdd(tools);
+  }
 
   // Searching a library of forty cutters by eye is the thing the grid above
   // makes fast and this makes unnecessary. Matches the name, the ISO code and
@@ -89,6 +149,148 @@ export function openToolPicker({
     ].filter(Boolean).join(' ').toLowerCase();
     // every word has to appear somewhere, so "6 ball" finds the 6mm ball nose
     return query.split(/\s+/).every((word) => haystack.includes(word));
+  }
+
+  /** The search box and the chips together — a tool has to pass both. */
+  function visible(tool) {
+    if (!matches(tool)) return false;
+    if (typeFilter.size && !typeFilter.has(tool.type)) return false;
+    if (sizeFilter && !SIZE_BANDS.find((b) => b.id === sizeFilter).test(tool.diameter ?? 0)) return false;
+    if (onlyFavourites && !favourites.has(tool.name)) return false;
+    if (onlyRecent && !recent.includes(tool.name)) return false;
+    return true;
+  }
+
+  /** Favourites first, then the chosen order; a stable sort keeps the catalogue's own. */
+  function ordered(tools) {
+    const by = {
+      name: (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }),
+      diameter: (a, b) => (a.diameter ?? 0) - (b.diameter ?? 0),
+      type: (a, b) => a.type.localeCompare(b.type) || (a.diameter ?? 0) - (b.diameter ?? 0),
+      recent: (a, b) => {
+        const rank = (t) => { const i = recent.indexOf(t.name); return i < 0 ? 1e6 : i; };
+        return rank(a) - rank(b);
+      },
+    }[sortBy];
+    return [...tools].sort((a, b) =>
+      (favourites.has(b.name) - favourites.has(a.name)) || (by ? by(a, b) : 0));
+  }
+
+  function toggleFavourite(tool) {
+    if (favourites.has(tool.name)) favourites.delete(tool.name); else favourites.add(tool.name);
+    writeList(FAVOURITES_KEY, [...favourites]);
+    build();
+  }
+
+  // --- the filter bar: layout, order and chips --------------------------------
+
+  const filterBar = el('div', { class: 'lib-filters' });
+  const sortSelect = el('select', { class: 'lib-sort', title: 'Order inside each group' }, [
+    ['catalogue', 'Catalogue order'], ['name', 'Name'], ['diameter', 'Diameter'],
+    ['type', 'Kind of tool'], ['recent', 'Recently used'],
+  ].map(([value, label]) => el('option', { value }, [label])));
+  sortSelect.value = sortBy;
+  sortSelect.addEventListener('change', () => {
+    sortBy = sortSelect.value;
+    setSetting('toolPickerSort', sortBy);
+    build();
+  });
+
+  function chip(label, active, onclick, title = '') {
+    const node = el('button', {
+      type: 'button', class: `lib-chip${active ? ' active' : ''}`, title, onclick,
+    }, [label]);
+    node.setAttribute('aria-pressed', String(active));
+    return node;
+  }
+
+  function viewButton(mode, label, title) {
+    const node = el('button', {
+      type: 'button', class: `lib-view${view === mode ? ' active' : ''}`, title,
+      onclick: () => { view = mode; setSetting('toolPickerView', mode); build(); },
+    }, [label]);
+    node.setAttribute('aria-pressed', String(view === mode));
+    return node;
+  }
+
+  function buildFilterBar(everything) {
+    const types = [...new Set(everything.map((t) => t.type))];
+    const count = (fn) => everything.filter(fn).length;
+    const anyFilter = typeFilter.size || sizeFilter || onlyFavourites || onlyRecent;
+    filterBar.replaceChildren(
+      el('div', { class: 'lib-view-toggle' }, [
+        viewButton('grid', 'Cards', 'Big drawings, three or four across'),
+        viewButton('list', 'List', 'Rows, with the whole tool drawn to scale beside them'),
+      ]),
+      sortSelect,
+      chip(`★ Favourites ${count((t) => favourites.has(t.name))}`, onlyFavourites, () => {
+        onlyFavourites = !onlyFavourites; build();
+      }, 'Only the tools you have starred'),
+      chip(`Recent ${count((t) => recent.includes(t.name))}`, onlyRecent, () => {
+        onlyRecent = !onlyRecent; build();
+      }, 'Tools you have added to a project lately'),
+      el('span', { class: 'lib-chip-sep' }),
+      ...types.map((type) => chip(`${shortType(type)} ${count((t) => t.type === type)}`,
+        typeFilter.has(type), () => {
+          if (typeFilter.has(type)) typeFilter.delete(type); else typeFilter.add(type);
+          build();
+        })),
+      el('span', { class: 'lib-chip-sep' }),
+      el('span', { class: 'lib-chip-label' }, ['⌀ mm']),
+      ...SIZE_BANDS.map((band) => chip(band.label, sizeFilter === band.id, () => {
+        sizeFilter = sizeFilter === band.id ? null : band.id; build();
+      }, 'Diameter of the cutter, or the inscribed circle of an insert')),
+      ...(anyFilter ? [el('button', {
+        type: 'button', class: 'lib-chip lib-chip-clear', onclick: clearFilters,
+      }, ['Clear filters'])] : []),
+    );
+  }
+
+  function clearFilters() {
+    typeFilter.clear(); sizeFilter = null; onlyFavourites = false; onlyRecent = false;
+    search.value = ''; query = '';
+    build();
+  }
+
+  // --- the preview beside the list ------------------------------------------
+
+  const pane = el('aside', { class: 'lib-pane' });
+  let paneTool = null;
+
+  /**
+   * The whole tool, to scale, with its dimensions — the list's answer to "which
+   * one is this, and how far does it stick out". Drawn from the materialised
+   * tool, because a catalogue entry has no shank or holder of its own and the
+   * assembly is the thing that shows them.
+   */
+  function showInPane(tool) {
+    if (view !== 'list') return;
+    paneTool = tool;
+    if (!tool) {
+      pane.replaceChildren(el('div', { class: 'lib-pane-empty' }, [
+        'Point at a tool to see it whole — flutes, shank, holder and the numbers between them.']));
+      return;
+    }
+    const full = toolFromPreset(tool);
+    pane.replaceChildren(
+      toolAssembly(full, { width: 232, height: 270, callouts: toolCalloutsEnabled() }),
+      el('div', { class: 'lib-pane-name' }, [tool.name]),
+      el('div', { class: 'lib-meta wrap' }, [describeTool(tool)]),
+      el('div', { class: 'lib-meta wrap' }, [cuttingHint(full)]),
+      el('div', { class: 'lib-meta wrap' }, [
+        `${COATINGS[coatingOf(tool)].label} — ${COATINGS[coatingOf(tool)].note}`]),
+      coatingLegend(tool),
+    );
+  }
+
+  /** The speeds a card quotes, plus the surface speed they work out to — computed, not looked up. */
+  function cuttingHint(tool) {
+    if (!(tool.spindleRpm > 0)) return 'no speeds set';
+    const { vc, load, loadLabel } = cuttingReadout(tool);
+    const lathe = tool.type === 'turning' || tool.type === 'boring'
+      || tool.type === 'parting' || tool.type === 'threading';
+    return `${tool.spindleRpm} rpm · F${tool.feedCut ?? '—'} · ${vc.toFixed(0)} m/min`
+      + `${lathe ? ' on ⌀30 bar' : ''} · ${load.toFixed(3)}mm ${loadLabel}`;
   }
 
   /**
@@ -124,15 +326,18 @@ export function openToolPicker({
     // next to a Ø12 rather than two icons of the same size
     const widest = Math.max(8, ...everything.map((t) => t.diameter ?? 0));
 
+    favourites = new Set(readList(FAVOURITES_KEY));
+    recent = readList(RECENT_KEY);
+    buildFilterBar(everything);
     const nodes = [];
     const shown = [];
     for (const group of groups) {
-      const visible = group.tools.filter(matches);
-      if (visible.length === 0) continue;
-      shown.push(...visible);
+      const here = ordered(group.tools.filter(visible));
+      if (here.length === 0) continue;
+      shown.push(...here);
       nodes.push(el('div', { class: 'lib-group' }, [
-        el('h3', {}, [group.title, el('span', { class: 'lib-group-count' }, [` ${visible.length}`])]),
-        el('div', { class: 'lib-grid' }, visible.map((tool) => card(tool, widest, {
+        el('h3', {}, [group.title, el('span', { class: 'lib-group-count' }, [` ${here.length}`])]),
+        el('div', { class: `lib-grid${view === 'list' ? ' list' : ''}` }, here.map((tool) => card(tool, widest, {
           catalogId: group.catalogId ?? null,
           catalogName: group.title,
           source: group.catalogId ?? group.source,
@@ -143,19 +348,44 @@ export function openToolPicker({
       ]));
     }
 
-    if (nodes.length === 0) {
-      nodes.push(el('div', { class: 'tree-empty' }, [query
-        ? `Nothing matches “${search.value}”.`
-        : selected === ALL
-          ? 'No cutters for this machine.'
-          : 'This catalogue is empty — build a tool and tick “Add to my library”, '
-            + 'or import one from a file.']));
-    }
+    if (nodes.length === 0) nodes.push(emptyState(everything.length));
     body.replaceChildren(...nodes);
-    count.textContent = query
+    main.classList.toggle('with-pane', view === 'list');
+    if (view === 'list') showInPane(shown.find((t) => t === paneTool) ?? shown[0] ?? null);
+    const narrowed = query || typeFilter.size || sizeFilter || onlyFavourites || onlyRecent;
+    count.textContent = narrowed
       ? `${shown.length} of ${everything.length}`
-      : `${everything.length} cutters`;
+      : `${everything.length} tools`;
     updateAddLabel();
+  }
+
+  /**
+   * What an empty list says: why it is empty, and the one thing to do about it.
+   * "Nothing here" with no way out was the whole message before.
+   */
+  function emptyState(total) {
+    const note = (text, ...buttons) => el('div', { class: 'lib-empty' }, [
+      el('div', { class: 'lib-empty-text' }, [text]),
+      el('div', { class: 'lib-empty-actions' }, buttons),
+    ]);
+    const clear = el('button', { onclick: clearFilters }, ['Clear filters']);
+    if (total > 0 && onlyFavourites && !query) {
+      return note('No favourites here yet. Press the star on a tool to keep it at the top '
+        + 'of its group, in every project.', clear);
+    }
+    if (total > 0 && onlyRecent && !query) {
+      return note('Nothing used lately. Tools you add to a project turn up here.', clear);
+    }
+    if (total > 0) {
+      return note(query
+        ? `Nothing matches “${search.value}” with these filters.`
+        : 'No tool passes these filters.', clear);
+    }
+    if (selected === ALL) return note('No tools for this machine.');
+    return note('This catalogue is empty. Build a tool and tick “Add to my library”, '
+      + 'or import one from a file.',
+    el('button', { class: 'primary-outline', onclick: () => { dialog.close(); onNew?.(); } },
+      ['+ New tool…']));
   }
 
   /** Rebuild the catalogue bar as well — after anything that adds or removes one. */
@@ -178,16 +408,35 @@ export function openToolPicker({
     box.checked = picked.has(key);
     checkboxes.push({ box, tool });
 
+    const starred = favourites.has(tool.name);
+    const star = el('button', {
+      type: 'button',
+      class: `lib-star${starred ? ' on' : ''}`,
+      title: starred ? 'Remove from favourites' : 'Add to favourites',
+    }, [starred ? '★' : '☆']);
+    star.setAttribute('aria-pressed', String(starred));
+    star.addEventListener('click', (e) => {
+      // inside a <label>: the click would otherwise tick the box as well
+      e.preventDefault();
+      e.stopPropagation();
+      toggleFavourite(tool);
+    });
     const children = [
       box,
+      star,
       el('div', { class: 'lib-preview' }, [
-        toolIcon(tool, { width: 168, height: 78, scaleTo: widest, orientation: 'horizontal' }),
+        toolIcon(tool, {
+          width: view === 'list' ? 104 : 168, height: view === 'list' ? 44 : 78,
+          scaleTo: widest, orientation: 'horizontal',
+        }),
       ]),
       el('div', { class: 'lib-text' }, [
         el('span', { class: 'lib-name' }, [tool.name]),
         el('span', { class: 'lib-meta' }, [describeTool(tool)]),
-        el('span', { class: 'lib-speeds' }, [
-          `${tool.spindleRpm ?? '—'} rpm · F${tool.feedCut ?? '—'}`,
+        el('span', { class: 'lib-speeds', title: 'Speeds from the library; surface speed is worked out from them' }, [
+          tool.spindleRpm > 0
+            ? `${tool.spindleRpm} rpm · F${tool.feedCut ?? '—'} · ${cuttingReadout(tool).vc.toFixed(0)} m/min`
+            : 'no speeds set',
         ]),
       ]),
     ];
@@ -216,10 +465,12 @@ export function openToolPicker({
       else picked.delete(key);
       updateAddLabel();
     });
+    node.addEventListener('mouseenter', () => showInPane(tool));
+    node.addEventListener('focusin', () => showInPane(tool));
     // double-click is "this one, now" — the same shortcut the strategy picker has
     node.addEventListener('dblclick', () => {
       dialog.close();
-      onAdd([tool]);
+      addTools([tool]);
     });
     node.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -245,7 +496,8 @@ export function openToolPicker({
     const add = {
       label: 'Add to the project',
       hint: 'The same as ticking it and pressing Add — double-clicking does it too',
-      onclick: () => { dialog.close(); onAdd([tool]); },
+      onclick: () => { dialog.close();
+      addTools([tool]); },
     };
     if (!catalogId) {
       return [
@@ -420,7 +672,7 @@ export function openToolPicker({
     // at the bottom, and nothing said the top three were about catalogues.
     const buttons = [
       el('button', {
-        title: 'A new, empty drawer to keep cutters in',
+        title: 'A new, empty drawer to keep tools in',
         onclick: newCatalog,
       }, ['New catalogue…']),
       ...(files ? [el('button', {
@@ -460,7 +712,7 @@ export function openToolPicker({
       el('span', { class: 'lib-hint' }, [builtin
         ? builtin.note
         : own
-          ? 'Yours: cutters here can be edited away, and written to a file.'
+          ? 'Yours: tools here can be edited away, and written to a file.'
           : 'Everything at once — your own drawers first, then the built-in ones.']),
     );
   }
@@ -486,8 +738,8 @@ export function openToolPicker({
   function removeSelected(catalog) {
     const emptying = catalog.id === 'mine';
     const what = emptying
-      ? `Empty “${catalog.name}”? Its ${catalog.tools.length} cutters are thrown away.`
-      : `Delete “${catalog.name}” and its ${catalog.tools.length} cutters?`;
+      ? `Empty “${catalog.name}”? Its ${catalog.tools.length} tools are thrown away.`
+      : `Delete “${catalog.name}” and its ${catalog.tools.length} tools?`;
     if (catalog.tools.length > 0 && !window.confirm(what)) return;
     deleteCatalog(catalog.id);
     if (!emptying) selected = ALL;
@@ -512,7 +764,7 @@ export function openToolPicker({
     if (!made) return say('Could not copy the catalogue (browser storage is unavailable)', true);
     selected = made.id;
     refresh();
-    say(`Copied ${tools.length} cutters into “${made.name}”`);
+    say(`Copied ${tools.length} tools into “${made.name}”`);
   }
 
   async function importCatalog() {
@@ -526,7 +778,7 @@ export function openToolPicker({
       if (!made) throw new Error('browser storage is unavailable');
       selected = made.id;
       refresh();
-      say(`Imported ${tools.length} cutters into “${made.name}”`);
+      say(`Imported ${tools.length} tools into “${made.name}”`);
     } catch (err) {
       say(`Catalogue import failed: ${err.message}`, true);
     }
@@ -537,11 +789,11 @@ export function openToolPicker({
       ? { name: 'All my tools', tools: userCatalogsFor(machine).flatMap((c) => c.tools) }
       : catalogById(selected);
     if (!catalog || catalog.tools.length === 0) {
-      return say('That catalogue has no cutters in it', true);
+      return say('That catalogue has no tools in it', true);
     }
     const file = `${catalog.name.replace(/[^\w.-]+/g, '-').toLowerCase()}-tools.json`;
     if (!(await files.save(file, serializeLibrary(catalog.tools, catalog.name)))) return undefined;
-    return say(`Exported ${catalog.tools.length} cutters from “${catalog.name}”`);
+    return say(`Exported ${catalog.tools.length} tools from “${catalog.name}”`);
   }
 
   const add = el('button', { class: 'primary' }, ['Add selected']);
@@ -553,9 +805,10 @@ export function openToolPicker({
   add.addEventListener('click', () => {
     const chosen = [...picked.values()];
     dialog.close();
-    if (chosen.length) onAdd(chosen);
+    if (chosen.length) addTools(chosen);
   });
 
+  main.append(body, pane);
   buildCatalogBar();
   build();
   dialog.append(
@@ -566,7 +819,14 @@ export function openToolPicker({
       search,
     ]),
     catalogBar,
-    body,
+    filterBar,
+    main,
+    el('div', { class: 'lib-legend-row' }, [
+      el('span', { class: 'lib-chip-label' }, ['Colour = material']),
+      coatingLegend(),
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'lib-hint' }, ['set per tool in the builder']),
+    ]),
     el('div', { class: 'lib-actions' }, [
       el('button', {
         class: 'primary-outline',

@@ -131,6 +131,13 @@ export function shortcuts(ctx) {
     },
     {
       group: 'View',
+      id: 'palette',
+      keys: 'Ctrl+K',
+      label: 'Find a command — every action in the app, by typing',
+      run: () => ctx.actions.openPalette(),
+    },
+    {
+      group: 'View',
       id: 'options',
       keys: 'Ctrl+,',
       label: 'Options',

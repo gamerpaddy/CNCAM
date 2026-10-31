@@ -481,6 +481,10 @@ export function buildLayout(root, actions, project) {
     exportButton,
     gcodeToggle,
     divider(),
+    iconButton('search', 'Find a command', {
+      onclick: actions.openPalette,
+      title: withKey('Find any command by typing — views, colour schemes, files, tools', 'palette'),
+    }),
     iconButton('sliders', 'Options', {
       onclick: actions.openOptions,
       title: withKey('Options — simulation detail, what the viewport draws, and how the editor behaves', 'options'),
@@ -654,7 +658,12 @@ export function buildLayout(root, actions, project) {
       : [{ label: 'No messages yet', disabled: true }]),
   }, [busy, statusText]);
   const summary = el('span', { class: 'status-summary' }, []);
-  const status = el('div', { class: 'status' }, [statusMessage, stopButton, summary]);
+  // What to do next, as a button — the checklist in the tree stands down once
+  // there is a program, and from there on (simulate, post) nothing said what
+  // comes after. Kept in the status line because that is where the eye goes
+  // when a job has just finished.
+  const nextStep = el('button', { type: 'button', class: 'status-next', hidden: true });
+  const status = el('div', { class: 'status' }, [statusMessage, stopButton, nextStep, summary]);
 
   const timeline = buildTimeline(
     (step, seconds) => actions.seekSimulation(step, seconds),
@@ -686,6 +695,7 @@ export function buildLayout(root, actions, project) {
     root.style.setProperty(`--${name}-size`, `${clampSize(name, value)}px`);
   }
 
+  let lastHint = null;     // so unfolding the checklist can redraw it
   const gcodeSplitter = makeSplitter('gcode', 'y', -1, setGcode);
   gcodeSplitter.classList.add('collapsed');
 
@@ -756,6 +766,32 @@ export function buildLayout(root, actions, project) {
       syncViewButtons();
     },
     setGcodeOpen,
+    /**
+     * Put every panel back where a fresh install has it, and unfold the
+     * checklist. The panel sizes are remembered between sessions, which is the
+     * right default until a drag leaves one so small or so large that the
+     * way back is not obvious.
+     */
+    resetPanels() {
+      const fresh = defaultSizes();
+      setTree(fresh.tree, true);
+      setProps(fresh.props, true);
+      setGcode(fresh.gcode, true);
+      hintFolded = false;
+      try { localStorage.setItem(HINT_KEY, '0'); } catch { /* private mode */ }
+      if (lastHint) this.setHint(lastHint);
+    },
+    /**
+     * The one thing to do next, or null for none.
+     * @param step { label, title, onclick }
+     */
+    setNextStep(step) {
+      nextStep.hidden = !step;
+      if (!step) return;
+      nextStep.textContent = step.label;
+      nextStep.title = step.title ?? step.label;
+      nextStep.onclick = step.onclick;
+    },
     /** The named view the camera is in, or null — see syncViewButtons. */
     setActiveView(name) {
       activeView = name ?? null;
@@ -849,6 +885,7 @@ export function buildLayout(root, actions, project) {
      *   or null clears it
      */
     setHint(steps) {
+      lastHint = steps;
       const list = Array.isArray(steps) ? steps : [];
       hint.classList.toggle('on', list.length > 0);
       if (list.length === 0) return hint.replaceChildren();

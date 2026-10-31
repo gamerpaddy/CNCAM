@@ -41,7 +41,7 @@ const CREASE_CHUNK = `
       // the shading normal has already been flipped for the facing side, so
       // the face normal is put in the same hemisphere before they are compared
       if ( dot( creaseFace, normal ) < 0.0 ) creaseFace = -creaseFace;
-      if ( dot( creaseFace, normal ) < uCreaseCos ) normal = creaseFace;
+      if ( dot( creaseFace, normal ) < uCreaseCos ) { normal = creaseFace; diffuseColor.rgb *= uWallShade; }
     }
   }
 `;
@@ -96,6 +96,7 @@ const WALL_CHUNK = `
           creaseFace = normalize( lean * vWallUp + length( flat0 ) * aim );
         }
         normal = creaseFace;
+        diffuseColor.rgb *= uWallShade;
       }
     }
   }
@@ -112,11 +113,19 @@ const WALL_CHUNK = `
  * @param walls whether the geometry carries an `aWall` bearing per vertex —
  *   see WALL_CHUNK. Off by default, because a mesh without the attribute would
  *   read it as zero and pay for the branch to learn nothing.
+ * @param wallShade a multiplier on the colour of every fragment the crease rule
+ *   decides is a wall (1 = none). Kept as a live uniform on
+ *   `material.userData.wallShade` so it can change without a recompile — the
+ *   "edge definition" setting: a wall reads as an edge when it is a little
+ *   darker than the floor beside it, and no extra cell is needed for that.
  */
-export function shadeWithCreases(material, creaseDeg = DEFAULT_CREASE_DEG, walls = false) {
+export function shadeWithCreases(material, creaseDeg = DEFAULT_CREASE_DEG, walls = false, wallShade = 1) {
   material.userData.creaseDeg = creaseDeg;
+  const wallUniform = { value: wallShade };
+  material.userData.wallShade = wallUniform;
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uCreaseCos = { value: Math.cos((creaseDeg * Math.PI) / 180) };
+    shader.uniforms.uWallShade = wallUniform;
     if (walls) {
       shader.vertexShader = shader.vertexShader
         .replace('void main() {', `${WALL_VERTEX}\nvoid main() {`)
@@ -124,7 +133,7 @@ export function shadeWithCreases(material, creaseDeg = DEFAULT_CREASE_DEG, walls
     }
     shader.fragmentShader = shader.fragmentShader
       .replace('void main() {',
-        `uniform float uCreaseCos;\n${walls ? 'varying vec3 vWallDir;\nvarying vec3 vWallUp;\n' : ''}void main() {`)
+        `uniform float uCreaseCos;\nuniform float uWallShade;\n${walls ? 'varying vec3 vWallDir;\nvarying vec3 vWallUp;\n' : ''}void main() {`)
       .replace('#include <normal_fragment_begin>',
         `#include <normal_fragment_begin>\n${walls ? WALL_CHUNK : CREASE_CHUNK}`);
   };

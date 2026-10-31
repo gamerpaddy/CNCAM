@@ -452,3 +452,21 @@ test('stopping the pool rejects what was waiting instead of leaving it hanging',
   assert.eq((await Promise.all(seen)).join(), 'stopped by you,stopped by you');
   assert.eq(pool.queue.length, 0, 'and nothing is left to run');
 });
+
+test('the callouts on a tool drawing are the tool geometry\'s own numbers', async () => {
+  const { toolDimensions, toolColor, coatingOf, COATINGS } = await import('../app/tool-shape.js');
+  const { createTool } = await import('../doc/schema.js');
+  const { toolLength, fluteLengthOf } = await import('../engine/tool-geometry.js');
+  const tool = createTool('bull');
+  Object.assign(tool, { diameter: 10, cornerRadius: 2, fluteLength: 22 });
+  const d = toolDimensions(tool);
+  assert.eq(d.diameter, 10, 'diameter');
+  assert.eq(d.flute, fluteLengthOf(tool), 'flute length');
+  assert.eq(d.overall, toolLength(tool), 'overall length');
+  assert.eq(d.cornerRadius, 2, 'corner radius');
+  assert.ok(d.stickout > d.flute && d.stickout < d.overall, 'the holder starts above the flutes');
+  // a coating colours the drawing; one nobody has heard of reads as the family's own
+  assert.eq(toolColor({ ...tool, coating: 'tialn' }), COATINGS.tialn.color, 'a named coating wins');
+  assert.eq(coatingOf({ coating: 'unobtainium' }), 'auto', 'an unknown one is standard');
+  assert.eq(toolColor({ ...tool, coating: 'auto' }), toolColor({ ...tool }), 'auto is the family colour');
+});

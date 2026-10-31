@@ -87,11 +87,102 @@ export function installHeadlight(scene, intensity = 0.45) {
   const light = new THREE.DirectionalLight(0xffffff, intensity);
   scene.add(light);
   scene.add(light.target);
-  return (camera) => {
+  const aim = (camera) => {
     light.position.copy(camera.position);
     camera.getWorldDirection(light.target.position);
     light.target.position.multiplyScalar(10).add(camera.position);
     light.target.updateMatrixWorld();
+  };
+  aim.light = light;   // so a rig can change its strength without a second one
+  return aim;
+}
+
+/**
+ * The whole rig in one place, and the one description of it.
+ *
+ * The lights used to be constructed in viewport.js with their numbers inline,
+ * which left no way to change them short of editing the constructor. A preset
+ * is a row here, so a new look is a new row and nothing else.
+ *
+ * Studio is the rig the app has always had (sky, a key from one side, a fill
+ * from the other, the headlight) plus a cool rim light that trails the camera:
+ * a rim from a fixed place would light the edges of a mill's part and leave a
+ * lathe's in the dark, because the two are looked at from opposite sides.
+ *
+ * @returns { apply({ preset, reflection }), aim(camera) } — `aim` replaces
+ *   the bare headlight function and is called at the same place, before each
+ *   render
+ */
+const LIGHT_PRESETS = {
+  studio: {
+    sky: 0.5, key: 1.15, fill: 0.7, rim: 0.55, head: 0.45,
+    keyColor: 0xfff3e4, fillColor: 0xe4eeff, rimColor: 0xbcd4ff,
+  },
+  soft: {
+    sky: 0.95, key: 0.6, fill: 0.55, rim: 0.3, head: 0.5,
+    keyColor: 0xffffff, fillColor: 0xffffff, rimColor: 0xdde8ff,
+  },
+  contrast: {
+    sky: 0.2, key: 1.9, fill: 0.25, rim: 0.7, head: 0.2,
+    keyColor: 0xfff0dc, fillColor: 0xd8e4ff, rimColor: 0xaecaff,
+  },
+  flat: {
+    sky: 1.25, key: 0.45, fill: 0.45, rim: 0, head: 0.7,
+    keyColor: 0xffffff, fillColor: 0xffffff, rimColor: 0xffffff,
+  },
+};
+
+/** How strongly the room is mirrored, by name — see the envReflection setting. */
+const REFLECTION = { minimal: 0.25, subtle: 0.55, normal: 0.9, strong: 1.5 };
+
+export function installLightRig(scene) {
+  // A hemisphere light's "sky" is whichever way its position points, and the
+  // default is +Y. This scene is Z-up, so the sky is put on +Z — otherwise the
+  // −Y face of every part, the one the mill's default view looks straight at,
+  // is lit as if it were underneath.
+  const sky = new THREE.HemisphereLight(0xffffff, 0x333944, 0.5);
+  sky.position.set(0, 0, 1);
+  scene.add(sky);
+  // Lit from both sides of the table, because the two machines are looked at
+  // from opposite ones: a mill from −Y, a lathe from +Y (the chuck has to be
+  // on the left). One key light meant whichever machine was not the one it was
+  // aimed at showed the part in silhouette.
+  const key = new THREE.DirectionalLight(0xffffff, 1.15);
+  key.position.set(100, -60, 150);
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.8);
+  fill.position.set(-60, 100, 120);
+  scene.add(fill);
+  const rim = new THREE.DirectionalLight(0xffffff, 0);
+  scene.add(rim);
+  scene.add(rim.target);
+  const head = installHeadlight(scene);
+  const headLight = head.light;
+
+  const apply = ({ preset, reflection } = {}) => {
+    if (preset !== undefined) {
+      const p = LIGHT_PRESETS[preset] ?? LIGHT_PRESETS.studio;
+      sky.intensity = p.sky;
+      key.intensity = p.key; key.color.set(p.keyColor);
+      fill.intensity = p.fill; fill.color.set(p.fillColor);
+      rim.intensity = p.rim; rim.color.set(p.rimColor);
+      headLight.intensity = p.head;
+    }
+    if (reflection !== undefined) {
+      scene.environmentIntensity = REFLECTION[reflection] ?? REFLECTION.normal;
+    }
+  };
+  apply({ preset: 'studio', reflection: 'normal' });
+
+  return {
+    apply,
+    aim(camera) {
+      head(camera);
+      // opposite the camera across the part, and a little above it
+      rim.position.set(-camera.position.x, -camera.position.y, Math.abs(camera.position.z) * 0.6 + 40);
+      rim.target.position.set(0, 0, 0);
+      rim.target.updateMatrixWorld();
+    },
   };
 }
 

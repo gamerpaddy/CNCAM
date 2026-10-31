@@ -9,7 +9,7 @@ import { SimulationView } from './simulation.js';
 import { HeightGizmos } from './height-gizmo.js';
 import { MoveGizmo } from './move-gizmo.js';
 import { buildAxes, OrientationTriad } from './axes.js';
-import { installEnvironment, installHeadlight } from './lighting.js';
+import { installEnvironment, installLightRig } from './lighting.js';
 import { spinAngle } from '../engine/simulate.js';
 import {
   VIEW_PRESETS, defaultViewFor, orbitUpOf, AXES_OF, SQUARE_ON_VIEWS,
@@ -43,6 +43,11 @@ export class Viewport {
     // the corner triad is drawn as a second pass into the same buffer, which
     // means the buffer has to survive the first one
     this.renderer.autoClear = false;
+    // Shadow maps are only drawn for a light that asks for one (the simulation's
+    // optional tool shadow, view/simulation.js), so enabling them costs nothing
+    // until then.
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
@@ -337,29 +342,11 @@ export class Viewport {
     // surface in the scene renders black — see view/lighting.js. The lights
     // below shape it; they were never going to light it on their own.
     this.disposeEnvironment = installEnvironment(this.scene, this.renderer);
-    this.scene.environmentIntensity = 0.9;
-
-    // A hemisphere light's "sky" is whichever way its position points, and the
-    // default is +Y. This scene is Z-up, so the default put the sky out to one
-    // side of the table and the ground colour on the other: the −Y face of
-    // every part — the one the mill's default view looks straight at — was lit
-    // as if it were underneath. Up is +Z here, as it is everywhere else.
-    const sky = new THREE.HemisphereLight(0xffffff, 0x333944, 0.55);
-    sky.position.set(0, 0, 1);
-    this.scene.add(sky);
-    // Lit from both sides of the table, because the two machines are looked at
-    // from opposite ones: a mill from −Y, a lathe from +Y (the chuck has to be
-    // on the left). One key light meant whichever machine was not the one it
-    // was aimed at showed the part in silhouette.
-    const key = new THREE.DirectionalLight(0xffffff, 1.15);
-    key.position.set(100, -60, 150);
-    this.scene.add(key);
-    const fill = new THREE.DirectionalLight(0xffffff, 0.8);
-    fill.position.set(-60, 100, 120);
-    this.scene.add(fill);
-    // …and a dim one from wherever the camera is, so that nothing vertical is
-    // invisible. See installHeadlight.
-    this.aimHeadlight = installHeadlight(this.scene);
+    // The lights (and how much of the room the metal mirrors) are a preset in
+    // view/lighting.js, changed by setLook; the rig also aims the headlight and
+    // the camera-following rim before each render.
+    this.lightRig = installLightRig(this.scene);
+    this.aimHeadlight = this.lightRig.aim;
   }
 
   /**
@@ -949,6 +936,15 @@ export class Viewport {
    * leaves only metal being cut, which is what you want when checking a path
    * rather than its linking.
    */
+  /**
+   * The lighting preset and how strongly metal mirrors the room — see
+   * view/lighting.js. Anything left out is left as it is.
+   */
+  setLook(look) {
+    this.lightRig.apply(look);
+    this.requestRender();
+  }
+
   setToolpathStyle(style) {
     this.toolpathStyle = { ...(this.toolpathStyle ?? {}), ...style };
     if (this.lastToolpaths) this.setToolpaths(this.lastToolpaths, { rebuild: true });

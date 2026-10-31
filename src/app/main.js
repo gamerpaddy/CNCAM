@@ -27,6 +27,8 @@ import { bindShortcuts } from './shortcuts.js';
 import { installDropImport } from './drop-import.js';
 import { whenSettled, rebuildKeepingFocus } from './keep-focus.js';
 import { getSetting } from './settings.js';
+import { setToolDrawing } from './tool-shape.js';
+import { applyAppearance } from './appearance.js';
 import { paramApplies, OP_PARAM_GROUPS } from './op-params.js';
 import { setupModelIds } from './actions/setup-space.js';
 import {
@@ -184,6 +186,47 @@ function syncProgramState() {
     }
   }
   ui.setProgramState({ outdated, operations: enabled, text, title });
+  programState = { enabled, outdated };
+  syncNextStep();
+}
+
+/**
+ * The status line's "next" button: the first checklist step that is not done,
+ * and once there is a program the steps the checklist never had — generate what
+ * is out of date, simulate, export. Stateless on purpose: it is read off the
+ * document and the timeline, so it cannot drift from what has been done.
+ */
+let programState = { enabled: 0, outdated: 0 };
+function syncNextStep() {
+  const { ui, actions } = ctx;
+  if (!ui?.setNextStep) return;
+  const pending = ctx.checklistNext;
+  if (pending) {
+    return ui.setNextStep({
+      label: `Next: ${pending.label}`, title: pending.label, onclick: pending.onclick,
+    });
+  }
+  const { enabled, outdated } = programState;
+  if (enabled === 0) return ui.setNextStep(null);
+  if (outdated > 0) {
+    return ui.setNextStep({
+      label: `Next: generate ${outdated} operation${outdated === 1 ? '' : 's'}`,
+      title: 'Compute the toolpaths that are missing or out of date (Ctrl+G)',
+      onclick: () => actions.generate(),
+    });
+  }
+  if (!ui.timeline?.visible) {
+    return ui.setNextStep({
+      label: 'Next: simulate',
+      title: 'Watch the stock come off before it is cut (S)',
+      onclick: () => actions.simulateOrGenerate(),
+    });
+  }
+  return ui.setNextStep({
+    label: 'Next: export the G-code',
+    title: 'Write the program for the machine (Ctrl+E)',
+    onclick: () => actions.exportGcode(),
+  });
 }
 
 // --- rebuilding the side panels without losing the gesture that caused it ---
@@ -257,8 +300,9 @@ function syncHint() {
 
   // nothing to look at yet: the viewport says where a part comes from
   ui.setEmpty?.(!steps[0].done);
-  if (steps.every((s) => s.done)) return ui.setHint(null);
   const next = steps.findIndex((s) => !s.done);
+  ctx.checklistNext = next >= 0 ? steps[next] : null;
+  if (next < 0) return ui.setHint(null);
   ui.setHint(steps.map((step, i) => ({
     label: step.label,
     state: step.done ? 'done' : i === next ? 'next' : 'todo',
@@ -586,10 +630,16 @@ function applySettings(key = null) {
     });
   }
   if (touches('showTriad')) viewport.triad.enabled = getSetting('showTriad');
-  if (touches('showRapids') || touches('pathBrightness')) {
+  if (['showRapids', 'pathBrightness', 'pathColorBy', 'pathCutColor', 'pathPlungeColor', 'pathRapidColor'].some(touches)) {
     viewport.setToolpathStyle({
       rapids: getSetting('showRapids'),
       brightness: getSetting('pathBrightness'),
+      colorBy: getSetting('pathColorBy'),
+      colors: {
+        cut: getSetting('pathCutColor'),
+        plunge: getSetting('pathPlungeColor'),
+        rapid: getSetting('pathRapidColor'),
+      },
     });
     shownToolpathKeys = '';          // force a rebuild with the new style
     syncToolpaths();
@@ -598,10 +648,47 @@ function applySettings(key = null) {
   if (touches('showHolder')) viewport.simulation.setShowHolder(getSetting('showHolder'));
   if (touches('ghostTool')) viewport.simulation.setGhostTool(getSetting('ghostTool'));
   if (touches('showCutMarker')) viewport.simulation.setShowCutMarker(getSetting('showCutMarker'));
-  if (touches('autosave')) keepSession(getSetting('autosave'));
+  // how the simulation and the room it sits in look
+  if (touches('lightingPreset') || touches('envReflection')) {
+    viewport.setLook({ preset: getSetting('lightingPreset'), reflection: getSetting('envReflection') });
+  }
+  if (touches('stockMaterial') || touches('surfaceContrast')) {
+    viewport.simulation.setStockLook({
+      material: getSetting('stockMaterial'), contrast: getSetting('surfaceContrast'),
+    });
+  }
+  if (touches('cutTint')) viewport.simulation.setCutTint(getSetting('cutTint'));
+  if (touches('wallShading')) viewport.simulation.setWallShading(getSetting('wallShading'));
+  if (touches('simShadows')) viewport.simulation.setShadows(getSetting('simShadows'));
+  if (['toolFinish', 'holderColor', 'holderOpacity'].some(touches)) {
+    viewport.simulation.setToolStyle({
+      finish: getSetting('toolFinish'),
+      holder: getSetting('holderColor'),
+      opacity: getSetting('holderOpacity'),
+    });
+  }
+  if (touches('cutMarkerStyle')) viewport.simulation.setMarkerStyle(getSetting('cutMarkerStyle'));
+  if (touches('playTrail')) viewport.simulation.setTrail(getSetting('playTrail'));
+  if (touches('autosave') || touches('autosaveDelay')) keepSession(getSetting('autosave'));
+  // the window's own look: scheme, accent, size and the viewport backdrop
+  if (key === null || /^(ui|viewBackground)/.test(key)) {
+    applyAppearance();
+    if (key !== null) ctx.viewport.resize();   // a size change moves the panels the viewport sits between
+  }
   if (touches('hintStyle') && key !== null) {
     ctx.hintStyle = getSetting('hintStyle');
     ctx.rerenderProps?.();
+  }
+  // Tool drawings are SVG built at the moment a panel is, so a new style only
+  // shows on the ones built after it — repaint the panels that hold them.
+  if (touches('toolPreviewStyle') || touches('toolCallouts')) {
+    const style = getSetting('toolPreviewStyle');
+    setToolDrawing({ style, callouts: getSetting('toolCallouts') });
+    // at boot the panels were built a moment ago in the default style
+    if (key !== null || style !== 'shaded') {
+      renderPanels();
+      ctx.rerenderProps?.();
+    }
   }
   viewport.requestRender();
 }
@@ -612,9 +699,18 @@ function applySettings(key = null) {
  * file nothing is updating is a stale job waiting to be restored.
  */
 let stopAutosave = null;
+let keptDelay = null;
 function keepSession(on) {
+  const delay = Number(getSetting('autosaveDelay')) * 1000;
+  // a changed delay is a new watcher: the old one has its wait closed over
+  if (on && stopAutosave && delay !== keptDelay) {
+    stopAutosave();
+    stopAutosave = null;
+  }
   if (on && !stopAutosave) {
+    keptDelay = delay;
     stopAutosave = attachAutosave(ctx.doc, {
+      delay,
       onError: (err) => ctx.ui.setStatus(`Autosave failed (${err.name}) — export to keep your work`, true),
     });
   } else if (!on && stopAutosave) {
@@ -625,6 +721,7 @@ function keepSession(on) {
 }
 
 function boot() {
+  applyAppearance();   // before the layout is built, so the first paint is already the chosen scheme
   const actions = makeActions(ctx);
   ctx.actions = actions;  // needs to be visible before renderTree runs
   ctx.ui = buildLayout(document.getElementById('app'), actions, ctx.doc.project);
@@ -650,6 +747,8 @@ function boot() {
   }
 
   refresh('boot');
+  // the simulation bar opening or closing changes what comes next
+  new MutationObserver(syncNextStep).observe(ctx.ui.timeline.root, { attributes: true, attributeFilter: ['class'] });
   applySettings();
   ctx.actions = actions;
   window.cncam = ctx; // debug/testing handle (live reference)

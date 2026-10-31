@@ -192,6 +192,12 @@ export function createTool(type = 'flat') {
     // one drawing and two different tools; a picture is the only thing that
     // tells them apart. See app/tool-photo.js.
     image: null,
+    // What the cutter is made of or coated with: 'auto' (the family's usual
+    // grind), 'hss', 'carbide', 'tialn', 'dlc' or 'diamond'. A label for the
+    // drawings and the library — it colours the preview and filters the picker,
+    // and moves no path, so it is left out of the operation fingerprint like
+    // the name and the photograph. See app/tool-shape.js COATINGS.
+    coating: 'auto',
     // boring bars: how far into a hole the bar reaches, and the smallest hole
     // it will fit down. Both are the reason a bore is or is not machinable.
     minBore: 0,

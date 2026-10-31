@@ -15,9 +15,62 @@ import {
 import { latheToolOutline, insertIcOf, isLatheTool } from '../engine/insert.js';
 import { shadeWithCreases } from './crease-material.js';
 
+// The billet's two colours are *state*, not constants: they are overwritten in
+// place by SimulationView.setStockLook from the table below, so the many places
+// that paint a cell with RAW or MACHINED never need to know a material exists.
 const RAW = new THREE.Color(0xb08a5a);        // uncut billet
 const MACHINED = new THREE.Color(0x9fb4c7);   // freshly exposed surface
 const CONTACT = new THREE.Color(0xff4d2e);    // where metal is coming off now
+
+/**
+ * What the stock is made of — the one description of how it looks.
+ *
+ * `raw` is the sawn or rolled face, `cut` the bright one the cutter exposes; the
+ * pair is chosen so that the difference reads from across the room, which is the
+ * point of watching a removal simulation. `roughness` is never low: a cut face
+ * is covered in tool marks, which is a broad specular lobe, and a tight one put
+ * a studio-lamp blob on every flat face (it was once 0.42). Metalness stays
+ * below 0.8 for the reason the cutter's does — see TOOL_LOOK.
+ */
+const STOCK_LOOKS = {
+  classic: { raw: 0xb08a5a, cut: 0x9fb4c7, metalness: 0.35, roughness: 0.55 },
+  aluminium: { raw: 0x858a92, cut: 0xdde3ea, metalness: 0.6, roughness: 0.48 },
+  steel: { raw: 0x474d57, cut: 0xb4bcc7, metalness: 0.7, roughness: 0.45 },
+  brass: { raw: 0x8a6a30, cut: 0xf0c660, metalness: 0.7, roughness: 0.45 },
+  wood: { raw: 0xa87a4a, cut: 0xe6c08c, metalness: 0, roughness: 0.8 },
+  plastic: { raw: 0xb9bcbe, cut: 0xf3f3ee, metalness: 0, roughness: 0.5 },
+  wax: { raw: 0x34608f, cut: 0x86b6ea, metalness: 0, roughness: 0.6 },
+};
+
+/**
+ * How far apart the raw and cut colours are pushed. `cut` is how much of the
+ * material's cut colour survives (lower = pulled toward the raw one) and `raw`
+ * scales the raw colour, so Strong darkens the uncut stock rather than
+ * over-brightening the cut, which would blow out against the white lights.
+ */
+const CONTRASTS = {
+  subtle: { cut: 0.5, raw: 1 },
+  normal: { cut: 1, raw: 1 },
+  strong: { cut: 1, raw: 0.62 },
+};
+
+// The two ends of the depth-colour ramp, and how dark the deepest cavity goes.
+const DEPTH_SHALLOW = new THREE.Color(0xf2c26b);
+const DEPTH_DEEP = new THREE.Color(0x3f6fc4);
+const CAVITY_DARKEST = 0.5;
+
+/** The multiplier on a wall's colour for each Edge definition level. */
+const WALL_SHADES = { off: 1, soft: 0.88, strong: 0.7 };
+
+/** Where the optional tool shadow comes from: mostly overhead, a little off-axis. */
+const SHADOW_DIRECTION = new THREE.Vector3(0.35, -0.25, 1).normalize();
+
+/** Chips thrown off the contact point by the "chips" marker style. */
+const CHIP_COUNT = 18;
+
+/** How many past positions the playback trail keeps, by setting. */
+const TRAIL_LENGTHS = { off: 0, short: 24, long: 90 };
+const TRAIL_HOT = new THREE.Color(0xffb066);
 
 // Deviation shading: the same surface, coloured by how far it is from the model
 // rather than by whether it has been cut. Green is the part; blue is metal
@@ -114,19 +167,6 @@ const THROUGH_EPS = 1e-4;
  * price of every update — a cross rather than a block, and a handful of taps.
  */
 const WALL_REACH = 3;
-
-/**
- * How polished a machined surface is.
- *
- * It was 0.42, which is a tight enough specular lobe that each of the two key
- * lights put a distinct bright blob on any flat face — a faced floor came out
- * with a soft white glow across the middle of it, reading as a studio lamp on
- * wet plastic rather than as a flat surface. A cut face is not polished: it is
- * covered in tool marks, which is a broad lobe. At 0.55 the highlight spreads
- * out over the whole face and stops being a feature of the picture, and a
- * curved surface still has enough of one to read as curved.
- */
-const SURFACE_ROUGHNESS = 0.55;
 
 /**
  * Where quad `q` of the grid is, and whether it should be drawn.
@@ -256,12 +296,41 @@ const TOOL_LOOK = {
   flute: { color: 0x2f333b, metalness: 0.45, roughness: 0.5 },
 };
 
+// What the cutting end is coated or ground in (the toolFinish setting): only the
+// parts that differ from TOOL_LOOK. The shank and flutes stay as they are, since
+// a coating is on the business end and a dark flute still has to read dark.
+const TOOL_FINISH = {
+  carbide: {},
+  hss: { cutting: { color: 0xc9ced6, metalness: 0.7, roughness: 0.22 } },
+  tin: { cutting: { color: 0xd9b24a, metalness: 0.6, roughness: 0.3 } },
+  tialn: { cutting: { color: 0x6a5890, metalness: 0.55, roughness: 0.32 } },
+};
+
+// The holder colours (holderColor setting). A holder is the part that must not
+// be mistaken for the work, so each of these is a colour the stock presets and
+// the cutter's own greys do not use.
+const HOLDER_COLORS = {
+  slate: 0x646d7c, orange: 0xd2762a, blue: 0x3d6fb8, red: 0xb8403a, green: 0x3f9a63,
+};
+
+/**
+ * How the tool is currently dressed — set by SimulationView.setToolStyle and
+ * read by every `toolMaterial`, so that the flutes, cap, face-mill inserts and
+ * the lathe insert all follow one choice instead of each being passed it.
+ * There is one viewport, so one module-level value is the honest description.
+ */
+const toolStyle = { finish: 'carbide', holder: 'slate', opacity: 0.45 };
+
 function toolMaterial(kind, ghost) {
-  const look = TOOL_LOOK[kind] ?? TOOL_LOOK.cutting;
+  const look = {
+    ...(TOOL_LOOK[kind] ?? TOOL_LOOK.cutting),
+    ...(TOOL_FINISH[toolStyle.finish]?.[kind] ?? {}),
+  };
+  if (kind === 'holder') look.color = HOLDER_COLORS[toolStyle.holder] ?? look.color;
   return shadeWithCreases(new THREE.MeshStandardMaterial({
     ...look,
     transparent: !!ghost,
-    opacity: ghost ? 0.45 : 1,
+    opacity: ghost ? toolStyle.opacity : 1,
     depthWrite: !ghost,
     side: THREE.DoubleSide,
   }));
@@ -396,6 +465,162 @@ export class SimulationView {
     // The model's own surface on this grid, when the stock is being coloured by
     // how far from it the cut has got — see setDeviation.
     this.deviation = null;
+
+    // Looks. Each has a setter that redraws what it changes (see setStockLook,
+    // setCutTint, setWallShading, setShadows, setMarkerStyle, setTrail).
+    this.stockLook = STOCK_LOOKS.aluminium;
+    this.cutTint = 'cavity';
+    this.wallShade = WALL_SHADES.soft;
+    this.markerStyle = 'glow';
+    this.shadows = false;
+    this.shadowLight = null;
+    this.playback = null;      // the last playback painted, so a setting can repaint
+    this.trail = null;
+    this.trailLength = TRAIL_LENGTHS.short;
+    this.trailCount = 0;
+    this.setStockLook({});
+  }
+
+  /**
+   * Dress the billet: what it is made of and how far the cut stands out from
+   * the raw face. Overwrites RAW and MACHINED in place and repaints, so a change
+   * shows on a paused simulation instead of at the next cut.
+   */
+  setStockLook({ material, contrast } = {}) {
+    if (material !== undefined) this.stockLook = STOCK_LOOKS[material] ?? STOCK_LOOKS.aluminium;
+    if (contrast !== undefined) this.contrast = CONTRASTS[contrast] ?? CONTRASTS.normal;
+    const c = this.contrast ?? CONTRASTS.normal;
+    const look = this.stockLook;
+    RAW.set(look.raw).multiplyScalar(c.raw);
+    MACHINED.set(look.cut).lerp(RAW, 1 - c.cut);
+    if (this.surface) {
+      this.surface.material.metalness = look.metalness;
+      this.surface.material.roughness = look.roughness;
+    }
+    if (this.base) {
+      // the underside of the billet is sawn stock, so it is drawn in the raw
+      // colour, a little less shiny than the cut face
+      this.base.material.color.copy(RAW);
+      this.base.material.metalness = look.metalness * 0.4;
+      this.base.material.roughness = Math.max(0.8, look.roughness);
+    }
+    this.recolour();
+  }
+
+  /** Cavity shading, depth colour, or one flat machined colour. */
+  setCutTint(mode) {
+    this.cutTint = mode === 'depth' || mode === 'off' ? mode : 'cavity';
+    this.recolour();
+  }
+
+  /** Redraw the colours from the playback last painted. */
+  recolour() {
+    if (this.surface && this.playback) this.repaint(this.playback);
+  }
+
+  /**
+   * The machined colour at a given depth into the stock, as a fraction of the
+   * stock's thickness (0 = skimmed, 1 = through).
+   *
+   * One function for the mill and the lathe, so the two can never tint the same
+   * depth differently. The result is a scratch colour the caller copies out at
+   * once, like cellColor's.
+   */
+  cutColor(depth) {
+    if (this.cutTint === 'off') return MACHINED;
+    // a quick saturating curve: a 1mm skim on a 20mm billet must still show
+    const d = 1 - Math.exp(-3 * Math.min(1, Math.max(0, depth)));
+    if (this.cutTint === 'depth') {
+      SHADE.copy(DEPTH_SHALLOW).lerp(DEPTH_DEEP, d);
+      return SHADE.lerp(MACHINED, 0.3);
+    }
+    return SHADE.copy(MACHINED).multiplyScalar(1 - (1 - CAVITY_DARKEST) * d);
+  }
+
+  /** Darken the walls the cutter leaves — see crease-material.js. */
+  setWallShading(level) {
+    this.wallShade = WALL_SHADES[level] ?? WALL_SHADES.soft;
+    const uniform = this.surface?.material.userData.wallShade;
+    if (uniform) uniform.value = this.wallShade;
+  }
+
+  /**
+   * Dress the tool: the cutting-end finish, the holder colour and how opaque a
+   * see-through holder is. The assembly is redrawn at once.
+   */
+  setToolStyle({ finish, holder, opacity } = {}) {
+    if (finish !== undefined) toolStyle.finish = finish;
+    if (holder !== undefined) toolStyle.holder = holder;
+    if (opacity !== undefined) toolStyle.opacity = Number(opacity) || 0.45;
+    this.redrawCutter();
+  }
+
+  /**
+   * The tool's shadow on the work.
+   *
+   * Only the cutter casts and only the stock receives, so the extra depth pass
+   * draws a few thousand triangles and not the few hundred thousand of the
+   * stock — which is what makes this cheap enough to offer. The light is fitted
+   * to the stock's bounds whenever a simulation is set, because a shadow map is
+   * a fixed-size picture: one sized for a 300mm table would be a blur on a
+   * 20mm billet.
+   */
+  setShadows(on) {
+    this.shadows = !!on;
+    if (this.shadows && !this.shadowLight) {
+      this.shadowLight = new THREE.DirectionalLight(0xffffff, 0.55);
+      this.shadowLight.castShadow = true;
+      this.shadowLight.shadow.mapSize.set(2048, 2048);
+      this.group.add(this.shadowLight);
+      this.group.add(this.shadowLight.target);
+    } else if (!this.shadows && this.shadowLight) {
+      this.group.remove(this.shadowLight, this.shadowLight.target);
+      this.shadowLight.shadow.dispose();
+      this.shadowLight = null;
+    }
+    this.fitShadow();
+    this.applyShadowFlags();
+  }
+
+  /** Aim and size the shadow light at the stock that is on screen. */
+  fitShadow() {
+    const light = this.shadowLight;
+    const sim = this.sim;
+    if (!light || !sim) return;
+    let center;
+    let radius;
+    if (sim.kind === 'turn') {
+      const length = sim.count * sim.dz;
+      let outer = 0;
+      for (let i = 0; i < sim.count; i++) outer = Math.max(outer, sim.initial[i]);
+      center = new THREE.Vector3(0, 0, sim.zMin + length / 2);
+      radius = Math.hypot(length / 2, outer);
+    } else {
+      const w = sim.width * sim.cellSize;
+      const h = sim.height * sim.cellSize;
+      center = new THREE.Vector3(
+        sim.origin[0] + w / 2, sim.origin[1] + h / 2, (sim.stockTop + sim.stockBottom) / 2);
+      radius = Math.hypot(w, h, sim.stockTop - sim.stockBottom) / 2;
+    }
+    radius = Math.max(radius, 5) + 20;   // room for a tool standing over the edge
+    light.position.copy(center).addScaledVector(SHADOW_DIRECTION, radius * 3);
+    light.target.position.copy(center);
+    light.target.updateMatrixWorld();
+    const cam = light.shadow.camera;
+    cam.left = -radius; cam.right = radius; cam.top = radius; cam.bottom = -radius;
+    cam.near = radius * 0.5;
+    cam.far = radius * 6;
+    cam.updateProjectionMatrix();
+    // a grazing face against a shadow map acne-stripes unless it is pushed off
+    light.shadow.bias = -0.0004;
+    light.shadow.normalBias = radius * 0.004;
+  }
+
+  /** Who casts and who receives, set wherever the meshes are made or the switch flips. */
+  applyShadowFlags() {
+    const on = this.shadows;
+    for (const mesh of [this.surface, this.base]) if (mesh) mesh.receiveShadow = on;
+    this.cutter?.traverse((n) => { if (n.isMesh) n.castShadow = on; });
   }
 
   /**
@@ -433,7 +658,12 @@ export class SimulationView {
    * different answers about what colour the cell is.
    */
   cellColor(cell, z, cut) {
-    if (!this.deviation) return cut ? MACHINED : RAW;
+    if (!this.deviation) {
+      if (!cut) return RAW;
+      // depth is measured from the top of the billet, as a share of its height
+      const { stockTop, stockBottom } = this.sim;
+      return this.cutColor((stockTop - z) / Math.max(1e-6, stockTop - stockBottom));
+    }
     const { low, high, judged, tolerance } = this.deviation;
     // Nothing to be right or wrong about: no part over this cell, or the metal
     // here has gone entirely and what is drawn is the floor of the billet
@@ -545,19 +775,93 @@ export class SimulationView {
       // Sized off the grid, not fixed: a dot big enough to see on an 80mm
       // billet covers the whole cut on a 6mm one. Emissive so it reads as a
       // marker rather than as a bead of metal the lighting can hide.
-      const r = this.markerRadius();
-      this.cutMarker = new THREE.Mesh(
-        new THREE.SphereGeometry(r, 16, 12),
-        new THREE.MeshStandardMaterial({
-          color: CONTACT, emissive: CONTACT, emissiveIntensity: 0.9,
-          roughness: 0.4, depthTest: false,
-        }),
-      );
-      this.cutMarker.renderOrder = 10;   // never buried in the surface it marks
+      this.cutMarker = this.buildMarker(this.markerRadius());
       this.group.add(this.cutMarker);
     }
     this.cutMarker.position.set(...point);
     this.cutMarker.visible = true;
+    if (this.markerStyle === 'sparks') this.scatterChips(point);
+  }
+
+  /**
+   * The marker: the dot, a soft halo round it and a handful of chips.
+   *
+   * One group so that it is shown, hidden and disposed as one thing. The halo
+   * and chips are additive, which is what makes them read as heat and light
+   * rather than as more objects, and all of it is drawn with the depth test off
+   * and after everything else — it must never be buried in the surface it marks.
+   */
+  buildMarker(r) {
+    const group = new THREE.Group();
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(r, 16, 12),
+      new THREE.MeshStandardMaterial({
+        color: CONTACT, emissive: CONTACT, emissiveIntensity: 0.9,
+        roughness: 0.4, depthTest: false,
+      }),
+    );
+    const halo = new THREE.Mesh(
+      new THREE.SphereGeometry(r * 2.6, 16, 12),
+      new THREE.MeshBasicMaterial({
+        color: CONTACT, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending,
+        depthTest: false, depthWrite: false,
+      }),
+    );
+    const chips = new THREE.Points(
+      new THREE.BufferGeometry().setAttribute(
+        'position', new THREE.BufferAttribute(new Float32Array(CHIP_COUNT * 3), 3)),
+      new THREE.PointsMaterial({
+        color: 0xffc060, size: r * 0.8, sizeAttenuation: true, transparent: true, opacity: 0.95,
+        blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false,
+      }),
+    );
+    chips.frustumCulled = false;   // positions change under a bounding sphere computed once
+    group.add(core, halo, chips);
+    group.traverse((n) => { n.renderOrder = 10; });
+    group.userData = { core, halo, chips, r };
+    this.styleMarker(group);
+    return group;
+  }
+
+  /** Which parts of the marker the chosen style shows. */
+  styleMarker(group = this.cutMarker) {
+    if (!group) return;
+    group.userData.halo.visible = this.markerStyle !== 'dot';
+    group.userData.chips.visible = this.markerStyle === 'sparks';
+  }
+
+  setMarkerStyle(style) {
+    this.markerStyle = style === 'dot' || style === 'sparks' ? style : 'glow';
+    this.styleMarker();
+  }
+
+  /**
+   * Throw the chips up off the contact point.
+   *
+   * Seeded by where the contact is, not by a clock or a random number: the same
+   * frame always shows the same chips, so scrubbing back to a moment gives the
+   * picture that moment had, and a still frame is not a different picture every
+   * time it is redrawn. As the tool moves the seed moves, and the spray shimmers.
+   */
+  scatterChips([x, y, z]) {
+    const { chips, r } = this.cutMarker.userData;
+    const array = chips.geometry.attributes.position.array;
+    const seed = x * 12.9898 + y * 78.233 + z * 37.719;
+    const rand = (k) => {
+      const s = Math.sin(seed + k * 91.345) * 43758.5453;
+      return s - Math.floor(s);
+    };
+    for (let i = 0; i < CHIP_COUNT; i++) {
+      const angle = rand(i * 3) * Math.PI * 2;
+      const reach = r * (1.5 + 4.5 * rand(i * 3 + 1));
+      const lift = r * (0.5 + 3.5 * rand(i * 3 + 2));
+      const a = Math.cos(angle) * reach;
+      const b = Math.sin(angle) * reach;
+      // "off the surface" is up on a mill and radially outward on a lathe
+      if (this.sim?.kind === 'turn') { array[i * 3] = lift; array[i * 3 + 1] = a; array[i * 3 + 2] = b; }
+      else { array[i * 3] = a; array[i * 3 + 1] = b; array[i * 3 + 2] = lift; }
+    }
+    chips.geometry.attributes.position.needsUpdate = true;
   }
 
   markerRadius() {
@@ -941,15 +1245,29 @@ export class SimulationView {
     // step in the geometry and survives — while the grid's own facets stop
     // being part of the picture. See setSmooth.
     this.surface = new THREE.Mesh(geometry, shadeWithCreases(new THREE.MeshStandardMaterial({
-      vertexColors: true, metalness: 0.35, roughness: SURFACE_ROUGHNESS, side: THREE.DoubleSide,
-      flatShading: !this.smooth,
-    }), undefined, true));
+      vertexColors: true, metalness: this.stockLook.metalness, roughness: this.stockLook.roughness,
+      side: THREE.DoubleSide, flatShading: !this.smooth,
+    }), undefined, true, this.wallShade));
     this.refreshNormals();
     this.group.add(this.surface);
 
     // a flat base so the billet is closed when seen from below
     this.base = buildBase(sim);
     if (this.base) this.group.add(this.base);
+    this.dressNewStock();
+    return undefined;
+  }
+
+  /**
+   * Everything about the look that has to be re-applied to a freshly built
+   * stock mesh: the billet's colours (the vertex buffers were filled with RAW at
+   * build time, which is the right colour but not necessarily the current
+   * one), the shadow light's fit and the casting flags.
+   */
+  dressNewStock() {
+    this.setStockLook({});
+    this.fitShadow();
+    this.applyShadowFlags();
   }
 
   /**
@@ -1057,9 +1375,9 @@ export class SimulationView {
     geometry.setIndex(indices);
 
     this.surface = new THREE.Mesh(geometry, shadeWithCreases(new THREE.MeshStandardMaterial({
-      vertexColors: true, metalness: 0.35, roughness: SURFACE_ROUGHNESS, side: THREE.DoubleSide,
-      flatShading: !this.smooth,
-    })));
+      vertexColors: true, metalness: this.stockLook.metalness, roughness: this.stockLook.roughness,
+      side: THREE.DoubleSide, flatShading: !this.smooth,
+    }), undefined, false, this.wallShade));
     this.updateTurnedCaps(initial);
     this.updateTurnedNormals(range(total), initial);
     // The work is what spins, so it gets its own node to spin. The tool is a
@@ -1068,6 +1386,7 @@ export class SimulationView {
     this.workGroup = new THREE.Group();
     this.workGroup.add(this.surface);
     this.group.add(this.workGroup);
+    this.dressNewStock();
     return undefined;
   }
 
@@ -1077,6 +1396,38 @@ export class SimulationView {
     array[offset] = Math.min(1, color.r * k);
     array[offset + 1] = Math.min(1, color.g * k);
     array[offset + 2] = Math.min(1, color.b * k);
+  }
+
+  /**
+   * The colour of one ring of the bar: raw, or the machined colour tinted by
+   * how far the cut went in, as a share of the bar's radius. The outside is cut
+   * when it shrinks and a bore when it grows, the same test updateTurned uses.
+   */
+  turnColor(cell, radius, cut) {
+    if (!cut) return RAW;
+    if (!this.turnSpan) {
+      const { initial, count } = this.sim;
+      let outer = 0;
+      for (let i = 0; i < count; i++) outer = Math.max(outer, initial[i]);
+      this.turnSpan = outer || 1;
+    }
+    return this.cutColor(Math.abs(radius - this.sim.initial[cell]) / this.turnSpan);
+  }
+
+  /** The turned bar's whole colour buffer again — see repaint. */
+  repaintTurned(playback) {
+    const { initial, count } = this.sim;
+    const color = this.surface.geometry.attributes.color;
+    for (let cell = 0; cell < count * 2; cell++) {
+      const r = playback.current[cell];
+      const cut = cell < count ? r < initial[cell] - 1e-6 : r > initial[cell] + 1e-6;
+      for (let a = 0; a < this.rings; a++) {
+        this.paint(color.array, (cell * this.rings + a) * 3, this.turnColor(cell, r, cut), a);
+      }
+    }
+    // the end faces are copies of four rings and carry their colour with them
+    this.updateTurnedCaps(playback.current);
+    markAll(color);
   }
 
   /**
@@ -1098,6 +1449,7 @@ export class SimulationView {
    */
   update(playback, changed) {
     if (!this.surface) return;
+    this.playback = playback;   // see recolour
     // most frames of a slow playback move no metal at all
     if (!changed || changed.size === 0) return;
     if (this.sim.kind === 'turn') return this.updateTurned(playback, changed);
@@ -1175,7 +1527,9 @@ export class SimulationView {
    * those over the whole grid is the expensive half of a playback frame.
    */
   repaint(playback) {
-    if (!this.surface || this.sim?.kind === 'turn') return;
+    if (!this.surface) return;
+    this.playback = playback;
+    if (this.sim?.kind === 'turn') return this.repaintTurned(playback);
     const color = this.surface.geometry.attributes.color;
     const cells = this.sim.width * this.sim.height;
     for (let cell = 0; cell < cells; cell++) this.paintCell(playback, cell, color.array);
@@ -1277,7 +1631,7 @@ export class SimulationView {
         const v = (cell * rings + a) * 3;
         position.array[v] = r * this.ringCos[a];
         position.array[v + 1] = r * this.ringSin[a];
-        this.paint(color.array, v, cut ? MACHINED : RAW, a);
+        this.paint(color.array, v, this.turnColor(cell, r, cut), a);
       }
     }
     markVertices(position, first * rings, last * rings + rings - 1);
@@ -1308,8 +1662,9 @@ export class SimulationView {
     // cost. So the assembly is kept until the *tool* changes, and a seek is one
     // assignment to `position`.
     this.cutterState = state;
+    this.pushTrail(state);
     const key = state?.tool
-      ? `${this.sim?.kind}|${this.showHolder}|${this.ghostTool}|${JSON.stringify(state.tool)}`
+      ? `${this.sim?.kind}|${this.showHolder}|${this.ghostTool}|${JSON.stringify(toolStyle)}|${JSON.stringify(state.tool)}`
       : null;
     if (this.cutter && key && key === this.cutterKey) {
       const [x, y, z] = state.position;
@@ -1378,6 +1733,7 @@ export class SimulationView {
     group.traverse((n) => { n.renderOrder = CUTTER_RENDER_ORDER; });
     this.cutter = group;
     this.group.add(group);
+    this.applyShadowFlags();
     return undefined;
   }
 
@@ -1478,7 +1834,107 @@ export class SimulationView {
     group.traverse((n) => { n.renderOrder = CUTTER_RENDER_ORDER; });
     this.cutter = group;
     this.group.add(group);
+    this.applyShadowFlags();
     return undefined;
+  }
+
+  /**
+   * Remember where the tool tip has been, for the fading trail behind it.
+   *
+   * Called from every setCutter, so it costs one distance test on a frame where
+   * nothing moved. The buffers are a few hundred floats, so unlike the stock a
+   * whole-buffer upload is the cheap way to do it. A jump of more than a third
+   * of the work's size is a seek and not a move, and drawing a line across it
+   * would be a streak through the picture, so the trail starts over instead.
+   */
+  pushTrail(state) {
+    const max = this.trailLength;
+    if (!max || !state) {
+      this.trailCount = 0;
+      if (this.trail) this.trail.visible = false;
+      return;
+    }
+    if (!this.trail || this.trail.userData.max !== max) this.buildTrail(max);
+    const [x, y0, z] = state.position;
+    const y = this.sim?.kind === 'turn' ? 0 : y0;
+    const pos = this.trail.geometry.attributes.position;
+    const n = this.trailCount;
+    if (n > 0) {
+      const dx = x - pos.array[(n - 1) * 3];
+      const dy = y - pos.array[(n - 1) * 3 + 1];
+      const dz = z - pos.array[(n - 1) * 3 + 2];
+      const moved = Math.hypot(dx, dy, dz);
+      if (moved < 1e-6) return;
+      if (moved > this.trailJump()) this.trailCount = 0;
+    }
+    if (this.trailCount >= max) {
+      pos.array.copyWithin(0, 3);      // drop the oldest point
+      this.trailCount = max - 1;
+    }
+    const at = this.trailCount * 3;
+    pos.array[at] = x; pos.array[at + 1] = y; pos.array[at + 2] = z;
+    this.trailCount++;
+
+    // newest brightest, fading to nothing: additive blending makes black
+    // invisible, so fading the colour is fading the line
+    const color = this.trail.geometry.attributes.color;
+    const count = this.trailCount;
+    for (let i = 0; i < count; i++) {
+      const fade = count > 1 ? (i / (count - 1)) ** 2 : 1;
+      color.array[i * 3] = TRAIL_HOT.r * fade;
+      color.array[i * 3 + 1] = TRAIL_HOT.g * fade;
+      color.array[i * 3 + 2] = TRAIL_HOT.b * fade;
+    }
+    pos.needsUpdate = true;
+    color.needsUpdate = true;
+    this.trail.geometry.setDrawRange(0, count);
+    this.trail.visible = count > 1;
+  }
+
+  /** How far apart two successive tool positions can be before it is a seek. */
+  trailJump() {
+    const sim = this.sim;
+    if (!sim) return Infinity;
+    const size = sim.kind === 'turn'
+      ? sim.count * sim.dz
+      : Math.max(sim.width, sim.height) * sim.cellSize;
+    return Math.max(10, size / 3);
+  }
+
+  buildTrail(max) {
+    if (this.trail) {
+      this.group.remove(this.trail);
+      this.trail.geometry.dispose();
+      this.trail.material.dispose();
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(max * 3), 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(max * 3), 3));
+    geometry.setDrawRange(0, 0);
+    const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({
+      vertexColors: true, transparent: true, blending: THREE.AdditiveBlending,
+      depthTest: false, depthWrite: false,
+    }));
+    line.frustumCulled = false;   // its bounds are those of the empty buffer until it is drawn
+    line.renderOrder = 5;         // over the cutter (2), under the marker (10)
+    line.userData.max = max;
+    this.trailCount = 0;
+    this.trail = line;
+    this.group.add(line);
+  }
+
+  /** Length of the fading trail behind the cutter, or off. */
+  setTrail(mode) {
+    this.trailLength = TRAIL_LENGTHS[mode] ?? TRAIL_LENGTHS.short;
+    this.trailCount = 0;
+    if (!this.trailLength && this.trail) {
+      this.group.remove(this.trail);
+      this.trail.geometry.dispose();
+      this.trail.material.dispose();
+      this.trail = null;
+    }
+    // the current position is the first point of the new trail
+    this.pushTrail(this.cutterState);
   }
 
   setVisible(visible) {
@@ -1493,10 +1949,17 @@ export class SimulationView {
       const object = this[key];
       if (!object) continue;
       object.parent?.remove(object);
-      object.geometry.dispose();
-      object.material.dispose();
+      // the marker is a group of three, the rest are a single mesh
+      object.traverse((node) => {
+        node.geometry?.dispose();
+        node.material?.dispose();
+      });
       this[key] = null;
     }
+    this.playback = null;
+    this.turnSpan = 0;
+    this.trailCount = 0;
+    if (this.trail) this.trail.visible = false;
     if (this.workGroup) {
       this.group.remove(this.workGroup);
       this.workGroup = null;

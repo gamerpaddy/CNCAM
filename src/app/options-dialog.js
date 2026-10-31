@@ -7,7 +7,7 @@
 
 import { el, dialogCloseButton } from './layout.js';
 import {
-  SETTINGS, SETTING_GROUPS, getSetting, setSetting, resetSettings,
+  SETTINGS, SETTING_GROUPS, getSetting, setSetting, resetSettings, exportSettings, importSettings,
 } from './settings.js';
 import { numberInput, parseNumber, formatNumber } from './number-input.js';
 import { resetCatalogs } from '../doc/tool-library.js';
@@ -18,7 +18,7 @@ import { whenSettled, rebuildKeepingFocus } from './keep-focus.js';
  * @param onChange called with (key, value) after every change, so the app can
  *   push it into the viewport straight away
  */
-export function openOptions({ onChange, onStatus } = {}) {
+export function openOptions({ onChange, onStatus, onAction } = {}) {
   const dialog = el('dialog', { class: 'lib-dialog options-dialog' });
   const body = el('div', { class: 'lib-body options-body' });
 
@@ -37,7 +37,8 @@ export function openOptions({ onChange, onStatus } = {}) {
           // into: what it hands back is a sentence about what it did, which
           // goes to the status line the way every other report does.
           if (setting.type === 'action') {
-            if (value) onStatus?.(value);
+            const said = value === true ? onAction?.(setting.key) : value;
+            if (said) onStatus?.(said);
             rebuild();
             return;
           }
@@ -71,6 +72,40 @@ export function openOptions({ onChange, onStatus } = {}) {
     ]),
     body,
     el('div', { class: 'lib-actions' }, [
+      // Preferences as a file: carry the look of the app to another browser or
+      // another machine in the shop, or back up a setup that took an evening.
+      el('button', {
+        title: 'Save these options to a file',
+        onclick: () => {
+          const blob = new Blob([exportSettings()], { type: 'application/json' });
+          const a = el('a', { href: URL.createObjectURL(blob), download: 'cncam-preferences.json' });
+          document.body.append(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+          onStatus?.('Options saved to cncam-preferences.json');
+        },
+      }, ['Export…']),
+      el('button', {
+        title: 'Load options from a file saved with Export',
+        onclick: () => {
+          const input = el('input', { type: 'file', accept: '.json,application/json' });
+          input.addEventListener('change', async () => {
+            const file = input.files?.[0];
+            if (!file) return;
+            try {
+              const { applied, skipped } = importSettings(await file.text());
+              for (const key of applied) onChange?.(key, getSetting(key));
+              build();
+              onStatus?.(`${plural(applied.length, 'option')} changed from ${file.name}`
+                + (skipped ? ` — ${skipped} not understood by this version, left alone` : ''));
+            } catch (err) {
+              onStatus?.(err.message, true);
+            }
+          });
+          input.click();
+        },
+      }, ['Import…']),
       el('button', {
         onclick: () => {
           if (!confirm('Put every option back to its default?')) return;
@@ -100,6 +135,7 @@ export function openOptions({ onChange, onStatus } = {}) {
  * DEFAULTS in settings.js. Each one asks before it acts and says what it did.
  */
 const ACTIONS = {
+  // handled by the app (the panels live in layout.js) — see onAction
   resetToolLibrary: () => {
     const { catalogs, tools } = resetCatalogs();
     if (tools === 0 && catalogs <= 1) {
@@ -120,15 +156,24 @@ const ACTION_PROMPTS = {
 function controlFor(setting, commit) {
   if (setting.type === 'action') {
     return el('button', {
-      class: 'danger',
+      class: setting.safe ? '' : 'danger',
       onclick: () => {
-        if (!confirm(ACTION_PROMPTS[setting.key] ?? 'Are you sure?')) return;
-        const said = ACTIONS[setting.key]?.();
+        // a `safe` action changes nothing that cannot be put back, so it does not ask
+        if (!setting.safe && !confirm(ACTION_PROMPTS[setting.key] ?? 'Are you sure?')) return;
+        // no handler here means the app owns it: `true` hands it over
+        const said = ACTIONS[setting.key] ? ACTIONS[setting.key]() : true;
         commit(said);
       },
     }, [setting.button ?? 'Do it']);
   }
   const value = getSetting(setting.key);
+  if (setting.type === 'color') {
+    const picker = el('input', { type: 'color', class: 'color-input' });
+    picker.value = String(value);
+    // `input` fires while dragging inside the picker: the viewport follows it live
+    picker.addEventListener('change', () => commit(picker.value));
+    return picker;
+  }
   if (setting.type === 'checkbox') {
     const box = el('input', { type: 'checkbox' });
     box.checked = !!value;
