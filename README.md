@@ -305,7 +305,7 @@ git config core.hooksPath .githooks
 
 ### Tests
 
-There are around 920 of them, among them a robustness suite that feeds the
+There are around 930 of them, among them a robustness suite that feeds the
 importers, the project loader, the G-code reader and every strategy input they
 were never meant to receive.
 

@@ -14,6 +14,7 @@
 // nothing, rather than by learning about a fourth case.
 
 import { computeBounds, flatLevels } from '../geom/mesh.js';
+import { offsetLoops } from '../geom/clipper.js';
 
 export const STOCK_KINDS = ['box-margin', 'box', 'cylinder', 'tube'];
 
@@ -290,6 +291,19 @@ export function stockOutline(stock, grow = 0, segments = 96) {
     x1 + grow, y1 + grow,
     x0 - grow, y1 + grow,
   ]];
+}
+
+/**
+ * Where a cutter's centre can be and still touch the billet: the footprint
+ * grown by the radius with round corners, a bore shrunk by it.
+ *
+ * Not `stockOutline(stock, radius)`, which mitres a box's corners — the arc a
+ * cutter centre follows round one lies inside the mitre, so anything judged
+ * against that treats a lap that only grazes the corner as work.
+ */
+export function stockReach(stock, radius, tolerance = 0.01) {
+  const flat = stockOutline(stock, 0);
+  return radius > 1e-9 ? offsetLoops(flat, radius, tolerance) : flat;
 }
 
 /** The most depth levels one cut may have: 0.01mm of stepdown down a 50mm pocket. */

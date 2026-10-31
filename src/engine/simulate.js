@@ -1136,8 +1136,14 @@ function turnCut(surface, mask, log, step, grid, p0, p1, nose, half, barRadius, 
       const zi = zMin + i * dz;
       const e = Math.abs(zi - z);
       let cutTo;
-      if (pitch > 0) cutTo = threadFloor(zi, r, pitch, 1, form);
-      else if (form.vee) {
+      if (pitch > 0) {
+        // the cell range is rounded out to whole cells, so one just past half a
+        // pitch from the pass is in it and nearer the groove a pitch back, which
+        // this pass never cut: a thread ending a hair short of a shoulder took
+        // 4mm out of the shoulder's edge cell
+        if (e > pitch / 2) continue;
+        cutTo = threadFloor(zi, r, pitch, 1, form);
+      } else if (form.vee) {
         if (e > half) continue;
         cutTo = r + e * form.rise;             // the insert's own point
       } else if (e <= half) cutTo = r;         // inside the blade's own width
@@ -1190,6 +1196,7 @@ function boreCut(surface, mask, log, step, grid, p0, p1, nose, half, isDrill, pi
       const e = Math.abs(zi - z);
       let cutTo;
       if (pitch > 0 && !isDrill) {
+        if (e > pitch / 2) continue;           // see turnCut
         cutTo = threadFloor(zi, r, pitch, -1, form);
       } else if (form.vee && !isDrill) {
         if (e > half) continue;

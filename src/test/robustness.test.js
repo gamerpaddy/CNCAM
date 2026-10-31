@@ -26,7 +26,7 @@ const FLAT = {
   fluteLength: 20, flutes: 2, spindleRpm: 10000, feedCut: 800, feedPlunge: 300,
 };
 const block = makePocketBlock({ size: 40, pocketSize: 20, height: 20, depth: 12 });
-const STOCK = { kind: 'box', min: [0, 0, 0], max: [40, 40, 20] };
+const STOCK = { kind: 'box', min: [-3, -3, 0], max: [43, 43, 20] };   // proud of the block: an outside contour needs stock to cut
 
 function run(type, patch = {}, tool = FLAT) {
   const params = {
@@ -262,4 +262,21 @@ test('a project whose saved face ranges are not numbers still picks faces', () =
   assert.eq(decodeMesh(record).faceRanges.length, 2, 'and a good one is kept');
   record.faceRanges = 'abc';
   assert.ok(!decodeMesh(record).faceRanges, 'a string is not a list of ranges');
+});
+
+test('a STEP/IGES reader failure says what to do, not a bare number', async () => {
+  // The reader is C++ in WebAssembly: a bad file comes back as a pointer ("Import
+  // failed: 5263928"), as nothing, or as "could not read the file".
+  const { describeCadError } = await import('../io/step.js');
+  for (const error of ['5263928', '', undefined, 'occt could not read the file']) {
+    const said = describeCadError(error, 'step');
+    assert.ok(/STEP reader could not make sense/.test(said) && /Export it again/.test(said),
+      `"${error}" came back as: ${said}`);
+    assert.ok(!/^\d+$/.test(said), 'not a number');
+  }
+  assert.ok(/IGES/.test(describeCadError('7', 'iges')), 'the kind is named');
+  assert.ok(/too big/.test(describeCadError('RangeError: WebAssembly.Memory(): could not allocate memory')),
+    'running out of memory is its own message');
+  assert.eq(describeCadError('Unexpected token in line 4'), 'Unexpected token in line 4',
+    'the reader\'s own words are kept when it has some');
 });

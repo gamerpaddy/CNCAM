@@ -368,7 +368,7 @@ test('a contour steps a loop down without rapiding across the part between passe
   const stockTop = 12;
   const cl = generateToolpath({
     type: 'contour2d', name: 'cut out', tool: FLAT,
-    mesh: makeBox(20, 20, stockTop), stock: { min: [0, 0, 0], max: [20, 20, stockTop] },
+    mesh: makeBox(20, 20, stockTop), stock: { min: [-3, -3, 0], max: [23, 23, stockTop] },
     params: {
       topZ: stockTop, bottomZ: 0, stepdown: 3, clearanceHeight: 25, entryGap: 1,
       tolerance: 0.02, stockToLeave: 0, direction: 'climb', side: 'outside',

@@ -14,7 +14,7 @@ function contourOps() {
   const cl = generateToolpath({
     type: 'contour2d', name: 'cutout', tool: TOOL,
     mesh: makeBox(10, 10, 5),
-    stock: { min: [0, 0, 0], max: [10, 10, 5] },
+    stock: { min: [-3, -3, 0], max: [13, 13, 5] },
     params: { topZ: 5, bottomZ: 0, stepdown: 2, clearanceHeight: 15, stockToLeave: 0, tolerance: 0.01, rampAngle: 0 },
   });
   return [{ name: 'cutout', cl }];
@@ -606,7 +606,7 @@ test('a tool with no usable speed or feed posts none, and says so, rather than N
     const cl = generateToolpath({
       type: 'contour2d', name: 'cutout', tool,
       mesh: makeBox(10, 10, 5),
-      stock: { min: [0, 0, 0], max: [10, 10, 5] },
+      stock: { min: [-3, -3, 0], max: [13, 13, 5] },
       params: { topZ: 5, bottomZ: 0, stepdown: 2, clearanceHeight: 15, stockToLeave: 0, tolerance: 0.01, rampAngle: 0 },
     });
     const { text } = buildGcode('linuxcnc', [{ name: 'cutout', cl }]);

@@ -16,6 +16,16 @@
 import { computeBounds } from '../geom/mesh.js';
 
 /**
+ * The widest step a part is sampled at for machining it: where a shoulder's
+ * face can be wrong by, so also what a check of a pass against the part is
+ * measured on.
+ */
+export const PROFILE_STEP = 0.02;
+
+/** The most samples a profile is given, however long the part. */
+const MAX_PROFILE_SAMPLES = 15000;
+
+/**
  * The part's turning profile: the largest radius at each position along the
  * axis.
  *
@@ -29,14 +39,21 @@ import { computeBounds } from '../geom/mesh.js';
  * where the edges cross each Z plane is exact for the envelope rather than an
  * approximation of it.
  *
+ * @param samples how many samples along the part, at least
+ * @param maxStep the widest a sample may be, mm. A step in the diameter is
+ *   placed to the nearest sample (and then dilated by one, below), so a
+ *   shoulder's face lands up to a sample from where the drawing has it: 600
+ *   samples along a 300mm shaft was a shoulder 0.7mm out in length, with no
+ *   message, on the one dimension a finishing pass exists to hold.
  * @returns { z: Float32Array, r: Float32Array, zMin, zMax, dz, maxRadius }
  */
-export function turningProfile(mesh, { samples = 400 } = {}) {
+export function turningProfile(mesh, { samples = 400, maxStep = Infinity } = {}) {
   const { positions, indices } = mesh;
   const bounds = computeBounds(positions);
   const zMin = bounds.min[2];
   const zMax = bounds.max[2];
-  const n = Math.max(2, Math.round(samples));
+  const n = Math.max(2, Math.round(samples),
+    Math.min(MAX_PROFILE_SAMPLES, Math.ceil((zMax - zMin) / maxStep) + 1) || 0);
   const dz = (zMax - zMin) / (n - 1) || 1;
 
   const r = new Float32Array(n);
@@ -164,12 +181,13 @@ export function barFromStock(stock, profile, margin = 1) {
  *
  * @returns { z, r, zMin, zMax, dz, samples } with r = 0 where the part is solid
  */
-export function boreProfile(mesh, { samples = 400, minGap = 0.2 } = {}) {
+export function boreProfile(mesh, { samples = 400, minGap = 0.2, maxStep = Infinity } = {}) {
   const { positions, indices } = mesh;
   const bounds = computeBounds(positions);
   const zMin = bounds.min[2];
   const zMax = bounds.max[2];
-  const n = Math.max(2, Math.round(samples));
+  const n = Math.max(2, Math.round(samples),
+    Math.min(MAX_PROFILE_SAMPLES, Math.ceil((zMax - zMin) / maxStep) + 1) || 0);
   const dz = (zMax - zMin) / (n - 1) || 1;
 
   const inner = new Float32Array(n).fill(Infinity);

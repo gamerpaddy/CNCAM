@@ -344,22 +344,28 @@ test('and it stays above the part while it does', () => {
   assert.ok(worst <= 0, `a rapid passes ${worst.toFixed(2)}mm below the part surface`);
 });
 
-test('a clamp in the setup sends the links back to clearance', () => {
+test('a clamp in the setup raises the links over it instead of sending them to clearance', () => {
   // A fixture is a keep-out for the whole column above its footprint, and
-  // adaptive is not given enough to route around one. Crossing low is the thing
-  // that has to be given up, not the clamp.
+  // adaptive is not given enough to route around one. Crossing low is not what
+  // has to be given up, only crossing lower than the clamp: a link at a gap
+  // above its top clears it wherever it is, and does not climb the rest of the
+  // way to clearance for it. (Links that stay inside the region the level has
+  // open cross lower still, and never needed the clamp's height.)
   const cl = adaptiveRun({
     fixtures: [{
-      kind: 'box', name: 'jaw', min: [0, -10, 0], max: [60, 0, 20],
+      kind: 'box', name: 'jaw', center: [30, -5], size: [60, 10], baseZ: 0, height: 20,
     }],
   });
   let climbs = 0;
   let prev = null;
   for (const m of moves(cl)) {
-    if (prev && m.z >= 25 - 1e-6 && prev.z < 25 - 1e-6) climbs++;
+    if (prev && Math.hypot(m.x - prev.x, m.y - prev.y) > 1e-6 && m.feed === FEED.RAPID) {
+      assert.ok(Math.max(m.z, prev.z) < 25 - 1e-6, `a hop at z=${Math.max(m.z, prev.z)} climbs to clearance`);
+    }
+    if (prev && m.z >= 21 - 1e-6 && prev.z < 21 - 1e-6) climbs++;
     prev = m;
   }
-  assert.ok(climbs > 10, `${climbs} climbs — with a clamp present it must use clearance`);
+  assert.ok(climbs > 0, `${climbs} climbs over the clamp`);
 });
 
 // --- turning ---------------------------------------------------------------

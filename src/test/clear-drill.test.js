@@ -92,22 +92,28 @@ test('clear2d rapids travel above the stock, not through it', () => {
   });
   assert.ok(travels > 0, 'there are travelling rapids to check');
 
-  // and with a clamp in the setup it gives that up and uses clearance
+  // and a clamp in the setup raises the plane over it rather than giving it up:
+  // the hops still travel, at a gap above the clamp (25mm), not at clearance and
+  // not below it
   const clamped = generateToolpath({
     type: 'clear2d', name: 'rough', tool: TOOL,
     mesh: makeBox(20, 20, 10),
     stock: { min: [-5, -5, 0], max: [25, 25, stockTop] },
-    fixtures: [{ kind: 'box', name: 'jaw', min: [-5, -15, 0], max: [25, -5, 25] }],
+    fixtures: [{ kind: 'box', name: 'jaw', center: [10, -12], size: [30, 6], baseZ: 0, height: 25 }],
     params: { topZ: 10, bottomZ: 6, stepdown: 2, stepover: 0.5, stockToLeave: 0,
-              clearanceHeight: 20, entryGap: 1, tolerance: 0.01, rampAngle: 0 },
+              clearanceHeight: 40, entryGap: 1, tolerance: 0.01, rampAngle: 0 },
   });
-  let prevZ = null;
+  let last = null;
+  let hops = 0;
   eachMove(clamped, (op, x, y, z) => {
-    if (op === OP.RAPID) {
-      assert.ok(z === 20 || prevZ === 20 || prevZ === null, `rapid at z=${z} from ${prevZ}`);
+    if (op === OP.RAPID && last && Math.hypot(x - last.x, y - last.y) > 1e-6) {
+      hops++;
+      assert.ok(Math.min(z, last.z) >= 26 - 1e-6, `a hop at z=${Math.min(z, last.z)} is under the clamp`);
+      assert.ok(Math.max(z, last.z) < 40 - 1e-6, 'and does not climb to clearance for it');
     }
-    prevZ = z;
+    last = { x, y, z };
   });
+  assert.ok(hops > 0, 'there are hops to check');
 });
 
 // --- drill ---

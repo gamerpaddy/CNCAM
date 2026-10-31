@@ -22,7 +22,7 @@
 // cutting levels and thrown away by the entry.
 
 import { FEED, lastXY } from './cl.js';
-import { hasFixtures } from './fixtures.js';
+import { fixtureTop } from './fixtures.js';
 
 /** Highest to lowest. Every rule below is a consequence of this order. */
 export const HEIGHT_ORDER = ['clearanceHeight', 'topZ', 'bottomZ'];
@@ -286,20 +286,27 @@ export function entryPlane(params, zEntry, z) {
  * The exception is the one thing that is not part of the job. A clamp stands
  * proud of the stock and is a keep-out for the whole column above its footprint
  * (see engine/fixtures.js), and none of the strategies is given enough to route
- * around one, so with fixtures in the setup this returns null and the passes go
- * home. That is what clearance is for; giving it up is not the optimisation.
+ * around one. Over the top of it is another matter: the plane is a gap above the
+ * tallest clamp as well as the stock, which clears both wherever they are. It
+ * used to give the plane up the moment the setup had any clamp at all, so every
+ * hop of every operation in a clamped job climbed to full clearance. A chuck on
+ * a rotary table is not something to pass over (see fixtureTop) and still sends
+ * the passes home.
  *
  * @returns the plane, or null when the passes should use clearance
  */
 export function crossingPlane(params, stock, fixtures) {
-  if (hasFixtures(fixtures)) return null;
+  if ((fixtures ?? []).some((f) => f && f.enabled !== false && f.kind === 'chuck')) return null;
+  const clamp = fixtureTop(fixtures);
   const top = Number.isFinite(stock?.max?.[2]) ? stock.max[2] : params.topZ;
   const highest = Math.max(
     Number.isFinite(top) ? top : -Infinity,
     Number.isFinite(params.topZ) ? params.topZ : -Infinity,
   );
   if (!Number.isFinite(highest)) return null;
-  const plane = highest + entryGapOf(params);
+  // over a clamp by the margin the clearance itself is floored to (toolpath.js
+  // clampSafeArgs), whatever the entry gap says
+  const plane = Math.max(highest + entryGapOf(params), clamp ? clamp.z + 3 : -Infinity);
   return plane < params.clearanceHeight - 1e-9 ? plane : null;
 }
 

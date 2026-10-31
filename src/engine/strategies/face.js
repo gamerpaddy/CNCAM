@@ -59,15 +59,21 @@ export function generateFace({
     return cl.finish();
   }
 
-  // A billet flush with the top of the part has nothing above it to face. The
-  // pass is still emitted — one cut at that height, which is what Top Z equal
-  // to Bottom Z asks for — but silence here reads as an operation that did
-  // nothing for no reason.
-  if (!(params.topZ > params.bottomZ + 1e-6)) {
+  // A billet at or below the height the pass stops at has nothing above it to
+  // face. Top Z equal to Bottom Z is the ordinary way to ask for one cut at a
+  // height — and with stock above that height it is a real cut — but with the
+  // billet flush it was a whole raster of air at feed (1000-2400mm on a 100mm
+  // plate). The operation stays as a marker over the job, so it can be seen and
+  // dragged, and says why it cuts nothing.
+  const stockTop = stock.max[2];
+  if (floorZ >= stockTop - 1e-6) {
     cl.info('nothing to face — the billet is already level with the top of the '
-      + 'part here, so this pass runs on the finished face without cutting. '
+      + 'part here, so this pass leaves the finished face alone. '
       + 'Give the stock some margin above the part, or lower Bottom Z to take '
       + 'a skim off the part itself.');
+    const box = loopsBounds(area);
+    cl.rapid((box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, clearance);
+    return cl.finish();
   }
 
   // How far a row runs past the edge of the stock, so the cutter comes right

@@ -29,10 +29,10 @@ import { CLBuilder, FEED, lastXY, lastZ } from '../cl.js';
 import { plural, pluralEs } from '../text.js';
 import { mergeTolerance } from '../simplify.js';
 import {
-  offsetLoops, loopArea, unionWithHoles, diffLoops,
+  offsetLoops, loopArea, unionWithHoles, diffLoops, clipOpenPaths, loopToOpenPath,
 } from '../../geom/clipper.js';
 import { SilhouetteStack, silhouetteAbove } from '../../geom/silhouette.js';
-import { depthPasses } from '../stock.js';
+import { depthPasses, stockReach } from '../stock.js';
 import {
   cutLoopWithRamp, cutPerimeter, orderByProximity, startNearest, startNearestSlide,
 } from '../linking.js';
@@ -108,18 +108,34 @@ export function generateContour({
   }
   // Boundaries the cutter was too big to go round, counted for the note below.
   let dropped = 0;
+  // Where the cutter centre overlaps the billet at all, and the outlines that
+  // never do. A billet cut to the size of the part leaves nothing outside it to
+  // remove, so an outside contour of it was a whole lap of air at every depth;
+  // the same for any outline wholly beyond the stock. Counted for the note below.
+  const billet = stock
+    ? stockReach(stock, Math.max(0, r - Math.max(0.02, 2 * tolerance)), tolerance) : null;
+  let offBillet = 0;
+  const centresOf = (profiles, allowance, counting = true) => {
+    const raw = offsetLoops(profiles, offsetFor(side, r, allowance), tolerance);
+    // see the note where this is reported
+    if (counting && raw.length < profiles.length) dropped = Math.max(dropped, profiles.length - raw.length);
+    if (!billet) return raw;
+    const over = raw.filter((loop) => (
+      clipOpenPaths([loopToOpenPath(loop)], billet, 'intersect').length > 0));
+    offBillet = Math.max(offBillet, raw.length - over.length);
+    return over;
+  };
   // Loops started again from the top of the metal rather than from the level
   // above — see emitLevel.
   let restarted = 0;
   const emitLevel = (shadow, allowance, z, useTabs, zAbove) => {
     const profiles = selectProfiles(shadow, params.profile ?? 'outer');
-    const raw = offsetLoops(profiles, offsetFor(side, r, allowance), tolerance);
     // Offsetting a boundary inward by more than its own half-width collapses
     // it, which is the honest answer — a ⌀12 cutter cannot go round a ⌀4.5
     // hole. Saying nothing is not: asking for every profile on this part and
     // getting a program byte-identical to "outer profile only" reads as a
     // setting that does not work. See the note where this is reported.
-    if (raw.length < profiles.length) dropped = Math.max(dropped, profiles.length - raw.length);
+    const raw = centresOf(profiles, allowance);
     const { closed, open } = applyRegionsToPaths(raw, regions, { ...clip, z });
     const leadRoom = lead.type !== 'none' && closed.length ? roomFor(raw) : null;
     let any = false;
@@ -167,7 +183,7 @@ export function generateContour({
   // far back the pass before it ran, which is where it may come down.
   const emitFinish = (shadow, allowance, laps, step) => {
     const profiles = selectProfiles(shadow, params.profile ?? 'outer');
-    const raw = offsetLoops(profiles, offsetFor(side, r, allowance), tolerance);
+    const raw = centresOf(profiles, allowance, false);
     const { closed, open } = applyRegionsToPaths(raw, regions, { ...clip, z: params.bottomZ });
     const leadRoom = lead.type !== 'none' && closed.length ? roomFor(raw) : null;
     let any = false;
@@ -221,8 +237,7 @@ export function generateContour({
   if (continuous) {
     finalShadow = partShadow;
     const profiles = selectProfiles(finalShadow, params.profile ?? 'outer');
-    const raw = offsetLoops(profiles, offsetFor(side, r, stockToLeave), tolerance);
-    if (raw.length < profiles.length) dropped = Math.max(dropped, profiles.length - raw.length);
+    const raw = centresOf(profiles, stockToLeave);
     // avoid/include are depth-invariant, so clipping once at the bottom holds
     // for the whole descent.
     const { closed, open } = applyRegionsToPaths(raw, regions, { ...clip, z: params.bottomZ });
@@ -312,7 +327,15 @@ export function generateContour({
     cl.info(`${dropped} boundary/boundaries left uncut — a ⌀${tool.diameter} cutter does `
       + 'not fit round them. Use a smaller cutter, or bore them.');
   }
-  if (!cutAnything) {
+  if (offBillet > 0 && cutAnything) {
+    cl.info(`${plural(offBillet, 'outline')} left uncut — ${offBillet === 1 ? 'it lies' : 'they lie'} `
+      + 'wholly outside the billet, where the cutter has nothing to remove.');
+  }
+  if (!cutAnything && offBillet > 0) {
+    cl.warn('contour produced no passes — the billet does not reach past the part on the '
+      + `side the cutter works (${side}), so there is no stock for it to remove. Give the stock `
+      + 'some margin, or choose the other side.');
+  } else if (!cutAnything) {
     // A pick that leaves the pass nowhere to go is not a heights problem, and
     // sending somebody to the Heights tab for it wastes their time in the one
     // tab that is not the cause — see engine/regions.js regionRefusal.

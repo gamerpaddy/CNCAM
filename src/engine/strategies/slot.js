@@ -29,9 +29,10 @@
 
 import { CLBuilder, FEED, lastXY } from '../cl.js';
 import { plural, pluralEs } from '../text.js';
-import { offsetLoops } from '../../geom/clipper.js';
+import { offsetLoops, clipOpenPaths, loopToOpenPath } from '../../geom/clipper.js';
+import { segmentInLoops } from '../../geom/inside.js';
 import { silhouetteAbove } from '../../geom/silhouette.js';
-import { depthPasses } from '../stock.js';
+import { depthPasses, stockReach } from '../stock.js';
 import { orderByProximity, cutLoopWithRamp, cutSpanWithRamp } from '../linking.js';
 import { orientLoop } from '../leads.js';
 import { applyRegionsToPaths } from '../regions.js';
@@ -145,15 +146,26 @@ export function generateSlot({
   // appears when a keep-out ends is untouched ground like any other.
   // See engine/heights.js EntrySurface.
   const surface = new EntrySurface(params.topZ, r);
+
+  // Where the cutter centre can touch the billet at all (stockReach). A lane
+  // outside it removes nothing, and with a slot wider than the cutter that is
+  // most of them whenever the line runs near an edge — a 12mm slot with a ⌀3
+  // cutter laid along a 40mm plate cut 224m of program, nearly all of it in the
+  // air on either side. The lines are the same at every depth, so each lane is
+  // made and clipped once.
+  const billet = stock ? stockReach(stock, r, tolerance) : null;
+  const lanePaths = lanes.map((lane) => {
+    const paths = [];
+    for (const { points, closed } of centres) {
+      for (const shifted of shiftPath(points, closed, lane, tolerance)) {
+        paths.push(...withinBillet(shifted, closed, billet, tolerance));
+      }
+    }
+    return paths;
+  });
   for (const z of levels) {
     surface.beginLevel();
-    for (const lane of lanes) {
-      const paths = [];
-      for (const { points, closed } of centres) {
-        for (const shifted of shiftPath(points, closed, lane, tolerance)) {
-          paths.push({ points: shifted, closed });
-        }
-      }
+    for (const paths of lanePaths) {
       // nearest first: a plate with six slots in it is six entries, and the
       // order the geometry came out in is not where they are
       const ordered = orderByProximity(paths.map((p) => p.points),
@@ -164,39 +176,49 @@ export function generateSlot({
         const { closed } = byPoints.get(points);
         const { closed: keptLoops, open: keptOpen } = applyRegionsToPaths(
           [points], regions, { radius: r, tolerance });
-        // Where this line's material actually starts, and how many passes it
-        // takes to get down to this level from there.
-        //
-        // Normally one: the line was cut at the level above and the stepdown is
-        // the whole of what is left. But a line that appears when the
-        // cross-section changes has never been cut at all, and taking it in one
-        // pass is a full-width cut as deep as the tool has been asked to go —
-        // 13.5mm with a ⌀6 cutter on the step plate, 24.7mm on the sloped one,
-        // both reported in the summary as "16 depth pass(es)". A slot is the
-        // heaviest cut a mill makes; the depth per pass is the one promise it
-        // has to keep.
-        const top = surface.entryFor(points, closed);
-        let from = top;
-        for (const zz of depthPasses(top, z, params.stepdown)) {
-          const feedPlane = entryPlane(params, from, zz);
-          const pass = {
-            z: zz, zEntry: from, clearanceZ, crossAt, rampAngle, feedPlane, direction,
-          };
-          from = zz;
-          // A clipped loop is not a loop any more. `applyRegionsToPaths` hands
-          // the surviving spans back as open polylines — and whenever any region
-          // is active it returns *everything* that way, with `closed` empty — so
-          // taking only `closed` for a closed input threw the whole path away.
-          // What that looked like: a slot following the part's own boundary cut
-          // nothing at all the moment the setup had a clamp in it, anywhere,
-          // even 500mm clear of the work, and blamed the part for having no
-          // outline. Contour and engrave both cut the two lists; this cuts them
-          // too.
-          for (const path of keptLoops) {
-            if (cutOne(cl, path, closed, pass)) { cutAnything = true; surface.covered(path, closed); }
-          }
-          for (const path of keptOpen) {
-            if (cutOne(cl, path, false, pass)) { cutAnything = true; surface.covered(path, false); }
+        // A clipped loop is not a loop any more. `applyRegionsToPaths` hands
+        // the surviving spans back as open polylines — and whenever any region
+        // is active it returns *everything* that way, with `closed` empty — so
+        // taking only `closed` for a closed input threw the whole path away.
+        // What that looked like: a slot following the part's own boundary cut
+        // nothing at all the moment the setup had a clamp in it, anywhere,
+        // even 500mm clear of the work, and blamed the part for having no
+        // outline. Contour and engrave both cut the two lists; this cuts them
+        // too.
+        const pieces = [
+          ...keptLoops.map((path) => ({ path, closed })),
+          ...keptOpen.map((path) => ({ path, closed: false })),
+        ];
+        for (const piece of pieces) {
+          // Where this piece's material actually starts, and how many passes it
+          // takes to get down to this level from there.
+          //
+          // Normally one: the line was cut at the level above and the stepdown is
+          // the whole of what is left. But a line that appears when the
+          // cross-section changes has never been cut at all, and taking it in one
+          // pass is a full-width cut as deep as the tool has been asked to go —
+          // 13.5mm with a ⌀6 cutter on the step plate, 24.7mm on the sloped one,
+          // both reported in the summary as "16 depth pass(es)". A slot is the
+          // heaviest cut a mill makes; the depth per pass is the one promise it
+          // has to keep.
+          //
+          // Asked of the piece that is cut, not of the line it came from: a
+          // clamp's keep-out takes a bite out of the line, the level above only
+          // covered the rest, and asking about the whole line read the bite as
+          // ground nobody had been near — so every level came down from the top
+          // of the billet again (13.7m of slot where 2.0m would do).
+          const top = surface.entryFor(piece.path, piece.closed);
+          let from = top;
+          for (const zz of depthPasses(top, z, params.stepdown)) {
+            const pass = {
+              z: zz, zEntry: from, clearanceZ, crossAt, rampAngle,
+              feedPlane: entryPlane(params, from, zz), direction,
+            };
+            from = zz;
+            if (cutOne(cl, piece.path, piece.closed, pass)) {
+              cutAnything = true;
+              surface.covered(piece.path, piece.closed);
+            }
           }
         }
       }
@@ -206,7 +228,7 @@ export function generateSlot({
 
   if (!cutAnything) {
     cl.warn(drawnPaths
-      ? 'slotting cut nothing — every line was clipped away by the picked regions'
+      ? 'slotting cut nothing — every line was clipped away by the picked regions or lies off the billet'
       : 'slotting found no lines — with no drawing to follow it uses the part\'s '
         + 'own boundary at Top Z, and there is none here');
     return cl.finish();
@@ -251,6 +273,28 @@ function boundaryCentres(shadow) {
   return [...outers, ...holes]
     .filter(({ loop }) => loop.length / 2 >= 3)
     .map(({ loop }) => ({ points: loop, closed: true }));
+}
+
+/**
+ * The part of a path that is over the billet, as `{ points, closed }` pieces.
+ *
+ * A path wholly over it comes back as itself, closed loops still closed; one
+ * that leaves it is cut into the spans that stay.
+ */
+function withinBillet(points, closed, billet, tolerance) {
+  if (!billet) return [{ points, closed }];
+  const n = points.length / 2;
+  let whole = true;
+  for (let i = 0; i + 1 < n && whole; i++) {
+    whole = segmentInLoops(billet, points[i * 2], points[i * 2 + 1],
+      points[i * 2 + 2], points[i * 2 + 3], tolerance);
+  }
+  if (whole && closed && n > 2) {
+    whole = segmentInLoops(billet, points[n * 2 - 2], points[n * 2 - 1], points[0], points[1], tolerance);
+  }
+  if (whole) return [{ points, closed }];
+  return clipOpenPaths([closed ? loopToOpenPath(points) : points], billet, 'intersect')
+    .map((piece) => ({ points: piece, closed: false }));
 }
 
 /**

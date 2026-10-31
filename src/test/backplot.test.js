@@ -776,3 +776,28 @@ test('an arc whose centre is a million kilometres away does not ask for millions
   const last = parsed.points[parsed.points.length - 1];
   assert.close(last.x, 10, 1e-9, 'and it still lands where the block said');
 });
+
+test('a full circle written with a centre and no end point is read as a circle', () => {
+  // `G3 I-10` is how a circular pocket is typed by hand: the end is where the
+  // tool already stands. The block had no axis word, so it was skipped whole —
+  // the circle was missing from the backplot and nothing said so.
+  for (const g of ['G90', 'G91']) {
+    const parsed = parseGcode(`${g}\nG0 X10 Y0\nG3 I-10 J0 F100\n`);
+    const xs = parsed.points.map((p) => p.x);
+    assert.ok(parsed.points.length > 50, `${g}: ${parsed.points.length} points`);
+    assert.close(Math.min(...xs), -10, 0.01, `${g}: it goes round the far side`);
+    assert.close(parsed.points[parsed.points.length - 1].x, 10, 1e-9, `${g}: and comes back`);
+  }
+});
+
+test('what the reader cannot evaluate or reach is said, not dropped', () => {
+  // Parameters and expressions are not words; a program written in them read
+  // back as one with no motion in it. And an R too short for the chord is not a
+  // block "without I/J/K or R".
+  const macro = parseGcode('#1=5\nG1 X#1 F10\nG1 X[1+2]\n');
+  assert.eq(macro.points.length, 0, 'there is no motion it can read');
+  assert.ok(macro.unsupported.some((u) => /macro variable/.test(u.code)), 'and it says why');
+  const short = parseGcode('G0 X0 Y0\nG2 X10 Y0 R1 F100\n');
+  assert.ok(short.unsupported.some((u) => /R too small/.test(u.code)),
+    `the short R is named: ${short.unsupported.map((u) => u.code)}`);
+});

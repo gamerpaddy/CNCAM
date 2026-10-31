@@ -505,6 +505,48 @@ test('the part that comes out is the part that went in', () => {
   }
 });
 
+test('stock to leave is left on a shoulder face too, not only on the diameters', () => {
+  // The allowance was added to the radius alone, so a face — which has no
+  // radius to add to — got none: 0.3 asked for, 0.04 left on the face of the
+  // shoulder at Z35, and the roughing insert cut the finished length.
+  for (const type of ['turnRough', 'turnFinish']) {
+    const cut = machine([{
+      type, tool: INSERT, params: { topZ: 60, bottomZ: 0, stepdown: 2, stockToLeave: 0.3 },
+    }]);
+    // 0.2 along the bar from the face, which the allowance still covers
+    assert.ok(cut.radiusAt(35.2) >= shaft.bigR - 0.01,
+      `${type}: at Z35.2 the bar is ${cut.radiusAt(35.2).toFixed(3)}, cut into the 0.3 left on the face`);
+    // and the diameters still carry theirs
+    assert.close(cut.radiusAt(10), shaft.bigR + 0.3, 0.05, `${type}: the big diameter`);
+  }
+});
+
+test('a shoulder is where the drawing has it, however long the part', () => {
+  // The profile was 600 samples however long the part, and a step in the
+  // diameter lands on a sample and is then dilated by one: on a 300mm shaft the
+  // face of a shoulder came out 0.7mm along from where it was drawn, with
+  // nothing said. Measured at the face, on the finished bar.
+  const length = 300;
+  const part = makeRevolved([[0, 0], [20, 0], [20, 150], [14, 150], [14, length], [0, length]]);
+  const long = { kind: 'cylinder', min: [-20, -20, 0], max: [20, 20, length],
+    cylinder: { diameter: 40, height: length, center: [0, 0] } };
+  const ops = [{ type: 'turnFinish', tool: INSERT, params: { topZ: length, bottomZ: 0, stockToLeave: 0 } }]
+    .map(({ type, tool, params }) => ({
+      tool,
+      cl: generateToolpath({ type, name: type, tool, mesh: part, stock: long, params: { ...base, ...params } }),
+    }));
+  const sim = simulateTurning({ bar: { radius: 20, zMin: 0, zMax: length }, ops, samples: 12000 });
+  const playback = new SimulationPlayback(sim);
+  playback.seek(sim.stepCount);
+  let faceAt = null;
+  for (let i = 0; i < sim.count; i++) {
+    const z = sim.zMin + i * sim.dz;
+    if (z > 140 && z < 160 && playback.current[i] > 19.9) faceAt = z;
+  }
+  assert.ok(faceAt !== null, 'the big diameter is there');
+  assert.close(faceAt, 150, 0.1, 'and it ends at the shoulder');
+});
+
 test('roughing leaves its allowance, measured on the material', () => {
   const rough = (stockToLeave) => machine([{
     type: 'turnRough', tool: INSERT, params: { topZ: 60, bottomZ: 0, stepdown: 2, stockToLeave },

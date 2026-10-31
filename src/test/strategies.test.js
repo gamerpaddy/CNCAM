@@ -13,7 +13,7 @@ function contourArgs() {
   return {
     type: 'contour2d', name: 'cutout', tool: TOOL,
     mesh: makeBox(10, 10, 5),
-    stock: { min: [0, 0, 0], max: [10, 10, 5] },
+    stock: { min: [-2, -2, 0], max: [12, 12, 5] },   // outside the part, or an outside cut has nothing to remove
     params: { topZ: 5, bottomZ: 0, stepdown: 2, clearanceHeight: 15, stockToLeave: 0, tolerance: 0.01 },
   };
 }
@@ -243,8 +243,8 @@ test('contour never travels sideways below clearance height', () => {
 test('face covers the stock and cuts at bottomZ only', () => {
   const cl = generateToolpath({
     type: 'face', name: 'face', tool: TOOL,
-    stock: { min: [0, 0, 0], max: [10, 10, 5] },
-    params: { topZ: 5, bottomZ: 5, stepdown: 2, stepover: 0.5, clearanceHeight: 15 },
+    stock: { min: [0, 0, 0], max: [10, 10, 6] },
+    params: { topZ: 6, bottomZ: 5, stepdown: 2, stepover: 0.5, clearanceHeight: 15 },
   });
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   eachMove(cl, (op, x, y, z, i, j, k, feed) => {
@@ -269,8 +269,8 @@ test('the facing raster sits on the billet at both ends', () => {
   for (const depth of [70, 62, 51.5, 40, 24]) {
     const cl = generateToolpath({
       type: 'face', name: 'face', tool: face,
-      stock: { min: [0, 0, 0], max: [100, depth, 5] },
-      params: { topZ: 5, bottomZ: 5, stepdown: 2, stepover: 0.6, clearanceHeight: 15 },
+      stock: { min: [0, 0, 0], max: [100, depth, 6] },
+      params: { topZ: 6, bottomZ: 5, stepdown: 2, stepover: 0.6, clearanceHeight: 15 },
     });
     const ys = new Set();
     eachMove(cl, (op, x, y, z, i, j, k, feed) => {

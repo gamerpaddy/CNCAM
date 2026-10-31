@@ -47,5 +47,6 @@ import './speed.test.js';
 import './efficiency.test.js';
 import './sanity.test.js';
 import './robustness.test.js';
+import './mill-air.test.js';
 
 export { run } from './runner.js';

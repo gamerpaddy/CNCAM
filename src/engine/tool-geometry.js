@@ -77,6 +77,17 @@ export function threadFlankRise(tool) {
   return 1 / Math.tan((threadIncludedAngle(tool) * Math.PI) / 360);
 }
 
+/**
+ * How far along the bar a threading pass reaches either side of its centre: the
+ * insert's own half-width, or half a pitch where that is more — the groove a
+ * pass cuts is a pitch wide, and the simulation cuts all of it. A run-out judged
+ * on the half-width alone stopped a pitch-2 thread 0.97mm from a shoulder it
+ * took 2.5mm out of in one pass.
+ */
+export function threadFlankReach(tool, pitch) {
+  return Math.max(bladeHalfWidth(tool), pitch > 0 ? pitch / 2 : 0);
+}
+
 export function tipAngleOf(tool) {
   if (tool?.tipAngle > 0 && tool.tipAngle < 180) return tool.tipAngle;
   if (tool?.type === 'drill') return 118;

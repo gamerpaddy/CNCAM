@@ -199,6 +199,10 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
   text.split('\n').forEach((raw, line) => {
     const code = raw.replace(/\([^)]*\)/g, '').replace(/;.*$/, '').trim();
     if (!code || code === '%') return;
+    // Parameters and expressions (`X#1`, `X[1+2]`) are not words this reader
+    // can evaluate, and the move they stand in was dropped without a sign: a
+    // program of them read back as one with no motion at all.
+    if (/[#[]/.test(code)) unread('macro variable or expression (# or [ ])', line);
 
     const words = [];
     // the digits as they were written are kept too: a lathe's T word means one
@@ -373,7 +377,12 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
       return;
     }
 
-    if (move == null || (x == null && y == null && z == null)) return;
+    // An arc with a centre and no end point is a full circle from where the tool
+    // stands — `G3 I-10` is how a circular pocket is written by hand — and not
+    // a block with nothing to do.
+    const circle = (move === 2 || move === 3) && x == null && y == null && z == null
+      && ['I', 'J', 'K'].some((l) => value(l) != null);
+    if (move == null || (x == null && y == null && z == null && !circle)) return;
     const target = { x: x ?? at.x, y: y ?? at.y, z: z ?? at.z };
 
     // The path starts where the program first says it is, not at the origin.
@@ -390,7 +399,12 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
       const centre = arcCentre(at, target, words, value, plane, scale, arcAbsolute,
         move === 3);
       if (!centre) {
-        unsupported.push({ code: `G${move} without I/J/K or R`, line });
+        unsupported.push({
+          code: value('R') != null
+            ? `G${move} with an R too small to reach its end point`
+            : `G${move} without I/J/K or R`,
+          line,
+        });
         motion.push({ kind: 'move', ...target, rapid: false, line, feed, tool });
       } else {
         for (const p of arcPoints(at, target, centre, move === 3, arcTolerance, plane)) {

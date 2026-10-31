@@ -214,7 +214,7 @@ test('the stock rack ships a 4-axis and a 5-axis mill', () => {
 function contourOp(name, setup, machine, mesh = makeBox(20, 20, 5)) {
   const cl = generateToolpath({
     type: 'contour2d', name, tool: TOOL, mesh,
-    stock: { min: [0, 0, 0], max: [20, 20, 5] },
+    stock: { min: [-3, -3, 0], max: [23, 23, 5] },    // proud of the box, so the outside contour has stock to cut
     params: {
       topZ: 5, bottomZ: 0, stepdown: 2, clearanceHeight: 15,
       stockToLeave: 0, tolerance: 0.01, rampAngle: 0,
@@ -386,7 +386,7 @@ const SWEEP_TOOLS = {
   threadMill: { number: 6, type: 'threadmill', diameter: 4, pitch: 1, flutes: 3, fluteLength: 20, spindleRpm: 5000, feedCut: 350, feedPlunge: 120 },
 };
 const SWEEP_BLOCK = makePocketBlock({ size: 40, pocketSize: 20, height: 20, depth: 12 });
-const SWEEP_STOCK = { kind: 'box', min: [0, 0, 0], max: [40, 40, 20] };
+const SWEEP_STOCK = { kind: 'box', min: [-3, -3, 0], max: [43, 43, 20] };   // proud of the block, or an outside contour has nothing to cut
 
 /** Valid inputs for a milling strategy — the same shapes the sanity sweep uses,
  *  with a matching drilled/bored hole for the two ops that need one. */
