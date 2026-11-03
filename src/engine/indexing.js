@@ -101,8 +101,20 @@ export function indexKind(machine) {
  * @returns { reachable, angles: {A?,B?,C?}, tilt, reason?, overTravel? }
  */
 export function solveRotary(rotationDeg, machine) {
+  return solveAxisVector(toolAxis(rotationDeg), machine);
+}
+
+/**
+ * The same solve, from the tool axis itself rather than from a setup's
+ * rotation: the rotary positions that lay the part-frame unit vector `k` onto
+ * +Z, and whether this machine can reach them.
+ *
+ * `solveRotary` is the one-orientation case — an indexed face. Simultaneous
+ * 5-axis asks the identical question at every point of a path (engine/five/
+ * kinematics.js), so the closed form lives here once and both ask it.
+ */
+export function solveAxisVector(k, machine) {
   const axes = rotaryAxes(machine);
-  const k = toolAxis(rotationDeg);
   const tilt = Math.acos(clamp(k[2], -1, 1)) * DEG;
   const nearZero = (v) => Math.abs(v) < 1e-6;
 
@@ -249,6 +261,20 @@ export function applyRotary(axes, angles, v) {
   // apply the innermost (part-side, last in the list) first
   for (let i = axes.length - 1; i >= 0; i--) {
     out = rotateAbout(axes[i].axis, (angles[axes[i].letter] ?? 0) * RAD, out);
+  }
+  return out;
+}
+
+/**
+ * The inverse of `applyRotary`: where a *machine-frame* vector sits in the
+ * part. The outermost axis is undone first. Used to read a posted program back
+ * (what tool axis did these A and C describe?) and to put the spindle direction
+ * into the part frame from a pair of angles.
+ */
+export function unapplyRotary(axes, angles, v) {
+  let out = [...v];
+  for (let i = 0; i < axes.length; i++) {
+    out = rotateAbout(axes[i].axis, -(angles[axes[i].letter] ?? 0) * RAD, out);
   }
   return out;
 }

@@ -12,12 +12,17 @@
 // changes crossed, not the length of the program, and reverse costs the same as
 // forward.
 
-import { MOVE_STRIDE, OP, FEED, syncFeed, rapidSeconds, feedRate, descentOf } from './cl.js';
+import { MOVE_STRIDE, OP, FEED, syncFeed, rapidSeconds, feedRate, descentOf, isTilted } from './cl.js';
 import { inheritedColumns, settleThrough, cutFromSimulation } from './workpiece.js';
 import {
   profileTable, bladeHalfWidth, threadFlankRise, bodyCylinders,
 } from './tool-geometry.js';
 import { isRoundStock } from './stock.js';
+import { toolShells } from './five/tilt-kernel.js';
+import { fixturePrisms, toolRings, fixtureHit } from './five/fixture-hits.js';
+import {
+  cutTilted, bodyTouchTilted, stampSpacing, blendAxis, prepareSweep,
+} from './five/tilt-sweep.js';
 
 const DEFAULT_MAX_CELLS = 40_000;   // ~200x200; keeps re-shading interactive
 
@@ -157,6 +162,57 @@ function watchMove(log) {
  */
 const BODY_EPS = 0.05;
 
+/** How many collisions a run keeps the position of. */
+const MAX_FINDINGS = 200;
+
+/**
+ * What a simultaneous 5-axis program asked of the cutter, from the metal each
+ * step took and how far out on the cutter it was taken.
+ *
+ * The material removal rate is the volume of a step over the time it took, and
+ * is what the spindle and the tool feel. The second number is the one tilting
+ * is *for*: a cutter's surface speed is proportional to the radius it is cutting
+ * at, so a ball nose working on its tip is cutting at no speed at all and a
+ * ball leaned a few degrees is cutting on a part of itself that is going
+ * somewhere. `ratio` is that radius as a share of the cutter's own, and the
+ * means are weighted by the metal taken: a thousandth of a cubic millimetre at
+ * the dead centre is not what the finish is made of.
+ */
+function engagementOf(volume, ratio, times) {
+  let cutSteps = 0;
+  let total = 0;
+  let weighted = 0;
+  let dead = 0;
+  let peak = 0;
+  let peakAt = -1;
+  let minRatio = 1;
+  for (let k = 0; k < volume.length; k++) {
+    const v = volume[k];
+    if (!(v > 0)) continue;
+    const seconds = (times[k + 1] ?? times[k]) - times[k];
+    if (!(seconds > 1e-9)) continue;
+    cutSteps++;
+    total += v;
+    weighted += v * ratio[k];
+    if (ratio[k] < DEAD_CENTRE) dead += v;
+    if (ratio[k] < minRatio) minRatio = ratio[k];
+    const rate = (v / seconds) * 60;
+    if (rate > peak) { peak = rate; peakAt = k; }
+  }
+  return {
+    cutSteps,
+    volume: total,
+    peakMrr: peak,
+    peakMrrAt: peakAt,
+    meanRatio: total > 0 ? weighted / total : 0,
+    deadShare: total > 0 ? dead / total : 0,
+    minRatio: cutSteps ? minRatio : 0,
+  };
+}
+
+/** Cutting this close to the axis, as a share of the radius, is cutting at almost no speed. */
+const DEAD_CENTRE = 0.1;
+
 /**
  * Whether the part of the tool above its flutes is in the metal with the tip at
  * `at`, and how far: the highest the stock stands inside each cylinder's radius
@@ -228,8 +284,9 @@ function countTap(tapCut, took, radius, cellSize, step) {
 }
 
 /** Add one step's collision, if it had one, to the tally. */
-function countBody(bodyCut, touch, step) {
+function countBody(bodyCut, touch, step, note = null) {
   if (!touch) return;
+  note?.(touch.kind ?? 'holder', step, touch.depth);
   bodyCut.count++;
   if (touch.depth > bodyCut.depth) {
     bodyCut.depth = touch.depth;
@@ -239,9 +296,10 @@ function countBody(bodyCut, touch, step) {
 }
 
 /** Add one watched rapid to the tally, if it took anything worth the name. */
-function countRapid(rapidCut, watch) {
+function countRapid(rapidCut, watch, note = null) {
   const { depth, step } = watch.took();
   if (!(depth > RAPID_CUT_EPS)) return;
+  note?.('rapid', step, depth);
   rapidCut.count++;
   if (depth > rapidCut.depth) {
     rapidCut.depth = depth;
@@ -275,7 +333,7 @@ const NULL_LOG = {
  */
 export function simulateRemoval({
   stock, ops, maxCells = DEFAULT_MAX_CELLS, rapidFeed = 3000, record = 1,
-  cuts = null, frame = null, logEvents = true,
+  cuts = null, frame = null, logEvents = true, fixtures = null,
 }) {
   const spanX = stock.max[0] - stock.min[0];
   const spanY = stock.max[1] - stock.min[1];
@@ -365,6 +423,32 @@ export function simulateRemoval({
   const bodyCut = { count: 0, depth: 0, step: -1, kind: null };
   // A tap that arrives in metal instead of in a hole. See `countTap`.
   const tapCut = { count: 0, share: 0, step: -1 };
+  // Simultaneous 5-axis. Only a program that tilts the tool carries any of
+  // this: every other run keeps `axisOut` null and never leaves `cut`. See
+  // engine/five/tilt-sweep.js.
+  const tilting = ops.some(({ cl }) => cl.fiveAxis);
+  const axisOut = tilting ? [] : null;
+  // What was cut at each step and with what part of the cutter, for the
+  // engagement report: metal taken in mm3, and how far from the axis (as a share
+  // of the radius) the deepest cut of the step was made.
+  const engVolume = tilting ? [] : null;
+  const engRatio = tilting ? [] : null;
+  // The clamps, as prisms the leaning tool is asked about. Only a program that
+  // tilts is asked: a vertical tool is kept out of a clamp by its footprint, in
+  // planning, and that is not a question about where the holder is.
+  const prisms = tilting && fixtures ? fixturePrisms(fixtures) : [];
+  // Every collision the run found, in order, so the timeline can say where each
+  // one is and not only that there was one. Capped: a program that is wrong
+  // everywhere is wrong at the first two hundred places too.
+  const findings = [];
+  const note = (kind, at, depth, name = null) => {
+    if (findings.length < MAX_FINDINGS) findings.push({ kind, step: at, depth, name });
+  };
+  const world = tilting
+    ? { heights, mask, grid, columns, marks: { cells: new Uint32Array(cellCount), epoch: 0 } }
+    : null;
+  const UP = [0, 0, 1];
+  let prevAxis = UP;
   for (const { cl, tool } of ops) {
     // the profile *and* the radius it covers, from one builder, so the sweep and
     // the shape it sweeps with can never disagree about how wide the cutter is
@@ -373,6 +457,10 @@ export function simulateRemoval({
     const body = bodyCylinders(tool);
     // this cutter's own width, or the budget's piece if that is coarser
     const subStepLength = Math.max(radius * 2, minSubStep);
+    const shells = cl.fiveAxis
+      ? prepareSweep(toolShells(tool), cellSize, stockTop - stock.min[2] + 5) : null;
+    const rings = shells && prisms.length ? toolRings(tool) : null;
+    const stampGap = shells ? stampSpacing(radius, cellSize) : 0;
     const d = cl.moves;
     let feeds = { cut: 600, plunge: 200 };
     let prev = null;
@@ -407,28 +495,38 @@ export function simulateRemoval({
             cut(heights, mask, watch, step, grid,
               lerp(prev, to, (s - 1) / subs), lerp(prev, to, s / subs), cutter, stockTop, columns);
           }
-          countRapid(rapidCut, watch);
+          countRapid(rapidCut, watch, note);
           seconds += moveSeconds(prev, to, FEED.RAPID, feeds, rapidFeed);
         }
         const took = cut(heights, mask, log, step, grid,
           [x, y, retractZ], [x, y, zBottom], cutter, stockTop, columns);
-        if (body.length) countBody(bodyCut, bodyTouch(heights, mask, grid, [x, y, zBottom], body, stockTop), step);
+        if (body.length) countBody(bodyCut, bodyTouch(heights, mask, grid, [x, y, zBottom], body, stockTop), step, note);
         if (tool?.type === 'tap') countTap(tapCut, took, radius, cellSize, step);
         // a hole is full width by definition and travels no distance across the
         // floor, so there is no radial width to report — only how deep it went
         load.push(2 * radius, took.depth, radius, false);
         seconds += drillSeconds(retractZ, zBottom, feeds.plunge, rapidFeed);
         prev = [x, y, retractZ];
+        prevAxis = UP;
         step++;
         times.push(seconds);
         tip.push(x, y, retractZ);
+        if (axisOut) { axisOut.push(0, 0, 1); engVolume.push(0); engRatio.push(0); }
       } else {
         const p = [d[o + 1], d[o + 2], d[o + 3]];
+        // which way the spindle points at the end of this move: vertical for any
+        // program that never tilts, and anything within float noise of it
+        const axisNow = shells && isTilted(d[o + 4], d[o + 5])
+          ? unit(d[o + 4], d[o + 5], d[o + 6]) : UP;
         if (!prev) {
           prev = p;
+          prevAxis = axisNow;
           step++;
           times.push(seconds);
           tip.push(p[0], p[1], p[2]);
+          if (axisOut) {
+            axisOut.push(axisNow[0], axisNow[1], axisNow[2]); engVolume.push(0); engRatio.push(0);
+          }
           load.push(0, 0, radius, false);
         } else {
           // A move is walked in pieces, so the metal comes off under the cutter.
@@ -444,11 +542,25 @@ export function simulateRemoval({
           const rapid = feedClass === FEED.RAPID;
           // a rapid is judged over the whole move — see watchMove
           const watch = rapid ? watchMove(log) : null;
+          // a tilted tool, or one on its way to or from a tilt, is swept by
+          // stamping; a vertical one by `cut`, exactly as it always was
+          const tilted = shells && (prevAxis !== UP || axisNow !== UP);
           for (let s = 1; s <= subs; s++) {
             const a = lerp(prev, p, (s - 1) / subs);
             const b = lerp(prev, p, s / subs);
-            const took = cut(heights, mask, watch ?? log, step, grid, a, b, cutter, stockTop, columns);
-            if (body.length) countBody(bodyCut, bodyTouch(heights, mask, grid, b, body, stockTop), step);
+            let took;
+            let axisB = UP;
+            if (tilted) {
+              const axisA = blendAxis(prevAxis, axisNow, (s - 1) / subs);
+              axisB = blendAxis(prevAxis, axisNow, s / subs);
+              took = cutTilted(world, watch ?? log, step, a, axisA, b, axisB, shells, stockTop, stampGap);
+              countBody(bodyCut, bodyTouchTilted(world, b, axisB, shells, stockTop, BODY_EPS), step, note);
+              const clamp = rings ? fixtureHit(prisms, rings, b, axisB) : null;
+              if (clamp) note('fixture', step, clamp.depth, clamp.name);
+            } else {
+              took = cut(heights, mask, watch ?? log, step, grid, a, b, cutter, stockTop, columns);
+              if (body.length) countBody(bodyCut, bodyTouch(heights, mask, grid, b, body, stockTop), step, note);
+            }
             const travel = Math.hypot(b[0] - a[0], b[1] - a[1]);
             // A rapid that removes anything is a crash, not a cut, and dividing
             // its swath by its length would report it as a gentle one.
@@ -466,9 +578,15 @@ export function simulateRemoval({
             step++;
             times.push(seconds);
             tip.push(b[0], b[1], b[2]);
+            if (axisOut) {
+              axisOut.push(axisB[0], axisB[1], axisB[2]);
+              engVolume.push(tilted && !rapid ? took.volume : 0);
+              engRatio.push(tilted && !rapid && took.rho > 0 ? Math.min(1, took.rho / radius) : 0);
+            }
           }
-          if (watch) countRapid(rapidCut, watch);
+          if (watch) countRapid(rapidCut, watch, note);
           prev = p;
+          prevAxis = axisNow;
         }
       }
 
@@ -493,6 +611,14 @@ export function simulateRemoval({
     stepCount: step,
     // three floats per step: where the tip finished it — see `tip` above
     tip: new Float32Array(tip),
+    // three floats per step, like `tip`: which way the spindle points. Null for
+    // a program that never tilts it, which is every 3-axis one.
+    axis: axisOut ? new Float32Array(axisOut) : null,
+    // Every holder, shank, rapid or clamp collision found, in order of step
+    findings: findings.sort((p, q) => p.step - q.step),
+    // What a simultaneous 5-axis program asked of the cutter: metal removal rate
+    // and where on the cutter the work was done. Null for any other program.
+    five: tilting ? engagementOf(engVolume, engRatio, times) : null,
     times: new Float32Array(times),
     ...load.trimmed(opEnds),
     rapidCut,
@@ -554,6 +680,7 @@ export function simulateProgram({
       rapidFeed,
       record,
       logEvents: watched,
+      fixtures: setup.fixtures ?? null,
     });
     cuts.push(cutFromSimulation(run, run.final, setup.frame));
     if (watched) sim = run;
@@ -1652,6 +1779,12 @@ function cut(heights, mask, log, step, grid, p0, p1, cutter, stockTop, columns) 
 
 function clampIndex(v, n) { return v < 0 ? 0 : v > n - 1 ? n - 1 : v; }
 
+/** A unit vector from three numbers; straight up if they have no direction. */
+function unit(x, y, z) {
+  const n = Math.hypot(x, y, z);
+  return n > 1e-12 ? [x / n, y / n, z / n] : [0, 0, 1];
+}
+
 /**
  * The most pieces a whole milling program may be walked in.
  *
@@ -1828,8 +1961,11 @@ export function positionAtStep(sim, ops, step) {
   // the first op whose end is past this step
   let index = 0;
   while (index < opEnds.length - 1 && opEnds[index] <= at) index++;
+  const axis = sim.axis && k * 3 + 2 < sim.axis.length
+    ? [sim.axis[k * 3], sim.axis[k * 3 + 1], sim.axis[k * 3 + 2]] : [0, 0, 1];
   return {
     position: [tip[k * 3], tip[k * 3 + 1], tip[k * 3 + 2]],
+    axis,
     tool: ops[Math.min(index, ops.length - 1)].tool,
   };
 }
@@ -1872,5 +2008,6 @@ export function positionAtTime(sim, ops, seconds) {
       start.position[1] + (target.position[1] - start.position[1]) * frac,
       start.position[2] + (target.position[2] - start.position[2]) * frac,
     ],
+    axis: blendAxis(start.axis, target.axis, frac),
   };
 }

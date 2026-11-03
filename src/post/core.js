@@ -25,6 +25,7 @@ import { orientationKey } from '../engine/indexing.js';
 import { wrapPoint, inverseTime } from '../engine/wrap.js';
 import { Modal, LineWriter, num, customBlock } from './format.js';
 import { planArcs } from './arcs.js';
+import { fiveAxisWriter } from './five.js';
 
 export function buildProgram(dialect, ops, options = {}) {
   const w = new LineWriter();
@@ -209,7 +210,22 @@ export function buildProgram(dialect, ops, options = {}) {
     // bar, so a G2 written in X and A cuts something else entirely. See
     // engine/wrap.js.
     const wrap = op.wrap?.diameter > 0 ? op.wrap : null;
-    const arcs = useArcs && !wrap ? planArcs(cl, arcTolerance) : null;
+    // A simultaneous 5-axis operation is posted as lines for the same reason: a
+    // circle in the part's frame is not a circle in X and Y once the table is
+    // turning under it. See post/five.js.
+    const tilts = !!cl.fiveAxis && !silentOp(cl);
+    if (tilts) {
+      const why = !op.five ? 'nothing says how this machine tilts' : op.five.refused
+        ?? (dialect.fiveAxis ? null : `${dialect.name ?? 'this post'} cannot write 5-axis moves`);
+      if (why) {
+        // Nothing is written in place of the moves. A program that looks finished
+        // and is not is the worst thing this can hand to a machine.
+        w.comment(`5-AXIS OPERATION NOT POSTED: ${op.name} - ${why}`);
+        return;
+      }
+    }
+    const five = tilts ? op.five : null;
+    const arcs = useArcs && !wrap && !five ? planArcs(cl, arcTolerance) : null;
     // Every move of a wrapped operation goes through this instead of straight
     // to the dialect: the developed axis becomes a rotary word, and the feed
     // becomes a duration, because F is millimetres per minute on a linear move
@@ -220,7 +236,12 @@ export function buildProgram(dialect, ops, options = {}) {
     // pleases on a good half of the controls this posts for. It is switched off
     // again at the end of the operation: a program that inherits G93 from the
     // pass before reads every later feed as a duration.
-    const emit = wrap ? wrapped(wrap, motion) : motion;
+    const fiveWrite = five ? fiveAxisWriter(five, motion, {
+      tool: () => activeTool,
+      tcpOn: dialect.fiveAxis?.tcpOn,
+      tcpOff: dialect.fiveAxis?.tcpOff,
+    }) : null;
+    const emit = wrap ? wrapped(wrap, motion) : fiveWrite ?? motion;
 
     // An operation that produced no motion must not touch the machine.
     //
@@ -591,6 +612,7 @@ export function buildProgram(dialect, ops, options = {}) {
         const rapid = opcode === OP.RAPID;
         emit(w, modal, {
           rapid,
+          axis: five ? [d[o + 4], d[o + 5], d[o + 6]] : null,
           x: d[o + 1] + controlPoint[0], y: d[o + 2], z: d[o + 3] + controlPoint[1],
           feed: feedRate(d[o + 7], feeds, descentOf(at, positionOf(n))),
           // a rapid inside a threading run is the lead-in or the retract, and
@@ -617,6 +639,7 @@ export function buildProgram(dialect, ops, options = {}) {
         : [d[last + 1], d[last + 2], d[last] === OP.DRILL ? d[last + 4] : d[last + 3]];
     }
     if (wrap && emit.started) { w.line('G94'); modal.force('F'); }
+    if (fiveWrite?.started) fiveWrite.finish(w, modal);
     // neither a synchronised run nor a tapping mode survives the end of the
     // operation that opened it
     threadPitch = 0;
@@ -649,6 +672,11 @@ export function buildProgram(dialect, ops, options = {}) {
     endGcode: options.endGcode,
   });
   return { text: w.toString(), lineMap };
+}
+
+/** An operation that produced no motion — see `silent` in `buildProgram`. */
+function silentOp(cl) {
+  return cl.count === 0;
 }
 
 /**
@@ -749,7 +777,7 @@ function defaultStop(w) {
 
 /** How a mill writes a straight move: the three axes it has. */
 function defaultMotion(w, modal, {
-  rapid, x, y, z, feed, rotary = null, forceFeed = false,
+  rapid, x, y, z, feed, rotary = null, rotaries = null, forceFeed = false,
 }) {
   // A wrapped program has no coordinate on the developed axis — that direction
   // is round the bar now, not across the table — so the word is left out rather
@@ -757,9 +785,11 @@ function defaultMotion(w, modal, {
   const wx = x == null ? null : modal.word('X', x);
   const wy = y == null ? null : modal.word('Y', y);
   const wz = modal.word('Z', z);
-  const wr = rotary ? modal.word(rotary.letter, rotary.value) : null;
-  if (!wx && !wy && !wz && !wr) return;
-  if (rapid) { w.line(modal.word('G', 0, 0), wx, wy, wz, wr); return; }
+  // One rotary word for a wrapped program, two for a 5-axis one
+  const wrs = (rotaries ?? (rotary ? [rotary] : [])).map((r) => modal.word(r.letter, r.value));
+  const wr = wrs.filter(Boolean);
+  if (!wx && !wy && !wz && wr.length === 0) return;
+  if (rapid) { w.line(modal.word('G', 0, 0), wx, wy, wz, ...wr); return; }
   // Under inverse time every cutting block states its own F — it is the block's
   // duration rather than a rate, so there is nothing modal about it and a
   // control that finds one missing faults. And it is written to four places,
@@ -768,7 +798,7 @@ function defaultMotion(w, modal, {
   // and printed as F0.3 it ran eleven per cent slow; past ten minutes a block
   // printed as F0, which is no feed at all.
   const wf = forceFeed ? `F${num(feed, 4)}` : modal.word('F', feed, 1);
-  w.line(modal.word('G', 1, 0), wx, wy, wz, wr, wf);
+  w.line(modal.word('G', 1, 0), wx, wy, wz, ...wr, wf);
 }
 
 /**

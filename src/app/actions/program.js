@@ -8,7 +8,8 @@
 import { mergeMeshes } from '../../geom/mesh.js';
 import { plural, verb, allOf } from '../../engine/text.js';
 import {
-  rapidCutFinding, bodyCutFinding, tapCutFinding, threadCutFinding,
+  rapidCutFinding, bodyCutFinding, tapCutFinding, threadCutFinding, fixtureCutFinding,
+  engagementFinding,
 } from '../../engine/backplot.js';
 
 /**
@@ -24,6 +25,8 @@ import { turningProfile, barFromStock } from '../../engine/lathe.js';
 import { estimateSeconds, generateToolpath, READS_EARLIER } from '../../engine/toolpath.js';
 import { orientationFor, indexingWarnings } from '../../engine/indexing.js';
 import { wrapFor, wrapWarnings, wrapExtent, linearExtent } from '../../engine/wrap.js';
+import { fiveFor } from '../../engine/five/post-data.js';
+import { fiveChecks } from '../../engine/five/checks.js';
 import {
   buildGcode, postsFor, defaultPostFor, PackedLineMap,
 } from '../../post/index.js';
@@ -369,6 +372,12 @@ export function makeProgramActions(ctx, space) {
           .some((o) => doc.toolpaths.get(o.id) === cl));
         limits.unshift(...wrapWarnings(wrap, programExtent(flat)));
       }
+      // A simultaneous 5-axis operation asks things of the machine a toolpath
+      // cannot show: axes past their limits, a half turn of the turntable
+      // between neighbours, a tip carried round a centre further than the table
+      // goes. Said per operation, with the machine's own travel checked on
+      // where the linear axes really go.
+      limits.unshift(...fiveWarnings());
       // Two cutters on one T number is a wrong-tool crash and it is invisible
       // in the file — the second change is dropped as a restatement of the
       // first. The operation panel says so too, but this is the moment the
@@ -383,6 +392,14 @@ export function makeProgramActions(ctx, space) {
       // stage nothing else checks; `refreshGcodePreview` reads its own output
       // back and this is where the answer is worth saying out loud.
       const post = ctx.lastProgram?.postCheck;
+      if (post && post.axisOver > 0) {
+        limits.unshift({
+          text: `the posted file leans the tool differently from the toolpath — `
+            + `${post.ops[post.axisOp]?.name ?? 'an operation'} is out by `
+            + `${post.axisWorst.toFixed(1)}° when the file is read back. That is a bug in `
+            + 'the post or in the rotary axis directions set for this machine; do not run this',
+        });
+      }
       if (post && post.over > 0) {
         limits.unshift({
           text: `the posted file does not match the path it came from — `
@@ -466,6 +483,35 @@ export function makeProgramActions(ctx, space) {
   }
 
   /** The box every move of the program stays inside, in setup coordinates. */
+  /**
+   * What each 5-axis operation of the job asks of this machine, as warnings in
+   * the shape `machineWarnings` makes — or why one cannot be posted at all.
+   */
+  function fiveWarnings() {
+    const out = [];
+    const machine = doc.machineRecord();
+    for (const setup of doc.setups()) {
+      for (const op of setup.operations) {
+        const cl = doc.toolpaths.get(op.id);
+        if (!op.enabled || !cl?.fiveAxis) continue;
+        const five = fiveFor(setup, machine, cl);
+        if (five?.refused) {
+          out.push({ level: 'error', text: `${op.name} cannot be posted: ${five.refused}` });
+          continue;
+        }
+        const { findings, extent } = fiveChecks(cl, five);
+        for (const f of findings) out.push({ level: f.level, text: `${op.name}: ${f.text}` });
+        // the linear axes go where the table carries the tip, not where the part is
+        out.push(...machineWarnings(machine, extent, {}).map((w) => ({
+          level: w.level, text: `${op.name} (tip carried round the rotary centre): ${w.text}`,
+        })));
+      }
+    }
+    // warnings first, then notes: the status line says the first one
+    return out.sort((a, b) => rank(a.level) - rank(b.level));
+  }
+  const rank = (level) => (level === 'error' ? 0 : level === 'warn' ? 1 : 2);
+
   function programExtent(programs) {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
@@ -633,6 +679,8 @@ export function makeProgramActions(ctx, space) {
             stock: s.stock,
             frame: s.frame,
             ops: s.ops.map(({ cl, tool }) => ({ cl, tool })),
+            // the clamps, so a leaning tool can be asked whether it is in one
+            fixtures: s.setup.fixtures ?? [],
           })),
           active,
           maxCells: SIM_CELLS[getSetting('simQuality')] ?? SIM_CELLS.high,
@@ -669,13 +717,18 @@ export function makeProgramActions(ctx, space) {
       // stop somebody running the program.
       const crash = rapidCutFinding(sim, ops);
       // …and the next most serious: the tool's body, not its flutes, in the work
-      const body = bodyCutFinding(sim, ops);
+      const body = bodyCutFinding(sim, ops) ?? fixtureCutFinding(sim, ops);
       // …and a thread, or a tap, cut in metal that was to have been drilled or
       // taken away before it
       const thread = threadCutFinding(sim, ops) ?? tapCutFinding(sim, ops);
       if (crash || body || thread) {
         ctx.ui.setStatus(`${(crash ?? body ?? thread).text} Simulated ${plural(ops.length, 'operation')} `
           + `in ${setup.name} — scrub to the moment and look.`, true);
+      } else if (engagementFinding(sim)?.level === 'warn') {
+        // the cutter is rubbing rather than cutting: worth saying before anything
+        // as quiet as "simulated three operations"
+        ctx.ui.setStatus(`${engagementFinding(sim).text} Simulated ${plural(ops.length, 'operation')} `
+          + `in ${setup.name} - scrub or press play.`, true);
       } else if (sim.truncated) {
         ctx.ui.setStatus('Simulated, but the program outran the record — the last '
           + `part of it is not shown. Raise "Recording limit" in Options (it is at ${record}×), `
@@ -847,6 +900,10 @@ export function makeProgramActions(ctx, space) {
       orientation: orientationFor(setup, machine),
       // And a wrapped setup carries the cylinder its flat program bends round.
       wrap: wrapFor(setup, machine),
+      // A program that leans the tool carries the machine's kinematics, so the
+      // post can turn tip and axis into axis positions. Null for any program
+      // that does not — which is nearly all of them.
+      five: fiveFor(setup, machine, cl),
     };
   }
 
@@ -865,7 +922,7 @@ export function makeProgramActions(ctx, space) {
   function programKey() {
     return JSON.stringify([
       doc.toolpathSignature(false), doc.postId(), postSettings(),
-      postableOps().map((o) => [o.name, o.wcs, o.setup, o.setupName, o.orientation, o.wrap]),
+      postableOps().map((o) => [o.name, o.wcs, o.setup, o.setupName, o.orientation, o.wrap, o.five]),
     ]);
   }
 

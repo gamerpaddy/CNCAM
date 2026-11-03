@@ -17,10 +17,12 @@ import { noSideToCutWith } from '../engine/tool-match.js';
 import { chuckLimit, fixtureTop } from '../engine/fixtures.js';
 import { setupModelIds } from './actions/setup-space.js';
 import { effectiveCutting } from '../engine/cutting.js';
+import { isFiveAxisOp } from '../engine/five/ops.js';
+import { fiveAxisEnabled } from './settings.js';
 
 /** Strategies whose depth does not come from a stepdown. */
 const NO_STEPDOWN = new Set([
-  'drill', 'parallel3d', 'chamfer',
+  'drill', 'parallel3d', 'finish5', 'chamfer',
   // On a lathe a groove is a width, a thread is a pitch, a hole is a peck,
   // parting is one plunge and finishing is one pass down the profile. None of
   // them steps down, and warning that they have not is a warning about a field
@@ -29,7 +31,7 @@ const NO_STEPDOWN = new Set([
 ]);
 
 /** Passes that take the part's surface as all there is — see `roughingLeftover`. */
-const FINISHING = new Set(['parallel3d', 'waterline']);
+const FINISHING = new Set(['parallel3d', 'waterline', 'finish5']);
 
 /**
  * How far above the finished surface the passes before this one in its setup
@@ -51,7 +53,7 @@ export { suggestedEntryGap };
 export function isFinishingPass(type) { return FINISHING.has(type); }
 
 /** Strategies that step across by a share of the cutter — see op-params.js `stepover`. */
-const STEPPED = new Set(['face', 'pocket', 'clear2d', 'parallel3d', 'bore', 'slot']);
+const STEPPED = new Set(['face', 'pocket', 'clear2d', 'parallel3d', 'finish5', 'bore', 'slot']);
 
 /** Strategies with one height rather than two — see op-params.js `topZ`. */
 const NO_TOP_Z = new Set(['turnPart']);
@@ -186,6 +188,13 @@ export function opFingerprint(doc, op, setup = null) {
     // that has to read as out of date. See actions/setup-space.js.
     setup && [setup.stock, setup.orientation, setup.fixtures,
       setupModelIds(setup, doc.project)],
+    // A simultaneous 5-axis pass is shaped by the machine it runs on — how far
+    // each rotary may swing is a limit on how it may tilt — and by where the
+    // table's axes cross. Neither is on the operation, so neither would move
+    // the fingerprint, and a changed axis limit would leave the old path
+    // reporting itself current. Only for those operations: an ordinary pass
+    // must not go stale because a rotary limit was edited.
+    isFiveAxisOp(op.type) && [setup?.five, fiveMachineFacts(doc)],
     // And what the passes above it left, when this one is cleaning up after
     // them. Rest machining reads every enabled earlier operation's toolpath
     // (see regions-ui.js clearedByEarlier), so those passes are part of what
@@ -205,6 +214,12 @@ export function opFingerprint(doc, op, setup = null) {
     (op.params?.restMachining || READS_EARLIER.has(op.type)) && setup
       ? earlierFingerprints(doc, op, setup) : null,
   ]);
+}
+
+/** The machine facts a 5-axis path depends on: its rotary axes and how it does TCP. */
+function fiveMachineFacts(doc) {
+  const machine = doc.machineRecord?.();
+  return machine && [machine.rotary, machine.tcp];
 }
 
 /**
@@ -478,7 +493,7 @@ export function opPreflight(doc, op) {
       notes.push('The cutter is offset from the line, so the mark will not land on it.');
     }
   }
-  if ((op.type === 'parallel3d' || op.type === 'waterline') && tool?.type === 'flat') {
+  if ((op.type === 'parallel3d' || op.type === 'waterline' || op.type === 'finish5') && tool?.type === 'flat') {
     notes.push('A flat cutter leaves steps on curved surfaces — a ball or bull nose '
       + 'follows the form.');
   }
@@ -628,6 +643,11 @@ function estimatedPerimeter(doc, op) {
 /** Why an operation cannot be generated at all, or null if it can. */
 export function opBlockedReason(doc, op) {
   if (!op.enabled) return 'disabled';
+  // A project made with the 5-axis beta keeps its operations when the switch is
+  // off; it just will not run them. See engine/five/ops.js.
+  if (isFiveAxisOp(op.type) && !fiveAxisEnabled()) {
+    return 'it is a 5-axis (beta) operation — switch the beta on under Options → Experimental';
+  }
   // A command is lines of G-code, not a cut: it wants no cutter, no model and
   // no stock, and it is the one operation that can be the whole program. Only
   // being empty stops it. See engine/strategies/command.js.

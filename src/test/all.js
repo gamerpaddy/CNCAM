@@ -48,5 +48,13 @@ import './efficiency.test.js';
 import './sanity.test.js';
 import './robustness.test.js';
 import './mill-air.test.js';
+import './five-flag.test.js';
+import './five-kinematics.test.js';
+import './sim-golden.test.js';
+import './five-tilt.test.js';
+import './five-finish.test.js';
+import './five-post.test.js';
+import './five-crash.test.js';
+import './five-assistant.test.js';
 
 export { run } from './runner.js';

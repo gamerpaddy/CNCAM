@@ -83,7 +83,7 @@ export const ENGRAVE_MODE_LABELS = {
 };
 
 const MILLING = ['face', 'contour2d', 'pocket', 'clear2d', 'adaptive', 'bore',
-  'slot', 'parallel3d', 'waterline'];
+  'slot', 'parallel3d', 'waterline', 'finish5'];
 // Every milling strategy, including the ones MILLING leaves out because they
 // take no stock allowance. Heights and clearances apply to all of them — the
 // four hole cycles included: spot, tap and thread mill each rapid at Clearance
@@ -391,7 +391,7 @@ export const OP_PARAM_GROUPS = [
         // the field took, left 28% of the top at the height it started, with
         // nothing anywhere to say so.
         key: 'stepover', label: 'Stepover (×D)', step: 0.05, min: 0.01, max: 1,
-        ops: ['face', 'pocket', 'clear2d', 'parallel3d', 'bore', 'slot'],
+        ops: ['face', 'pocket', 'clear2d', 'parallel3d', 'finish5', 'bore', 'slot'],
         labelFor: (op) => (op.type === 'bore' ? 'Radial step (×D)'
           : op.type === 'slot' ? 'Step between lanes (×D)' : null),
         hint: 'Fraction of the tool diameter stepped between passes',
@@ -522,20 +522,21 @@ export const OP_PARAM_GROUPS = [
       {
         key: 'pattern', label: 'Pattern', type: 'select',
         options: PATTERNS, labels: PATTERN_LABELS,
-        ops: ['face', 'parallel3d'],
-        // facing is a flat operation; there is no slope for it to follow
-        filterOptions: (op) => (op.type === 'face'
+        ops: ['face', 'parallel3d', 'finish5'],
+        // facing is a flat operation; there is no slope for it to follow, and the
+        // 5-axis finish is a raster whatever else it does
+        filterOptions: (op) => (op.type === 'face' || op.type === 'finish5'
           ? PATTERNS.filter((p) => p !== 'flow') : PATTERNS),
       },
       {
         key: 'angleDeg', label: 'Raster angle (°)', min: -360, max: 360,
-        ops: ['face', 'parallel3d'],
+        ops: ['face', 'parallel3d', 'finish5'],
         hint: 'Direction the raster lines run, measured from +X',
         when: (op) => (op.params.pattern ?? 'zigzag') !== 'flow',
       },
       {
         key: 'linkDistance', label: 'Stay down across (mm)', min: 0, step: 1,
-        ops: ['parallel3d'], nullable: true, placeholder: '3 × tool ⌀',
+        ops: ['parallel3d', 'finish5'], nullable: true, placeholder: '3 × tool ⌀',
         hint: 'A raster over anything but a block breaks at every hole and every '
           + 'step, and climbing to clearance for each one is most of the program. '
           + 'A break shorter than this is driven straight across instead — but '
@@ -618,6 +619,51 @@ export const OP_PARAM_GROUPS = [
   },
   {
     tab: 'strategy',
+    title: 'Tool axis (5-axis beta)',
+    fields: [
+      {
+        key: 'tiltMode', label: 'Lean the cutter from', type: 'select', ops: ['finish5'],
+        options: ['normal', 'fixed'],
+        labels: {
+          normal: 'The surface normal — follows the form',
+          fixed: 'Straight up — the same lean everywhere',
+        },
+        hint: 'Following the normal keeps the same part of the cutter on the '
+          + 'surface however it curves. A fixed lean is a constant tilt, which is '
+          + 'the simple way to keep a ball nose off its dead centre.',
+      },
+      {
+        key: 'leadAngle', label: 'Lead angle (°)', min: -60, max: 60, step: 1, ops: ['finish5'],
+        hint: 'Lean the top of the cutter back along the feed by this much, so '
+          + 'the tip leads. At 0° a ball nose on a flat is cutting with its centre, '
+          + 'where the speed is nothing; 5–15° puts a part of the ball with some '
+          + 'speed on the work.',
+      },
+      {
+        key: 'tiltAngle', label: 'Side tilt (°)', min: -60, max: 60, step: 1, ops: ['finish5'],
+        hint: 'Lean the cutter sideways, to the left of the feed when positive. '
+          + 'Used to lay the holder away from a wall.',
+      },
+      {
+        key: 'maxTilt', label: 'Never more than (° from vertical)', min: 0, max: 85, step: 1,
+        ops: ['finish5'],
+        hint: 'The most the cutter may lean from straight up, whatever the law asks '
+          + 'for. Past what the rotary axes can swing, the program stops being a '
+          + 'program — the setup assistant checks this against the machine.',
+      },
+      {
+        key: 'axisRate', label: 'Turn no faster than (°/mm)', min: 0.5, max: 90, step: 0.5,
+        ops: ['finish5'],
+        hint: 'How quickly the lean may change along the path. The table has to '
+          + 'swing at the feed rate: a smooth lean is a path the machine can '
+          + 'follow, a jumpy one is a path it slows to a crawl for. The direction '
+          + 'the cutter leans toward is held to twice this, because close to '
+          + 'vertical a small change of lean is a half turn of the turntable.',
+      },
+    ],
+  },
+  {
+    tab: 'strategy',
     title: 'Engraving',
     fields: [
       {
@@ -628,7 +674,7 @@ export const OP_PARAM_GROUPS = [
       },
       {
         key: 'parallelBoundary', label: 'How far past the part', type: 'select',
-        ops: ['parallel3d'],
+        ops: ['parallel3d', 'finish5'],
         options: ['part', 'stock'],
         labels: {
           part: 'Stop at the part (plus the cutter radius)',
@@ -642,7 +688,7 @@ export const OP_PARAM_GROUPS = [
       },
       {
         key: 'boundaryExtra', label: 'Overrun past the part (mm)', min: 0, max: 1000, step: 0.5,
-        ops: ['parallel3d'],
+        ops: ['parallel3d', 'finish5'],
         when: (op) => (op.params.parallelBoundary ?? 'part') !== 'stock',
         hint: 'On top of the cutter radius. Worth a little where the wall has to '
           + 'be finished right to the bottom and the floor beside it is scrap.',

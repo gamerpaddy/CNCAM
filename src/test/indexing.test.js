@@ -13,6 +13,7 @@
 //   * a plain program gains no G68.2/G53.1/G69 — the change is invisible until
 //     a setup asks for it.
 
+import { isFiveAxisOp } from '../engine/five/ops.js';
 import { test, assert } from './runner.js';
 import {
   toolAxis, tiltAngle, solveRotary, applyRotary, eulerFor, indexKind, rotaryAxes,
@@ -420,6 +421,10 @@ test('indexing leaves every milling toolpath byte-for-byte unchanged', () => {
     // A command emits no moves at all — it is lines of G-code, not a cut — so
     // there is no toolpath for indexing to leave unchanged. See BOTH_MACHINES.
     if (BOTH_MACHINES.has(type)) continue;
+    // A program that leans the tool *is* the swing, so it cannot also be held
+    // under an indexed plane: the post refuses the pair instead of writing both
+    // (five-post.test.js). The tilted frame is not what it is moved about in.
+    if (isFiveAxisOp(type)) continue;
     const { tool, mesh, params } = sweepInputs(type);
     const cl = generateToolpath({ type, name: type, tool, mesh, stock: SWEEP_STOCK, params, fixtures: [] });
     assert.ok(cl.count > 0, `${type} must cut something on the sweep fixture`);

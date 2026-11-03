@@ -92,7 +92,7 @@ function simTransfer(sim) {
   }
   // a milling record carries the tip at every step, and a turning one the
   // tool's own track — both one entry per sub-step rather than per CL move
-  for (const key of ['tip', 'trackX', 'trackZ', 'trackTool']) {
+  for (const key of ['tip', 'axis', 'trackX', 'trackZ', 'trackTool']) {
     if (sim[key]) buffers.push(sim[key].buffer);
   }
   return buffers;

@@ -220,13 +220,23 @@ export class CollinearFilter {
  * @param program a finished CL program
  * @returns the same shape, with the pointless rapids gone
  */
-export function dropRedundantRapids(program, stride, RAPID) {
+export function dropRedundantRapids(program, stride, RAPID, DRILL = 2) {
   const { moves, count, events } = program;
   if (count < 2) return program;
 
   const keep = new Uint8Array(count).fill(1);
+  // Same XY column — and, for a tilted tool, the same way the tool points. A
+  // simultaneous 5-axis operation reorients with a rapid at clearance: retract,
+  // swing, descend, all at one XY. Dropping the swing would leave the tool
+  // tilting on its way down into the part. A drill cycle uses the axis slots
+  // for its own numbers (retract, peck, dwell), so those are not an axis.
+  const sameAxis = (a, b) => moves[a * stride] === DRILL || moves[b * stride] === DRILL
+    || (Math.abs(moves[a * stride + 4] - moves[b * stride + 4]) < 1e-6
+      && Math.abs(moves[a * stride + 5] - moves[b * stride + 5]) < 1e-6
+      && Math.abs(moves[a * stride + 6] - moves[b * stride + 6]) < 1e-6);
   const same = (a, b) => Math.abs(moves[a * stride + 1] - moves[b * stride + 1]) < 1e-9
-    && Math.abs(moves[a * stride + 2] - moves[b * stride + 2]) < 1e-9;
+    && Math.abs(moves[a * stride + 2] - moves[b * stride + 2]) < 1e-9
+    && sameAxis(a, b);
 
   let removed = 0;
   // Never the first move. The safety argument is that the shortened move sweeps

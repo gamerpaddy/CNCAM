@@ -3,10 +3,13 @@
 // The canonical intermediate between toolpath strategies and posts/simulator.
 // Motion records: flat Float32Array, MOVE_STRIDE floats each:
 //   [opcode, x, y, z, i, j, k, feedClass]
-// (i,j,k) = unit tool-axis vector — constant (0,0,1) for 3-axis; this field is
-// what makes 3+2 and simultaneous 5-axis extensions of the same pipeline.
-// Arcs and state (tool change, spindle, coolant, cycles, WCS) are side events
-// keyed by motion index, kept out of the hot array.
+// (i,j,k) = unit tool-axis vector — (0,0,1) for every 3-axis program, and the
+// way the spindle points on a simultaneous 5-axis one (strategies/finish5.js).
+// A 3+2 operation does not use it: that is an ordinary program computed in a
+// rotated frame (engine/indexing.js).
+// There is no arc opcode — the post fits arcs to runs of LINE moves (post/arcs.js).
+// State (tool change, spindle, coolant, cycles, WCS) is a side event keyed by
+// motion index, kept out of the hot array.
 
 import { CollinearFilter, dropRedundantRapids } from './simplify.js';
 
@@ -274,11 +277,34 @@ export class CLBuilder {
       notes: this.notes,
       resolution: this.resolution,
     };
+    // Did any move point the tool off vertical? One flag, so the post and the
+    // simulation can keep their 3-axis paths literally untouched for every
+    // program that never tilts.
+    program.fiveAxis = tiltsTheTool(program.moves, this.count);
     // The link moves nobody needs: a retract to clearance followed by a rapid
     // straight back down at the same XY, which is what every depth level of
     // every 2.5D strategy emits between its passes. See engine/simplify.js.
     return exact ? program : dropRedundantRapids(program, MOVE_STRIDE, OP.RAPID);
   }
+}
+
+/** Is the tool axis off vertical on any cutting or rapid move of this program? */
+export function tiltsTheTool(moves, count) {
+  for (let n = 0; n < count; n++) {
+    const o = n * MOVE_STRIDE;
+    if (moves[o] === OP.DRILL) continue;       // the slots hold the cycle's numbers
+    if (isTilted(moves[o + 4], moves[o + 5])) return true;
+  }
+  return false;
+}
+
+/**
+ * Off vertical by more than float noise (about 0.002°). Only the sideways part
+ * counts: a record built outside CLBuilder (the lathe writes its own) may leave
+ * the axis slots at zero, and that is not a tilt.
+ */
+export function isTilted(i, j) {
+  return i * i + j * j > 1e-9;
 }
 
 /**

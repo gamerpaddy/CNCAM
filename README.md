@@ -165,6 +165,24 @@ orientation, locks, and cuts it three-axis, without you re-fixturing. LinuxCNC
 drives that with a G68.2 tilted work plane; the setup panel tells you whether
 the machine can reach the face.
 
+**Simultaneous 5-axis is a beta**, off until you switch it on under
+*Options → Experimental*. One strategy so far — **5-axis finish**, a raster over a
+surface with the cutter leaning to it (a lead and a tilt from the surface normal,
+a limit on how far from vertical, a limit on how fast the lean may change, and
+backed off toward upright wherever the holder would be in the part) — on a
+table-table trunnion (A/C or B/C). The post writes the tool tip and the two
+rotary words under tool-centre-point (`G43.4`, or LinuxCNC's trt kinematics), or
+writes machine axes itself with an inverse-time feed for a control that has no
+TCP; the simulation sweeps the leaning cutter, finds the holder or the shank in
+the metal or a clamp, and reports how far out on the cutter the work is done (a
+ball nose cutting on its tip is cutting at no speed); and the setup panel has a
+checklist — machine, rotary centre, which way A and C turn, undercuts, the
+holder, the clamps — with a fix button where there is one. **The limits are real:**
+the simulation sees the part from above only, so an undercut is not machined and
+not shown; the post has not met your machine, and a mirrored A or C does not
+alarm, it cuts the mirror image; and nothing here has been run on a real control.
+Dry-run every program in the air.
+
 Posts included: LinuxCNC, GRBL, and a lathe post.
 
 ### Everything else
@@ -239,9 +257,12 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
 Be clear about this before you start: **the output is 3-axis milling — with
 indexed 3+1 / 3+2 positioning — and 2-axis turning.** Nothing else is built.
 
-* No *simultaneous* 5-axis. The rotary axes index a face under the spindle and
-  lock; the cutting is still three-axis in that tilted frame (a G68.2 tilted
-  work plane on LinuxCNC). Nothing moves all five at once.
+* Simultaneous 5-axis is a **beta** (Options → Experimental) and is narrower
+  than the name: one finishing strategy, table-table trunnions only, a part seen
+  from above only, no arcs or canned cycles in the leaning operations, and not
+  combinable with an indexed or wrapped setup. Everything else — indexed 3+1 /
+  3+2 included — is still three-axis in a tilted frame (a G68.2 tilted work
+  plane on LinuxCNC).
 * No probing, no tool length measurement cycles, no canned cycle library beyond
   what the strategies emit themselves.
 * No cloud, no account, no telemetry. Nothing leaves your browser.

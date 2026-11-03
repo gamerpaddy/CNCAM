@@ -258,6 +258,13 @@ export function createSetup(name = 'Setup 1', mode = 'mill') {
     // round the named rotary axis on the way out. Not a second kind of
     // toolpath: the CL data is the same flat CL data. See engine/wrap.js.
     wrap: null,
+    // Simultaneous 5-axis (beta): null is an ordinary setup. When enabled, the
+    // operations below may tilt the tool as they cut, and `pivot` is where the
+    // table's rotary axes cross, in this setup's own coordinates from the work
+    // datum — what the post needs when the control does not do tool-centre-point
+    // itself. `signChecked` records that someone jogged A and C and saw them go
+    // the way the program assumes. See engine/five/kinematics.js.
+    five: null,
     // clamps and jaws holding the part down: keep-outs every operation in this
     // setup respects. See engine/fixtures.js
     fixtures: [],
@@ -272,7 +279,7 @@ export const OP_TYPES = [
   'command',
   'face', 'contour2d', 'pocket', 'slot', 'clear2d', 'adaptive',
   'spot', 'drill', 'tap', 'threadMill', 'bore', 'chamfer', 'engrave',
-  'parallel3d', 'waterline',
+  'parallel3d', 'waterline', 'finish5',
   'turnFace', 'turnRough', 'turnFinish', 'turnGroove', 'turnThread',
   'turnDrill', 'turnBore', 'turnPart',
 ];
@@ -370,8 +377,18 @@ export function createOperation(type = 'contour2d') {
       // 'level' re-reads the profile at every depth, for a stepped part.
       // See engine/strategies/contour.js.
       contourOutline: 'part',
-      pattern: 'zigzag',  // raster pattern for face/parallel3d
+      pattern: 'zigzag',  // raster pattern for face/parallel3d/finish5
       angleDeg: 0,        // raster direction
+      // 5-axis finishing (beta): how the cutter leans from the surface. Lead is
+      // back along the feed, tilt to the side of it, both measured from the
+      // surface normal ('normal') or from vertical ('fixed'); the lean never
+      // exceeds maxTilt from vertical and changes no faster than axisRate
+      // degrees per millimetre of path. See engine/strategies/finish5.js.
+      tiltMode: 'normal',   // 'normal' | 'fixed'
+      leadAngle: 0,
+      tiltAngle: 0,
+      maxTilt: 35,
+      axisRate: 10,
       peck: 0,            // drill peck depth; 0 = plain G81
       dwell: 0,           // seconds paused at depth; > 0 with no peck = G82
       // how close a hole's diameter must be to the drill's to count as a match
@@ -605,6 +622,7 @@ export function deserializeProject(json, notes = []) {
     // Indexed setups arrived after 3+2 support; a project written before it has
     // none, which reads as an ordinary re-fixtured setup.
     setup.index ??= null;
+    setup.five ??= null;
     setup.fixtures ??= [];
     setup.stock = { ...createStock(), ...(setup.stock ?? {}) };
     for (const op of setup.operations ?? []) {

@@ -57,6 +57,34 @@ export const linuxcnc = {
     },
   },
 
+  // Simultaneous 5-axis. Who does the pivot arithmetic is the machine's fact
+  // (doc/machines.js TCP_MODES); what this dialect adds is the words that switch
+  // it on and off. LinuxCNC's own answer is its trt kinematics module, which is
+  // always on and has no word — the program is simply in tool-tip coordinates —
+  // so there is nothing to write, only a reminder of what the file assumes.
+  // `g43.4` is the Fanuc-family word for the same thing, for a control that has
+  // it; switching it off drops the length offset with it, so the plain one is
+  // put back.
+  fiveAxis: {
+    tcpOn(w, modal, { mode, tool }) {
+      if (mode === 'g43.4') {
+        w.line(`G43.4 H${tool ?? 0}`);
+        modal.reset();
+      } else if (mode === 'kins') {
+        w.comment('5-axis: needs the trt kinematics (xyzac-trt-kins / xyzbc-trt-kins) loaded');
+      } else {
+        w.comment('5-axis: pivot point compensated here - no tool centre point on this control');
+      }
+    },
+    tcpOff(w, modal, { mode, tool }) {
+      if (mode === 'g43.4') {
+        w.line('G49');
+        w.line(`G43 H${tool ?? 0}`);
+        modal.reset();
+      }
+    },
+  },
+
   /**
    * Rigid tapping, which rs274ngc spells G33.1.
    *

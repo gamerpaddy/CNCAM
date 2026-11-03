@@ -81,7 +81,7 @@ export function paletteCommands(ctx) {
     ui.setStatus(`${setting.label}: ${setting.labels?.[value] ?? (value === true ? 'on' : value === false ? 'off' : value)}`);
   };
   for (const setting of SETTINGS) {
-    if (setting.group !== 'Appearance' && setting.group !== 'Viewport') continue;
+    if (!['Appearance', 'Viewport', 'Experimental'].includes(setting.group)) continue;
     if (setting.type === 'checkbox') {
       out.push({
         group: 'Options',

@@ -101,6 +101,9 @@ const ICONS = {
   engrave:
     '<path d="M12 2l3 8h-6z"/><path d="M12 10v4" class="stroke"/>'
     + '<path d="M3 20h18" class="stroke"/><path d="M9 18h6l-3-4z" class="stroke"/>',
+  finish5:
+    '<path d="M2 17c4-8 8 6 12-2s6 2 8 0v5H2z"/>'
+    + '<path d="M9 3l5 8" class="stroke accent"/><circle cx="14.4" cy="11.4" r="1.6"/>',
   parallel3d:
     '<path d="M2 16c4-8 8 6 12-2s6 2 8 0v6H2z"/>'
     + '<path d="M2 13c4-8 8 6 12-2s6 2 8 0M2 17c4-8 8 6 12-2s6 2 8 0" class="stroke"/>',
@@ -256,6 +259,14 @@ export const OP_CATALOG = {
     summary: 'Rasters a curved surface, the cutter riding the real form.',
     when: 'Shallow and rolling surfaces. Poor on steep walls, where the passes '
       + 'spread apart.',
+    cutter: 'Ball or bull nose',
+  },
+  finish5: {
+    group: '3D finishing',
+    summary: 'Rasters a curved surface with the cutter leaning to it — simultaneous 5-axis. Beta.',
+    when: 'Surfaces a vertical ball nose finishes badly: the flat, where its centre is '
+      + 'cutting at no speed, and the steep, where the holder is in the way. Needs a '
+      + 'trunnion machine (A/C or B/C), and sees the part from above only.',
     cutter: 'Ball or bull nose',
   },
   turnFace: {
@@ -524,6 +535,10 @@ export function describeIntent(op, tool) {
     case 'parallel3d':
       return `Finishes the surface with ${cutter} in ${(p.pattern ?? 'zigzag') === 'flow' ? 'streamlines of the steepest slope' : `${p.angleDeg ?? 0}° passes`}, `
         + `stepping ${mm((p.stepover ?? 0.08) * (tool?.diameter ?? 6))} between them.`;
+    case 'finish5':
+      return `Finishes the surface with ${cutter} leaning to it — ${p.tiltMode === 'fixed' ? 'at a fixed lean' : 'following the surface normal'}, `
+        + `${p.leadAngle ?? 0}° of lead and at most ${p.maxTilt ?? 35}° from vertical — in `
+        + `${p.angleDeg ?? 0}° passes ${mm((p.stepover ?? 0.1) * (tool?.diameter ?? 6))} apart.`;
     case 'waterline':
       return `Finishes the walls with ${cutter} in level contours ${mm(p.stepdown ?? 0.25)} apart, `
         + `from Z${p.topZ} down to Z${p.bottomZ}.`;

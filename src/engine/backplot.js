@@ -19,7 +19,7 @@
 // through the billet, does it go over a clamp. A strategy knows its own moves
 // and nothing about the file they end up in.
 
-import { CLBuilder, FEED, MOVE_STRIDE, OP, eachMove } from './cl.js';
+import { CLBuilder, FEED, MOVE_STRIDE, OP, eachMove, isTilted } from './cl.js';
 import { parseGcode } from '../post/parse.js';
 import { fixtureLoops, fixtureTop } from './fixtures.js';
 import { pointInLoops } from '../geom/inside.js';
@@ -109,6 +109,9 @@ export function clFromGcode(parsed) {
       continue;
     }
     grow(m.x, m.y, m.z);
+    // a simultaneous 5-axis file read back with its machine says which way the
+    // spindle points; every move carries it, as CL moves do
+    if (m.axis) cl.setAxis(m.axis[0], m.axis[1], m.axis[2]);
     if (m.rapid) {
       cl.rapid(m.x, m.y, m.z);
     } else {
@@ -327,6 +330,17 @@ export function comparePaths(a, b) {
     const d = Math.hypot(pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]);
     if (d > worst) { worst = d; at = t; }
   }
+  // And, for a program that leans the tool, which way the spindle points at the
+  // same fractions of the path: two programs can agree about where the tip goes
+  // and disagree about everything that matters to the holder.
+  let axisWorst = 0;
+  if (leans(A) || leans(B)) {
+    for (let k = 0; k <= samples; k++) {
+      const t = k / samples;
+      axisWorst = Math.max(axisWorst,
+        angleBetween(axisAlong(A, t * A.total), axisAlong(B, t * B.total)));
+    }
+  }
   return {
     worst,
     at,
@@ -334,7 +348,44 @@ export function comparePaths(a, b) {
     extra: Math.abs(A.total - B.total),
     length: A.total,
     steps: Math.max(A.points.length, B.points.length),
+    axisWorst,
   };
+}
+
+/** Does any point of this path carry a tilted spindle? */
+function leans(path) {
+  return path.points.some((p) => p[4] && isTilted(p[4][0], p[4][1]));
+}
+
+/** Which way the spindle points a given distance along a path, in unit-vector form. */
+function axisAlong(path, target) {
+  const { at, points } = path;
+  const up = [0, 0, 1];
+  let lo = 0;
+  let hi = at.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (at[mid] < target) lo = mid + 1; else hi = mid;
+  }
+  if (lo === 0) return points[0][4] ?? up;
+  const span = at[lo] - at[lo - 1];
+  const f = span > 1e-12 ? (target - at[lo - 1]) / span : 0;
+  return blendAxis(points[lo - 1][4] ?? up, points[lo][4] ?? up, f);
+}
+
+/** The angle between two unit axes, in degrees. */
+function angleBetween(a, b) {
+  const dot = Math.min(1, Math.max(-1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
+  return Math.acos(dot) * 180 / Math.PI;
+}
+
+/** Normalised interpolation of two unit axes. */
+function blendAxis(a, b, t) {
+  const x = a[0] + (b[0] - a[0]) * t;
+  const y = a[1] + (b[1] - a[1]) * t;
+  const z = a[2] + (b[2] - a[2]) * t;
+  const n = Math.hypot(x, y, z) || 1;
+  return [x / n, y / n, z / n];
 }
 
 /**
@@ -376,7 +427,7 @@ const MAX_COMPARE_SAMPLES = 20000;
 function pathPoints(cl) {
   if (Array.isArray(cl)) return cl;
   const out = [];
-  eachMove(cl, (opcode, x, y, z, a, _b, _c, feedClass) => {
+  eachMove(cl, (opcode, x, y, z, a, b, c, feedClass) => {
     // A hole is where the cycle feeds from and how deep it goes, and that is
     // *all* the CL data says about it. Where the tool ends up afterwards is the
     // control's business: G98 returns to whatever height the run started at and
@@ -386,7 +437,7 @@ function pathPoints(cl) {
     // operation as thirty-nine millimetres of post bug, all of it the retract
     // plane being exactly what it was asked to be.
     if (opcode === OP.DRILL) out.push([x, y, a, true], [x, y, z, false]);
-    else out.push([x, y, z, opcode === OP.RAPID || feedClass === FEED.RAPID]);
+    else out.push([x, y, z, opcode === OP.RAPID || feedClass === FEED.RAPID, [a, b, c]]);
   });
   return out;
 }
@@ -613,7 +664,12 @@ export function checkPost({
   ops, text, lineMap, arcTolerance = 0.005, fitTolerance = 0.01,
 }) {
   if (!ops?.length || !lineMap?.size) return null;
-  const parsed = parseGcode(text, { arcTolerance });
+  // A program with a simultaneous 5-axis operation is read with the machine it
+  // was posted for: without it the A and C words are unread and the tool has no
+  // axis, and the one thing worth checking about that operation — that the file
+  // says what the CL said — could not be.
+  const kinematics = ops.find((o) => o.five && !o.five.refused)?.five ?? null;
+  const parsed = parseGcode(text, { arcTolerance, kinematics });
   // The mapped lines in order, so a parsed block can be attributed to the
   // operation whose stretch of the file it falls in.
   const marks = [...lineMap.entries()]
@@ -633,7 +689,7 @@ export function checkPost({
     if (op < 0 || op >= buckets.length) continue;
     // the R plane and the bottom, matching what a CL cycle states — see pathPoints
     if (m.kind === 'cycle') buckets[op].push([m.x, m.y, m.r, true], [m.x, m.y, m.z, false]);
-    else buckets[op].push([m.x - shifts[op][0], m.y, m.z - shifts[op][1], !!m.rapid]);
+    else buckets[op].push([m.x - shifts[op][0], m.y, m.z - shifts[op][1], !!m.rapid, m.axis]);
   }
 
   const each = ops.map((op, i) => {
@@ -645,25 +701,49 @@ export function checkPost({
     if (op.wrap?.diameter > 0) {
       return { name: op.name, allowed: Infinity, over: -Infinity, worst: 0, wrapped: true };
     }
+    // A 5-axis operation the post would not write has no moves in the file to
+    // compare, and saying the file is wrong about them would be a false alarm:
+    // the file says, in a comment, that it did not post them.
+    if (op.cl?.fiveAxis && buckets[i].length === 0) {
+      return { name: op.name, allowed: Infinity, over: -Infinity, worst: 0, notPosted: true };
+    }
     const result = comparePaths(op.cl, buckets[i]);
+    const axisOver = (result.axisWorst ?? 0) - AXIS_ALLOWED;
     const allowed = Math.max(ARC_REFIT_FLOOR,
       3 * Math.max(fitTolerance, op.cl?.resolution ?? 0) + ROUNDING)
       + Math.min(result.extra, result.length * PLAUSIBLE_DRIFT)
       + PRINTED_STEP * Math.sqrt(result.steps);
-    return { name: op.name, allowed, over: result.worst - allowed, ...result };
+    return { name: op.name, allowed, over: result.worst - allowed, axisOver, ...result };
   });
   let over = -Infinity;
   let at = -1;
   each.forEach((r, i) => {
     if (r.over > over) { over = r.over; at = i; }
   });
+  // …and the worst the spindle direction is out by, if the file leans the tool
+  let axisOver = -Infinity;
+  let axisAt = -1;
+  each.forEach((r, i) => {
+    if ((r.axisOver ?? -Infinity) > axisOver) { axisOver = r.axisOver; axisAt = i; }
+  });
   return {
     worst: at >= 0 ? each[at].worst : 0, over, op: at, ops: each,
+    axisOver,
+    axisWorst: axisAt >= 0 ? each[axisAt].axisWorst : 0,
+    axisOp: axisAt,
   };
 }
 
 /** What printing a coordinate to three decimals can cost, twice over. */
 const ROUNDING = 0.005;
+
+/**
+ * How far the spindle direction read back may be from the one planned, in
+ * degrees. A block carries a swing of up to 2° with the control interpolating
+ * the angles and the CL interpolating the vector, which differ by a hair; a
+ * flipped sign on an axis is tens of degrees.
+ */
+const AXIS_ALLOWED = 1.5;
 
 /** And what refitting a path into arcs and back costs, whatever the tolerance. */
 const ARC_REFIT_FLOOR = 0.1;
@@ -734,6 +814,63 @@ export function bodyCutFinding(sim, ops = []) {
       + `cutter is not long enough for this depth: the ${part} is wider than the slot it `
       + 'cuts and comes down on the wall beside it. Use a longer cutter, or take the '
       + 'metal round it away first.',
+  };
+}
+
+/**
+ * The leaning tool in a clamp.
+ *
+ * A holder a few centimetres off to one side of the tip can be low enough to meet
+ * a clamp the tip is nowhere near, and neither the footprint a 3-axis program is
+ * kept out of by nor the sweep of the flutes can see it. Reported from
+ * `sim.findings`, which is where the simulation put each collision it found.
+ *
+ * @returns a finding, or null when nothing was hit
+ */
+export function fixtureCutFinding(sim, ops = []) {
+  const hits = (sim?.findings ?? []).filter((f) => f.kind === 'fixture');
+  if (hits.length === 0) return null;
+  const first = hits[0];
+  const op = sim.opEnds ? sim.opEnds.findIndex((end) => end > first.step) : -1;
+  const where = ops[op]?.name;
+  const worst = hits.reduce((m, f) => Math.max(m, f.depth), 0);
+  return {
+    level: 'warn',
+    line: -1,
+    step: first.step,
+    // the simulation keeps the first two hundred; past that it is "a lot", not a count
+    text: `The tool is inside ${first.name ?? 'a clamp'} at ${hits.length >= 200 ? '200 or more points' : plural(hits.length, 'point')} of the `
+      + `toolpath${where ? `, first in ${where}` : ''} - up to ${worst.toFixed(1)}mm into it. The `
+      + 'spindle leans far enough that the holder or the shank reaches the clamp: tilt less, '
+      + 'or move the clamp.',
+  };
+}
+
+/**
+ * What a simultaneous 5-axis program asked of the cutter, in a sentence.
+ *
+ * The number tilting is for: how far out on the cutter the work was done. A ball
+ * nose working on its tip is cutting at no speed at all, so a finish taken there
+ * rubs instead of cutting; the same ball leaned a few degrees is cutting on a part
+ * of itself that is moving. Said only when there is something to say.
+ *
+ * @returns { level, step, text } or null
+ */
+export function engagementFinding(sim) {
+  const five = sim?.five;
+  if (!five || !(five.cutSteps > 0)) return null;
+  const pct = Math.round(five.meanRatio * 100);
+  const mrr = five.peakMrr / 1000;
+  const slow = five.deadShare > 0.25 || five.meanRatio < 0.15;
+  return {
+    level: slow ? 'warn' : 'info',
+    step: five.peakMrrAt,
+    text: slow
+      ? `${Math.round(five.deadShare * 100)}% of the metal is taken within a tenth of the cutter radius of `
+        + 'its axis, where it is cutting at almost no speed - lean the cutter further so the '
+        + 'work is done out along the ball.'
+      : `The cutter works at ${pct}% of its radius on average, peaking at ${mrr.toFixed(mrr < 10 ? 1 : 0)} `
+        + 'cm3/min of metal removed.',
   };
 }
 

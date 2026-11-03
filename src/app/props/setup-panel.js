@@ -23,6 +23,9 @@ import { machineWarnings } from '../../doc/machines.js';
 import { effectiveCutting } from '../../engine/cutting.js';
 import { MOVE_STRIDE, OP } from '../../engine/cl.js';
 import { fieldRow, roundMicron, propRow } from './fields.js';
+import { fiveAxisChecks } from '../../engine/five/assistant.js';
+import { fiveAxisEnabled } from '../settings.js';
+import { numberInput, parseNumber, formatNumber } from '../number-input.js';
 
 const ORIENTATION_FIELDS = [
   {
@@ -273,6 +276,7 @@ export function setupSections(doc, setup, app) {
   rows.push(orientationPresetRow(doc, setup));
   for (const f of ORIENTATION_FIELDS) rows.push(fieldRow(doc, setup, f, null, null, app));
   if (milling(setup)) rows.push(...rotaryRows(doc, setup, app));
+  if (milling(setup)) rows.push(...fiveAxisRows(doc, setup, app));
 
   rows.push(el('h2', {}, ['Raw stock']));
   const seed = () => ensureStockShape(doc, setup);
@@ -613,6 +617,105 @@ function indexRows(doc, setup) {
       : `${machine.name} cannot reach this: ${o.reason ?? 'the orientation is out of range'}.`,
   ]));
   return rows;
+}
+
+/**
+ * Simultaneous 5-axis (beta): the switch, the one number it needs from you, and
+ * the checklist.
+ *
+ * Only offered with the Experimental switch on (Options). Turning it on for a
+ * setup lets operations lean the cutter as they cut and makes the post write the
+ * rotary axes; what it cannot do is know the machine — where the table's axes
+ * cross, which way A counts, what holder is in the spindle — and each of those
+ * is a way to cut the wrong part with a program that looks right. So the checklist
+ * under the switch (engine/five/assistant.js) says, in the order a person would
+ * check them, which are right and which are not, with the action that fixes the
+ * ones that have one.
+ */
+function fiveAxisRows(doc, setup, app) {
+  if (!fiveAxisEnabled()) return [];
+  const machine = doc.machineRecord();
+  const enabled = !!setup.five?.enabled;
+  const rows = [el('h2', {}, ['5-axis (beta)'])];
+
+  const box = el('input', { type: 'checkbox' });
+  box.checked = enabled;
+  box.addEventListener('change', () => {
+    doc.updateItem(setup, {
+      five: box.checked
+        ? { enabled: true, pivot: setup.five?.pivot ?? null, signChecked: setup.five?.signChecked ?? false }
+        : null,
+    }, 'simultaneous 5-axis');
+  });
+  rows.push(propRow('Simultaneous 5-axis', box));
+  if (!enabled) {
+    rows.push(el('div', { class: 'prop-note' }, [
+      'Lets the 5-axis finishing operation lean the cutter as it cuts, and posts the rotary '
+      + 'axes with it. Turn it on for the checklist of what has to be true of the machine, '
+      + 'the part and the cutter before the program is worth running.',
+    ]));
+    return rows;
+  }
+
+  rows.push(pivotRow(doc, setup));
+
+  const { meshes } = placed(doc, setup);
+  const ops = setup.operations.filter((o) => o.enabled).map((op) => ({
+    op, tool: doc.project.tools.find((t) => t.id === op.toolId), cl: doc.toolpaths.get(op.id),
+  }));
+  const { items } = fiveAxisChecks({
+    setup, machine, ops, mesh: meshes.length ? mergeMeshes(meshes) : null,
+  });
+  const fixes = {
+    sign: () => doc.updateItem(setup, { five: { ...setup.five, signChecked: true } }, 'confirm rotary directions'),
+    indexOff: () => doc.updateItem(setup, { index: null }, 'indexed setup'),
+    wrapOff: () => doc.updateItem(setup, { wrap: null }, 'wrapped setup'),
+    machines: () => app?.actions?.openMachines?.(),
+  };
+  for (const item of items) {
+    const glyph = { ok: '\u2713', info: 'i', warn: '!', error: '\u2717' }[item.level];
+    const note = el('div', { class: `prop-note five-check ${item.level}${item.level === 'warn' || item.level === 'error' ? ' warn' : ''}` }, [
+      el('span', { class: 'five-glyph' }, [glyph]),
+      el('strong', {}, [` ${item.title}. `]),
+      item.detail,
+    ]);
+    if (item.fix && fixes[item.fix.id]) {
+      note.append(' ', el('button', {
+        class: 'five-fix', type: 'button', onclick: fixes[item.fix.id],
+      }, [item.fix.label]));
+    }
+    rows.push(note);
+  }
+  return rows;
+}
+
+/** Where the table's two axes cross, from the work datum — three numbers. */
+function pivotRow(doc, setup) {
+  const known = Array.isArray(setup.five?.pivot);
+  const p = known ? setup.five.pivot : [0, 0, 0];
+  const fields = ['X', 'Y', 'Z'].map((axis, i) => {
+    const input = numberInput({ step: 0.5 }, {
+      value: known ? formatNumber(p[i]) : '',
+      placeholder: '0',
+      'aria-label': `Rotary centre ${axis}`,
+    });
+    input.addEventListener('change', () => {
+      const typed = input.value.trim() === '' ? 0 : parseNumber(input.value);
+      if (!Number.isFinite(typed)) { input.value = known ? formatNumber(p[i]) : ''; return; }
+      const next = [...p];
+      next[i] = roundMicron(typed);
+      doc.updateItem(setup, { five: { ...setup.five, pivot: next } }, 'rotary centre');
+    });
+    return el('label', { class: 'five-pivot-axis' }, [axis, input]);
+  });
+  return el('div', {}, [
+    propRow('Rotary centre (mm)', el('div', { class: 'five-pivot' }, fields)),
+    el('div', { class: 'prop-hint' }, [
+      'Where the table\'s tilt and turn axes cross, measured from this setup\'s work datum. '
+      + 'Needed by the post when the control has no tool-centre-point, and by the travel and '
+      + 'collision checks either way.',
+    ]),
+  ]);
 }
 
 /**

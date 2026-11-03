@@ -234,12 +234,23 @@ function repairSetup(setup, ids, notes) {
   out.orientation = { ...orientationDefaults, ...orientation };
   typed(out.orientation, orientationDefaults, `${label} orientation`, notes);
   // indexing and wrapping are on or off, and carry numbers when on
-  for (const key of ['index', 'wrap']) {
+  for (const key of ['index', 'wrap', 'five']) {
     if (out[key] === undefined) continue;
     if (out[key] !== null && !isObject(out[key])) {
       notes.push(`${label}: ${key} was ${describe(out[key])}, switched off`);
       out[key] = null;
     }
+  }
+  if (out.five) {
+    const five = { enabled: true, pivot: null, signChecked: false, ...out.five };
+    five.enabled = five.enabled !== false;
+    if (five.pivot !== null && !(Array.isArray(five.pivot) && five.pivot.length === 3
+      && five.pivot.every(Number.isFinite))) {
+      notes.push(`${label}: the rotary pivot was ${describe(five.pivot)}, set to not-yet-measured`);
+      five.pivot = null;
+    }
+    five.signChecked = five.signChecked === true;
+    out.five = five;
   }
   if (out.wrap && out.wrap.diameter !== undefined && !Number.isFinite(out.wrap.diameter)) {
     notes.push(`${label}: wrap diameter was ${describe(out.wrap.diameter)}, wrap switched off`);

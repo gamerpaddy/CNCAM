@@ -949,6 +949,17 @@ input.tree-rename:focus { outline: none; }
 
 /* A note the user needs to act on — "this operation cut nothing, and here is
    why". Dim grey is right for an aside and wrong for a diagnosis. */
+.five-check .five-glyph { display: inline-block; width: 1.2em; text-align: center; font-weight: 700; }
+.five-check.ok .five-glyph { color: #7fb98f; }
+.five-check.info .five-glyph { color: var(--info); }
+.five-check.error .five-glyph { color: var(--danger-text); }
+.five-fix { margin-left: 4px; padding: 1px 8px; font-size: 11.5px; }
+.five-pivot { display: flex; gap: 6px; flex: 1; }
+.five-pivot-axis { display: flex; align-items: center; gap: 4px; flex: 1; font-size: 12px; color: var(--fg-dim); }
+.five-pivot-axis input { min-width: 0; width: 100%; }
+.machine-signs { display: flex; flex-direction: column; gap: 3px; }
+.machine-sign { font-size: 12.5px; }
+
 .prop-note.warn {
   color: #d9b56a;
   background: var(--warn-soft);
@@ -1675,6 +1686,8 @@ button.pick-active {
 .sim-load:empty, .sim-verify:empty { visibility: hidden; }
 .sim-load:hover, .sim-verify:hover { border-color: var(--border-strong); color: var(--fg); }
 .sim-load.warn { color: var(--warn); }
+.sim-five { min-width: 0; }
+.sim-five.bad { color: var(--danger-text); }
 /* The verification verdict, beside the load. Its own colours: a gouge is not a
    heavy cut, it is a scrapped part. */
 .sim-verify.ok { color: #7fb98f; }

@@ -24,9 +24,25 @@ const KEY = 'cncam.settings';
  */
 // Library last: it is the only group whose rows *do* something rather than
 // being a preference that is read back later.
-export const SETTING_GROUPS = ['Appearance', 'Viewport', 'Simulation', 'Editing', 'Library'];
+export const SETTING_GROUPS = ['Appearance', 'Viewport', 'Simulation', 'Editing', 'Experimental', 'Library'];
 
 export const SETTINGS = [
+  // --- experimental ---
+  {
+    key: 'fiveAxisBeta',
+    label: '5-axis milling (beta)',
+    group: 'Experimental',
+    type: 'checkbox',
+    default: false,
+    hint: 'Simultaneous 5-axis surface finishing on a table-table trunnion '
+      + '(A/C or B/C), with the tool-axis simulation, crash and engagement '
+      + 'checks and the 5-axis setup assistant that go with it. A beta: the '
+      + 'simulation sees only the top of the part (no undercuts), the post has '
+      + 'not met your machine, and a mirrored A or C is one jog test away. Dry-run '
+      + 'every program in the air before it touches metal. Operations already in '
+      + 'a project stay in it with this off; they just cannot be generated.',
+  },
+
   // --- library ---
   {
     key: 'resetToolLibrary',
@@ -682,6 +698,11 @@ export function allSettings() {
 export function getSetting(key) {
   const value = readAll()[key];
   return value === undefined ? DEFAULTS[key] : value;
+}
+
+/** Is the 5-axis beta switched on? Read at the moment of use, never cached. */
+export function fiveAxisEnabled() {
+  return getSetting('fiveAxisBeta') === true;
 }
 
 export function setSetting(key, value) {

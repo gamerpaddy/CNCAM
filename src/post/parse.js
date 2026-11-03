@@ -19,6 +19,8 @@
 // does not understand is *reported*, never guessed at — a program half-read is
 // worse than one not read at all, because it looks like an answer.
 
+import { fromWritten, machineToTip, axisFromAngles } from '../engine/five/kinematics.js';
+
 /** Millimetres per inch, for a program in G20. */
 const INCH = 25.4;
 
@@ -117,6 +119,11 @@ const KNOWN_M = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30]);
 /**
  * @param text a G-code program
  * @param options.arcTolerance chord tolerance when expanding arcs (mm)
+ * @param options.kinematics { rotary, tcp, pivot } — the machine a simultaneous
+ *   5-axis file was posted for. With it, A/B/C words are read rather than
+ *   reported, and every move comes back as where the tool *tip* is and which
+ *   way the spindle points (`axis`), whichever of the two spellings the file
+ *   used: part coordinates under tool-centre-point, machine axes without it.
  * @returns {{ motion, points, cycles, events, unsupported, units, xWords, blocks }}
  *   motion:  every move and cycle in program order, the one authoritative list
  *   points:  the moves alone, one entry per resolved endpoint (arcs expanded)
@@ -128,7 +135,7 @@ const KNOWN_M = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30]);
  *            that comes back is a radius either way; this says which the file
  *            said. See DIAMETER_MODE.
  */
-export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
+export function parseGcode(text, { arcTolerance = 0.005, kinematics = null } = {}) {
   const motion = [];
   const events = [];
   const unsupported = [];
@@ -174,6 +181,23 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
   };
 
   const at = { x: 0, y: 0, z: 0 };
+  // The rotary positions as the file wrote them, by letter. Only when the
+  // caller knows the machine: the axes mean nothing to a reader that does not.
+  const machine = kinematics ? { rotary: kinematics.rotary } : null;
+  const rotaryLetters = new Set((kinematics?.rotary ?? []).map((a) => a.letter));
+  const written = {};
+  for (const letter of rotaryLetters) written[letter] = 0;
+  const pivot = kinematics?.pivot ?? [0, 0, 0];
+  /** Where the tip is, and which way the tool points, for a block that ends at `t`. */
+  const poseAt = (t) => {
+    if (!machine) return t;
+    const angles = fromWritten(written, machine);
+    let tip = [t.x, t.y, t.z];
+    // without tool-centre-point the coordinates are the machine's own, with the
+    // table's turn in them: undo it to get where the tip is on the part
+    if (kinematics.tcp === 'none') tip = machineToTip(tip, angles, machine, pivot);
+    return { x: tip[0], y: tip[1], z: tip[2], axis: axisFromAngles(angles, machine) };
+  };
   let started = false;
   // The height the tool was at when the first cycle of a run began, which is
   // where G98 sends it back to between holes.
@@ -249,7 +273,12 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
         else if (n === 91.1) arcAbsolute = false;
         else if (n === 98 || n === 99) retractMode = n;
         else if (n === PER_MINUTE || n === PER_REV) feedMode = n;
-        else if (n === INVERSE_TIME) {
+        else if (n === INVERSE_TIME && machine) {
+          // a 5-axis file's feed is a duration too; its F words are skipped below
+          feedMode = n;
+        } else if (n === 43.4 && machine) {
+          // tool-centre-point on: the coordinates that follow are the tip's
+        } else if (n === INVERSE_TIME) {
           // Not a rate at all: the F on the block says how many of that block
           // would fit in a minute. There is nothing to convert it to without
           // walking the block, and a wrapped program's rotary words are already
@@ -264,6 +293,8 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
           if (sw != null) surfaceSpeed = sw * (SURFACE_UNIT[units] ?? SURFACE_UNIT.mm);
         } else if (n === 97) css = false;
         else if (!MODAL_G.has(n)) unsupported.push({ code: `G${n}`, line });
+      } else if (machine && rotaryLetters.has(letter)) {
+        written[letter] = n;
       } else if (ROTARY_AXES.has(letter)) {
         // Motion this reader cannot draw — see ROTARY_AXES. The block's linear
         // words are still read, because half a move drawn is what the rest of
@@ -382,7 +413,10 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
     // a block with nothing to do.
     const circle = (move === 2 || move === 3) && x == null && y == null && z == null
       && ['I', 'J', 'K'].some((l) => value(l) != null);
-    if (move == null || (x == null && y == null && z == null && !circle)) return;
+    // A block of nothing but a rotary word still moves the part: the tip stays
+    // and the spindle swings, which a 5-axis file does to reorient at clearance.
+    const swings = machine && words.some(([l]) => rotaryLetters.has(l));
+    if (move == null || (x == null && y == null && z == null && !circle && !swings)) return;
     const target = { x: x ?? at.x, y: y ?? at.y, z: z ?? at.z };
 
     // The path starts where the program first says it is, not at the origin.
@@ -412,7 +446,7 @@ export function parseGcode(text, { arcTolerance = 0.005 } = {}) {
         }
       }
     } else {
-      motion.push({ kind: 'move', ...target, rapid: move === 0, line, feed, tool });
+      motion.push({ kind: 'move', ...poseAt(target), rapid: move === 0, line, feed, tool });
     }
     Object.assign(at, target);
   });

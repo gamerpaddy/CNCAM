@@ -439,6 +439,25 @@ function capOfAssembly(tool, withHolder) {
   return disc;
 }
 
+const SPINDLE_UP = new THREE.Vector3(0, 0, 1);
+const LEAN = new THREE.Vector3();
+
+/**
+ * Point the cutter along `axis` — the way the spindle leans at this instant of a
+ * simultaneous 5-axis program. The assembly is built tip at the origin with its
+ * own axis up +Z, so leaning it is one rotation about the tip, and a vertical
+ * (or absent) axis puts it back upright, which is what every 3-axis step wants.
+ * The cache key in `setCutter` does not include the axis, so a cutter that leans
+ * differently on every frame is still one assembly.
+ */
+function leanTo(group, axis) {
+  if (!axis || (axis[0] * axis[0] + axis[1] * axis[1] < 1e-12)) {
+    group.quaternion.identity();
+    return;
+  }
+  group.quaternion.setFromUnitVectors(SPINDLE_UP, LEAN.set(axis[0], axis[1], axis[2]).normalize());
+}
+
 export class SimulationView {
   constructor(scene) {
     this.scene = scene;
@@ -1670,6 +1689,7 @@ export class SimulationView {
       const [x, y, z] = state.position;
       // a lathe tool works in the plane the bar is drawn in; it has no Y
       this.cutter.position.set(x, this.sim?.kind === 'turn' ? 0 : y, z);
+      leanTo(this.cutter, state.axis);
       this.cutter.visible = true;
       return undefined;
     }
@@ -1728,6 +1748,7 @@ export class SimulationView {
     const cap = capOfAssembly(tool, this.showHolder);
     if (cap) group.add(cap);
     group.position.set(...position);
+    leanTo(group, state.axis);
     // Drawn after the surface, and still depth-tested against it, so the tool is
     // hidden where it is buried in solid stock and shows where it is in the open.
     group.traverse((n) => { n.renderOrder = CUTTER_RENDER_ORDER; });

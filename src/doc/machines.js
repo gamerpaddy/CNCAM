@@ -210,6 +210,9 @@ export function createMachine(preset = {}) {
     // machine has none; a machine that lists them can hold a tilted face under
     // the spindle without the operator re-fixturing. See engine/indexing.js.
     rotary: normalizeRotary(merged.rotary ?? base.rotary),
+    // Who does the pivot arithmetic in a simultaneous 5-axis program: see
+    // TCP_MODES. A fact about the control, so it lives on the machine.
+    tcp: TCP_MODES[merged.tcp] ? merged.tcp : 'kins',
     // How a feed is written. A lathe's natural unit is mm per *revolution* —
     // that is what makes the chip the same thickness at every diameter, and it
     // is the figure quoted on an insert box. A mill has no such thing.
@@ -223,6 +226,18 @@ export function createMachine(preset = {}) {
 function num(value, fallback) {
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
+
+/**
+ * How a control keeps the tool tip where the program says while the table tilts
+ * (tool-centre-point, "TCP"), and so what the post writes for simultaneous
+ * 5-axis. In the first two the program is in part coordinates and the control
+ * does the pivot sum; in the third the post does it and writes machine axes.
+ */
+export const TCP_MODES = {
+  kins: 'Control does it — LinuxCNC trt kinematics (no extra words)',
+  'g43.4': 'Control does it — G43.4 (Fanuc, Haas, Okuma style)',
+  none: 'Post does it — pivot point, G93 inverse-time feed',
+};
 
 /**
  * A machine's rotary axis list, cleaned up: a unit axis vector, an uppercase
@@ -240,6 +255,14 @@ function normalizeRotary(rotary) {
         axis: [a.axis[0] / n, a.axis[1] / n, a.axis[2] / n],
         ...(Number.isFinite(a.min) ? { min: a.min } : {}),
         ...(Number.isFinite(a.max) ? { max: a.max } : {}),
+        // Simultaneous 5-axis only: which way the machine counts. The solve is
+        // right-handed about `axis`; a machine whose positive A runs the other
+        // way carries -1, and the post writes the angle times it. Kept only
+        // when it is the unusual -1 so a plain record stays plain.
+        ...(a.sign === -1 ? { sign: -1 } : {}),
+        // …and how fast it may swing, in degrees per minute — the figure that
+        // makes a tilt-heavy path take longer than its tip travel suggests.
+        ...(Number.isFinite(a.maxFeed) && a.maxFeed > 0 ? { maxFeed: a.maxFeed } : {}),
       };
     });
 }

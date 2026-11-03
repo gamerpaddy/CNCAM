@@ -155,6 +155,20 @@ export const STRATEGY_DEFAULTS = {
     stockToLeave: 0,
     depth: 'mark',
   },
+  // 5-axis finishing. A touch of lead by default: a ball nose cutting on its tip
+  // is cutting at no speed at all, and leaning it a few degrees is the point.
+  finish5: {
+    stepover: 0.1,
+    tolerance: 0.01,
+    pattern: 'zigzag',
+    stockToLeave: 0,
+    linkDistance: null,
+    tiltMode: 'normal',
+    leadAngle: 8,
+    tiltAngle: 0,
+    maxTilt: 35,
+    axisRate: 10,
+  },
   parallel3d: {
     stepover: 0.08,         // finishing: cusp height, not material removal
     tolerance: 0.01,

@@ -969,6 +969,81 @@ also happens where its flank runs into a shoulder or the floor of a hole it was
 not given room to run out of. Both are reported the way a rapid through metal is,
 in the program status and in the G-code check.
 
+### Simultaneous 5-axis (beta)
+
+Behind **Options → Experimental → 5-axis milling (beta)** (`fiveAxisBeta`, an
+app preference — the engine runs in a worker with no settings, so the switch is
+read in the app layer: the picker hides the card, `opBlockedReason` refuses an
+operation made with it off, the setup panel and machine manager hide their
+rows). An operation already in a file stays in it with the switch off; it just
+will not run. Everything lives in `src/engine/five/` plus `post/five.js`.
+
+**The CL always carried the axis.** A move is `[op, x, y, z, i, j, k, feed]` and
+`(i,j,k)` has been the tool axis since v0 — constant `(0,0,1)` until
+`strategies/finish5.js`. `program.fiveAxis` says whether any move leans, so every
+consumer keeps its 3-axis path *literally* untouched for the rest
+(`simulate.js` dispatches per move: both ends vertical → the analytic `cut()`,
+anything else → `cutTilted`; `sim-golden.test.js` holds five 3-axis simulations
+to byte-identical hashes). Two traps in the pipeline were fixed on the way:
+`dropRedundantRapids` compares the axis as well as XY (or a swing at clearance is
+"redundant" and the tool tilts on the way down), and a strategy must never call
+`cl.simplify()` (collinear merging forgets the axis between points).
+
+**One description of a tilted cutter.** `five/tilt-kernel.js` solves the lowest
+height of the cutter over a vertical line — each segment of the silhouette
+`tool-geometry.js` already describes is a cone, a cylinder or a flat annulus, and
+a vertical line meets it in the roots of a quadratic. The drop-cutter kernel
+(`buildTiltedKernel`/`leaningKernels`, same shape as `buildToolKernel`, so
+`dropCutter` runs on it unchanged) and the simulator's stamps (`tilt-sweep.js`)
+are both read from it. A cutter is a solid of revolution, so one grid per tilt,
+read back through a rotation, serves every azimuth — that is what took planning a
+dome from 17s to 2s and simulating it from 27s to 3s. The CL tip is the *pole*
+of a ball, not its lowest point: `lowestZ >= stockTop` shortcuts that test the tip
+are wrong for a leaning tool.
+
+**Kinematics** (`five/kinematics.js`) is table-table only: `trunnionOf` accepts a
+tilt about X or Y carrying a turntable about Z (turntable last in the machine's
+rotary list). The machine position of a point is `c + R·(p − c)` with `c` the
+rotary centre (`setup.five.pivot`) — tool length never enters. The closed-form
+solve is `indexing.js solveAxisVector`; `chooseAngles` picks between its two
+branches ((A,C) and (−A,C+180)), unwinds to stay continuous and inside the
+limits, and holds C at the pole. `recentre` brings the axes back within half a
+turn of zero, which the post does whenever it *swings at rapid* (between passes,
+at clearance) so a long program does not wind a turntable up to its stop. Which
+way each axis counts is `rotary[i].sign`; whether the control keeps the tip itself
+is `machine.tcp` (`kins` | `g43.4` | `none`).
+
+**The post** (`post/five.js`) turns tip and axis into blocks. Each move is cut
+into pieces so no block swings the spindle more than 2° or a rotary axis more
+than 10° (halving stops when it stops helping — the first step off the pole is
+one turn no finer cut avoids), and without TCP so the tip stays within 0.01mm of
+the CL's line (joints interpolate linearly, the tip follows a curve). An operation
+ends with the table back at zero: "upright" is a direction, C is free there, and a
+3-axis program after it reads its XY in the machine's own frame. A 5-axis
+operation the post cannot write (no trunnion, setup not switched on, also indexed
+or wrapped, no pivot without TCP, a dialect with no `fiveAxis` hook such as GRBL)
+is not written at all: a `5-AXIS OPERATION NOT POSTED` comment and no moves.
+`parseGcode(text, { kinematics })` reads A/B/C, `G43.4` and `G93` back into tip and
+axis, and `checkPost` compares both against the CL — the axis to 1.5° — so a
+mirrored axis is a failed check and not a mirrored part.
+
+**What it asks of the machine, the clamps and the cutter** is three separate
+checks because none is in the toolpath: `five/checks.js` (axis limits, flips, the
+pole, whether the rotaries can follow the feed, and the linear travel *as the
+table carries the tip*), `five/fixture-hits.js` (the leaning tool as rings along
+its length against each clamp as a prism — the 3-axis keep-out is a column grown
+by the cutter, which says nothing about a holder off to one side), and the
+simulation's `findings` / `five` records (holder in the metal, rapids in metal,
+and metal removal rate with the radius on the cutter the work is done at,
+weighted by volume). Findings are capped at 200 and carry their step; the
+timeline's label counts them and steps through them on click.
+
+**Limits, said once:** the heightmap holds one height per XY cell, so the part
+is seen from above and an undercut is neither machined nor shown (the assistant
+warns when more than 3% of the surface faces down above the base); the post's
+sign convention has not met a real machine, which is why the assistant makes
+"jog A and C and look" an item with its own button.
+
 ### Reachability
 
 Toolpaths are planned against the part's **downward silhouette** — the union of
@@ -1025,7 +1100,9 @@ src/
   geom/   vector math, mesh utilities, slicing, clipper wrapper, silhouette
           (reachability), heightmap + drop cutter, coverage raster, crease
           shading (display normals + edges), face grouping — UI-independent
-  engine/ CL data (canonical toolpath format), collinear merging, tool geometry
+  engine/ five/ (the 5-axis beta: kinematics, the tilted-cutter solve and sweep,
+          clamp collisions, setup checks, the assistant), CL data (canonical
+          toolpath format), collinear merging, tool geometry
           (one silhouette, drawn in 2D and revolved in 3D), turning inserts
           (ISO shapes, drawn and extruded — a lathe tool is not a solid of
           revolution), lathe profiles inside and out, setup orientation, stock,
@@ -1100,6 +1177,10 @@ src/
   for, and anything past it is float noise wearing the clothes of a measurement:
   a diameter derived from a bounding box comes back as `25.400000000000002`,
   which reads as a number somebody chose.
+- A strategy that leans the tool also needs its name in `engine/five/ops.js`
+  (what the picker hides, `opBlockedReason` refuses and the fingerprint keys a
+  pivot edit on), a program that carries `program.fiveAxis`, and no
+  `cl.simplify()`.
 - A new strategy is not done when it generates. It needs an entry in
   `OP_TYPES`, a label, a catalogue card (`src/app/op-catalog.js`: what it does,
   when to reach for it, the cutter it expects, an icon), defaults in

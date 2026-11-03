@@ -670,6 +670,13 @@ function applySettings(key = null) {
   if (touches('cutMarkerStyle')) viewport.simulation.setMarkerStyle(getSetting('cutMarkerStyle'));
   if (touches('playTrail')) viewport.simulation.setTrail(getSetting('playTrail'));
   if (touches('autosave') || touches('autosaveDelay')) keepSession(getSetting('autosave'));
+  // The 5-axis beta changes what the setup panel, the tree and the operation
+  // rows offer and say, so repaint them — not at boot, when they are about to
+  // be built anyway.
+  if (touches('fiveAxisBeta') && key !== null) {
+    renderPanels();
+    ctx.rerenderProps?.();
+  }
   // the window's own look: scheme, accent, size and the viewport backdrop
   if (key === null || /^(ui|viewBackground)/.test(key)) {
     applyAppearance();

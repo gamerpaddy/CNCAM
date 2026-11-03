@@ -33,47 +33,27 @@ import {
   approach, entryPlane, entryGapOf, clearOfRoughing, roughingNote,
 } from '../heights.js';
 
-export function generateParallel3d({
-  mesh, tool, params: given, stock, regions, earlier = null,
+/**
+ * Where a finishing pass may cut, and what it may cut at each place.
+ *
+ * Both finishing strategies ask the same two questions of the same part — how
+ * far past it the pass may run, and whether a given (x, y) is somewhere the
+ * cutter is allowed to be — and answering them twice is how two strategies come
+ * to disagree about a region someone excluded. So it is answered here, once.
+ *
+ * @param options.radius the cutter's radius, which grows the boundary
+ * @returns null when no area is left after the region filter, else
+ *   `{ area, boundary, limit, limited, box, insideArea, probeWith }` —
+ *   `probeWith(surfaceAt)` is the `[x, y, z|null, offLimits]` probe over
+ *   whatever drop-cutter surface the caller supplies (vertical for this
+ *   strategy, the same for the 5-axis one)
+ */
+export function finishingWindow({
+  mesh, stock, regions, params, radius: r, tolerance,
 }) {
-  // clear of the steps the roughing ahead of this leaves — see heights.js
-  const clear = clearOfRoughing(given, earlier);
-  const { params } = clear;
-  const r = tool.diameter / 2;
-  const step = Math.max(0.05, (params.stepover ?? 0.25) * tool.diameter);
-  const tolerance = params.tolerance ?? 0.01;
-  const clearance = params.clearanceHeight;
-  const stockToLeave = params.stockToLeave ?? 0;
-  const pattern = params.pattern ?? 'zigzag';
-  const oneWay = pattern === 'oneway';
-  const angle = ((params.angleDeg ?? 0) * Math.PI) / 180;
-  const feedPlane = entryPlane(params, params.topZ, params.bottomZ);
-
-  const cl = new CLBuilder().simplify(mergeTolerance(tolerance));
-  cl.toolChange(tool.number);
-  applyCutting(cl, { params }, tool);
-  roughingNote(cl, clear, tool);
-
-  // grid fine enough that stepover and tolerance are both resolved, and the
-  // heightmap is padded by the tool radius so the kernel never runs off the edge
-  const cellSize = Math.max(tolerance, Math.min(step / 4, r / 4, 0.3));
-  const meshBox = boundsOf(mesh.positions);
-  const map = buildHeightmap(mesh, {
-    cellSize,
-    bounds: {
-      min: [meshBox.min[0] - r - cellSize, meshBox.min[1] - r - cellSize, meshBox.min[2]],
-      max: [meshBox.max[0] + r + cellSize, meshBox.max[1] + r + cellSize, meshBox.max[2]],
-    },
-    floor: -Infinity,
-  });
-  const kernel = buildToolKernel(tool, map.cellSize);
-
   // machining area: the stock footprint, narrowed by any picked regions
   const area = applyRegionsToArea(stockOutline(stock, 0), regions, { radius: r, tolerance });
-  if (area.length === 0) {
-    cl.warn('parallel finishing has nothing left to machine after the region filter');
-    return cl.finish();
-  }
+  if (area.length === 0) return null;
   /**
    * How far past the part the pass is allowed to run.
    *
@@ -128,21 +108,10 @@ export function generateParallel3d({
    */
   const insideArea = limited ? offsetLoops(area, Math.max(tolerance, 1e-3), tolerance) : area;
 
-  /**
-   * How high the tool would have to be to pass over (x, y) without touching the
-   * part — the drop-cutter surface with no Z window and no region filter on it.
-   *
-   * `dropCutter` already answers for the whole cutter rather than for a point,
-   * so this *is* the non-gouging height and the link test below needs no fudge
-   * factor on top of it. Nothing there at all reads as −∞, which is what makes
-   * the empty ground either side of a part free to cross.
-   */
-  const surfaceAt = (x, y) => {
-    const z = dropCutter(map, kernel, x, y);
-    return Number.isFinite(z) ? z + stockToLeave : -Infinity;
-  };
 
   /**
+   * The probe over a drop-cutter surface: `surfaceAt(x, y)` is the lowest the
+   * tip may go there, −Infinity where there is nothing, and what comes back is
    * [x, y, z, offLimits] with `z === null` where there is nothing this pass may
    * cut.
    *
@@ -153,7 +122,7 @@ export function generateParallel3d({
    * would cut a groove across the face they excluded — with the link test
    * happily reporting that nothing was in the way.
    */
-  const probe = (x, y) => {
+  const probeWith = (surfaceAt) => (x, y) => {
     if (limited && !pointInLoops(insideArea, x, y)) return [x, y, null, true];
     // Outside the part's own boundary there is nothing to finish. Reported as
     // *empty*, not off-limits, and the difference matters: off-limits means
@@ -175,6 +144,73 @@ export function generateParallel3d({
     }
     return [x, y, surface, false];
   };
+
+  return { area, boundary, limit, limited, box, insideArea, probeWith };
+}
+
+export function generateParallel3d({
+  mesh, tool, params: given, stock, regions, earlier = null,
+}) {
+  // clear of the steps the roughing ahead of this leaves — see heights.js
+  const clear = clearOfRoughing(given, earlier);
+  const { params } = clear;
+  const r = tool.diameter / 2;
+  const step = Math.max(0.05, (params.stepover ?? 0.25) * tool.diameter);
+  const tolerance = params.tolerance ?? 0.01;
+  const clearance = params.clearanceHeight;
+  const stockToLeave = params.stockToLeave ?? 0;
+  const pattern = params.pattern ?? 'zigzag';
+  const oneWay = pattern === 'oneway';
+  const angle = ((params.angleDeg ?? 0) * Math.PI) / 180;
+  const feedPlane = entryPlane(params, params.topZ, params.bottomZ);
+
+  const cl = new CLBuilder().simplify(mergeTolerance(tolerance));
+  cl.toolChange(tool.number);
+  applyCutting(cl, { params }, tool);
+  roughingNote(cl, clear, tool);
+
+  // grid fine enough that stepover and tolerance are both resolved, and the
+  // heightmap is padded by the tool radius so the kernel never runs off the edge
+  const cellSize = Math.max(tolerance, Math.min(step / 4, r / 4, 0.3));
+  const meshBox = boundsOf(mesh.positions);
+  const map = buildHeightmap(mesh, {
+    cellSize,
+    bounds: {
+      min: [meshBox.min[0] - r - cellSize, meshBox.min[1] - r - cellSize, meshBox.min[2]],
+      max: [meshBox.max[0] + r + cellSize, meshBox.max[1] + r + cellSize, meshBox.max[2]],
+    },
+    floor: -Infinity,
+  });
+  const kernel = buildToolKernel(tool, map.cellSize);
+
+  // machining area: the stock footprint, narrowed by any picked regions, and the
+  // part's own boundary — shared with the 5-axis finish, see finishingWindow
+  const scope = finishingWindow({
+    mesh, stock, regions, params, radius: r, tolerance,
+  });
+  if (!scope) {
+    cl.warn('parallel finishing has nothing left to machine after the region filter');
+    return cl.finish();
+  }
+  const {
+    area, boundary, limit, limited, box, insideArea,
+  } = scope;
+
+  /**
+   * How high the tool would have to be to pass over (x, y) without touching the
+   * part — the drop-cutter surface with no Z window and no region filter on it.
+   *
+   * `dropCutter` already answers for the whole cutter rather than for a point,
+   * so this *is* the non-gouging height and the link test below needs no fudge
+   * factor on top of it. Nothing there at all reads as −∞, which is what makes
+   * the empty ground either side of a part free to cross.
+   */
+  const surfaceAt = (x, y) => {
+    const z = dropCutter(map, kernel, x, y);
+    return Number.isFinite(z) ? z + stockToLeave : -Infinity;
+  };
+
+  const probe = scope.probeWith(surfaceAt);
 
   const sample = (x, y) => {
     const p = probe(x, y);

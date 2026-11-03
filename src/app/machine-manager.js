@@ -12,8 +12,9 @@
 import { el, dialogCloseButton } from './layout.js';
 import {
   MACHINE_PRESETS, createMachine, describeMachine, machinesFor, activeMachine,
-  ROTARY_KINDS, rotaryKindOf, rotaryPreset,
+  ROTARY_KINDS, rotaryKindOf, rotaryPreset, TCP_MODES,
 } from '../doc/machines.js';
+import { fiveAxisEnabled } from './settings.js';
 import { POSTS, postsFor } from '../post/index.js';
 import { numberInput, parseNumber, formatNumber } from './number-input.js';
 import { propRow } from './props/fields.js';
@@ -84,6 +85,26 @@ const FIELDS = [
       + 'about one axis, 3+2 adds a turntable and reaches any face. Then set a '
       + 'setup to "Indexed" and rotate it to the face. LinuxCNC drives this with '
       + 'a G68.2 tilted work plane.',
+  },
+  {
+    // The 5-axis beta's two machine facts. Only where the beta is on and there is
+    // a trunnion to be driven: a tick on a machine that cannot use it is a setting
+    // that reads as being ignored.
+    key: 'tcp', kind: 'mill', type: 'select', label: 'Tool centre point (5-axis)',
+    options: Object.keys(TCP_MODES), labels: TCP_MODES,
+    when: (m) => fiveAxisEnabled() && (m.rotary?.length ?? 0) >= 2,
+    hint: 'Who does the sums when the table tilts. Most controls that can do simultaneous '
+      + '5-axis can keep the tool tip where the program says (G43.4, or LinuxCNC\'s trt '
+      + 'kinematics) and then the program is in part coordinates. If yours cannot, the '
+      + 'post does it — and then it needs the rotary centre exactly (Setup → 5-axis).',
+  },
+  {
+    key: 'rotarySigns', kind: 'mill', type: 'rotarySigns', label: 'Rotary directions (5-axis)',
+    when: (m) => fiveAxisEnabled() && (m.rotary?.length ?? 0) >= 2,
+    hint: 'Jog A a few degrees on the machine and look. The program assumes the right-hand '
+      + 'turn about each axis is positive; tick the ones that go the other way here, and '
+      + 'the post negates them. Getting this wrong does not alarm — it cuts the mirror '
+      + 'image of the part.',
   },
   {
     key: 'toolChanger', label: 'Tool change', type: 'select',
@@ -274,6 +295,23 @@ export function openMachineManager(doc, { onDone } = {}) {
         rebuild();
       });
       return propRow(label, input);
+    }
+    if (field.type === 'rotarySigns') {
+      const boxes = (machine.rotary ?? []).map((axis) => {
+        const box = el('input', { type: 'checkbox' });
+        box.checked = axis.sign === -1;
+        box.addEventListener('change', () => {
+          const rotary = machine.rotary.map((a) => {
+            if (a.letter !== axis.letter) return a;
+            const { sign, ...rest } = a;
+            return box.checked ? { ...rest, sign: -1 } : rest;
+          });
+          doc.updateItem(machine, { rotary }, 'machine rotary direction');
+          rebuild();
+        });
+        return el('label', { class: 'machine-sign' }, [box, ` ${axis.letter} counts the other way`]);
+      });
+      return propRow(label, el('div', { class: 'machine-signs' }, boxes));
     }
     if (field.type === 'select') {
       const options = field.key === 'post' ? postsFor(machine.kind) : field.options;

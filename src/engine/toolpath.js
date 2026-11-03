@@ -14,6 +14,7 @@ import { generateClear } from './strategies/clear2d.js';
 import { generateAdaptive } from './strategies/adaptive.js';
 import { generateDrill } from './strategies/drill.js';
 import { generateParallel3d } from './strategies/parallel3d.js';
+import { generateFinish5 } from './strategies/finish5.js';
 import { generateWaterline } from './strategies/waterline.js';
 import { generatePocket } from './strategies/pocket.js';
 import { generateChamfer } from './strategies/chamfer.js';
@@ -46,6 +47,8 @@ const strategies = {
   chamfer: generateChamfer,
   engrave: generateEngrave,
   parallel3d: generateParallel3d,
+  // the 5-axis beta; hidden unless the Experimental switch is on (engine/five/ops.js)
+  finish5: generateFinish5,
   waterline: generateWaterline,
   turnFace: generateTurnFace,
   turnRough: generateTurnRough,
@@ -116,6 +119,7 @@ export const OP_LABELS = {
   chamfer: 'Chamfer',
   engrave: 'Engrave',
   parallel3d: 'Parallel finish',
+  finish5: '5-axis finish (beta)',
   waterline: 'Waterline finish',
   turnFace: 'Face the end',
   turnRough: 'Rough turn',
@@ -181,10 +185,10 @@ function standingAboveTopZ(args) {
  *   turnBore   starts from the hole the drill ahead of it made
  *   turnFinish comes in from clear air unless the end of the bar has been faced
  *              back to where it starts (see turning.js barEndAfter)
- *   waterline, parallel3d   enter and link clear of the steps a roughing pass
- *              ahead of them leaves (see heights.js clearOfRoughing)
+ *   waterline, parallel3d, finish5   enter and link clear of the steps a roughing
+ *              pass ahead of them leaves (see heights.js clearOfRoughing)
  */
-export const READS_EARLIER = new Set(['turnBore', 'turnFinish', 'waterline', 'parallel3d']);
+export const READS_EARLIER = new Set(['turnBore', 'turnFinish', 'waterline', 'parallel3d', 'finish5']);
 
 /**
  * The strategies whose Top Z is simply "where the cut starts" — as opposed to a
@@ -201,7 +205,7 @@ const CUT_FROM_TOP = new Set(['face', 'contour2d', 'pocket', 'clear2d', 'adaptiv
  */
 const NEEDS_A_PART = new Set([
   'contour2d', 'pocket', 'clear2d', 'adaptive', 'spot', 'tap', 'threadMill', 'bore',
-  'chamfer', 'parallel3d', 'waterline',
+  'chamfer', 'parallel3d', 'waterline', 'finish5',
 ]);
 const NEEDS_A_PART_OR_DRAWING = new Set(['slot', 'engrave']);
 

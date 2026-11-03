@@ -21,7 +21,7 @@ const SECTIONS = [
   'toolbar', 'file', 'tree', 'inspector', 'operations', 'setup', 'tools',
   'dialogs', 'viewport', 'program', 'simulation', 'keys', 'lathe', 'drop',
   'drawing', 'catalogs', 'photo', 'projects', 'options', 'machines', 'setup-more',
-  'command', 'picking', 'gizmos', 'checklist', 'splitters', 'menus', 'parts', 'empty',
+  'command', 'picking', 'gizmos', 'checklist', 'splitters', 'menus', 'parts', 'empty', 'five',
 ];
 
 export async function sweep({ only = null, log = console.log, keepJob = false } = {}) {
@@ -1398,6 +1398,109 @@ export async function sweep({ only = null, log = console.log, keepJob = false } 
         check('inline hints are written under their fields', $$('#props .prop-hint').length > 2);
         settings.setSetting('hintStyle', 'bubble');
         c.applySettings('hintStyle');
+      });
+    }
+
+    // ======================================================================
+    // The 5-axis beta, end to end: switched on in Options, offered in the picker,
+    // set up in the panel, generated, posted and simulated — each by the control a
+    // person would use. The node suite covers the geometry; this is the part above it.
+    if (want('five')) {
+      await run('five', async () => {
+        const settings = await import('../app/settings.js');
+        await freshJob();
+        settings.setSetting('fiveAxisBeta', false);
+        c.applySettings('fiveAxisBeta');
+        const ops = await import('../engine/toolpath.js');
+
+        // off: the strategy is not offered, and an operation made anyway will not run
+        actions.addSetup?.();
+        const setup = doc.setups()[0];
+        const before = $$('#props h2').map((h) => h.textContent);
+        doc.select('setup', setup.id);
+        await settle();
+        check('with the beta off the setup panel has no 5-axis section',
+          !$$('#props h2').some((h) => /5-axis/.test(h.textContent)));
+        actions.addOperationTo(setup, 'finish5');
+        const op = setup.operations[setup.operations.length - 1];
+        const { opBlockedReason } = await import('../app/op-status.js');
+        check('with the beta off a 5-axis operation is refused, and says where to switch it on',
+          /Experimental/.test(opBlockedReason(doc, op) ?? ''));
+
+        // on, through the Options dialog like anybody
+        await press(toolbarButton('Options'));
+        let dialog = openDialog();
+        const row = $$('.options-row', dialog).find((r) => r.querySelector('label')?.textContent === '5-axis milling (beta)');
+        check('the Experimental group has the switch', !!row);
+        const box = $('input', row);
+        box.checked = true;
+        box.dispatchEvent(new Event('change', { bubbles: true }));
+        await settle();
+        check('the switch takes', settings.fiveAxisEnabled() === true);
+        await closeDialogs();
+
+        doc.select('setup', setup.id);
+        await settle();
+        check('with the beta on the setup panel has its 5-axis section',
+          $$('#props h2').some((h) => /5-axis/.test(h.textContent)), before.join(','));
+        check('and the operation is no longer refused for that', !/Experimental/.test(opBlockedReason(doc, op) ?? ''));
+        check('the strategy is in the engine list', ops.MILLING_OPS.includes('finish5'));
+
+        // a trunnion machine, the setup switched on by its own checkbox
+        doc.setMachineRecord(doc.project.machines.find((m) => /5-axis/.test(m.name)).id);
+        await settle();
+        const tick = $$('#props .prop-row').find((r) => /Simultaneous 5-axis/.test(r.textContent))?.querySelector('input');
+        check('the setup has its 5-axis checkbox', !!tick);
+        tick.click();
+        await settle();
+        check('ticking it switches the setup on', doc.setups()[0].five?.enabled === true);
+        const items = $$('#props .five-check');
+        check('and the checklist appears, with a machine line that passes',
+          items.length >= 4 && items[0].classList.contains('ok'), items.map((i) => i.className).join('|'));
+        const fix = $$('#props .five-fix').find((b) => /checked/.test(b.textContent));
+        check('the direction check has its fix button', !!fix);
+        fix.click();
+        await settle();
+        check('pressing it records that the directions were checked', doc.setups()[0].five.signChecked === true);
+        const pivot = $$('#props .five-pivot input');
+        check('the rotary centre has three fields', pivot.length === 3);
+        pivot[2].value = '-90';
+        pivot[2].dispatchEvent(new Event('change', { bubbles: true }));
+        await settle();
+        check('and typing one sets the pivot', doc.setups()[0].five.pivot?.[2] === -90);
+
+        // generate, post, simulate
+        const ball = doc.project.tools.find((t) => /ball/.test(t.name));
+        doc.updateItem(op, { toolId: ball.id }, 'tool');
+        await actions.generate();
+        await settle();
+        await new Promise((r) => setTimeout(r, 800));
+        const cl = doc.toolpaths.get(op.id);
+        check('it generates a program that leans the tool', cl?.count > 100 && cl.fiveAxis === true, `${cl?.count} moves`);
+        await actions.refreshGcodePreview?.(false);
+        await settle();
+        await new Promise((r) => setTimeout(r, 600));
+        const text = c.lastProgram?.text ?? '';
+        check('it posts rotary words', /\bA-?\d/.test(text) && /\bC-?\d/.test(text));
+        check('and the file reads back as the toolpath it came from',
+          c.lastProgram?.postCheck ? c.lastProgram.postCheck.over <= 0 && c.lastProgram.postCheck.axisOver <= 0 : true,
+          JSON.stringify(c.lastProgram?.postCheck && { over: c.lastProgram.postCheck.over, axis: c.lastProgram.postCheck.axisOver }));
+        await actions.simulate();
+        await settle();
+        await new Promise((r) => setTimeout(r, 800));
+        const sim = c.simulation?.sim;
+        check('the simulation records which way the spindle points', !!sim?.axis && sim.axis.length === sim.stepCount * 3);
+        check('and what the cutter was asked', !!sim?.five && sim.five.cutSteps > 0);
+        check('the timeline says so', ($('.sim-five')?.textContent ?? '') !== '');
+
+        // off again: the operation stays in the project, and stays refused
+        settings.setSetting('fiveAxisBeta', false);
+        c.applySettings('fiveAxisBeta');
+        await settle();
+        check('switching it off leaves the operation in the project',
+          doc.setups()[0].operations.some((o) => o.type === 'finish5'));
+        check('and refuses to run it', /Experimental/.test(opBlockedReason(doc, op) ?? ''));
+        settings.setSetting('fiveAxisBeta', false);
       });
     }
 

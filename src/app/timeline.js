@@ -163,6 +163,9 @@ export function buildTimeline(onSeek, onClose) {
   const loadLabel = el('button', { class: 'sim-load' }, []);
   // and whether what it leaves behind is the part — see drawVerify
   const verifyLabel = el('button', { class: 'sim-verify' }, []);
+  // the collisions the simulation found, and what a 5-axis program asked of the
+  // cutter — see drawFive
+  const fiveLabel = el('button', { class: 'sim-load sim-five' }, []);
 
   const drawBands = (sim, ops) => {
     bandStrip.replaceChildren();
@@ -316,6 +319,61 @@ export function buildTimeline(onSeek, onClose) {
     };
   };
 
+  /**
+   * Where the simulation found the tool where it should not be, and how the
+   * cutter was worked.
+   *
+   * A collision is a moment, not a number: the holder is in the wall at one place
+   * in the program and the question is where. So the label counts them and each
+   * click goes to the next. With none, and a 5-axis program, it says how far out
+   * on the cutter the work was done, the figure leaning the tool is for.
+   */
+  let findingAt = -1;
+  const drawFive = (sim) => {
+    const found = sim?.findings ?? [];
+    fiveLabel.onclick = null;
+    findingAt = -1;
+    if (found.length > 0) {
+      const kinds = new Set(found.map((f) => f.kind));
+      const only = [...kinds][0];
+      const what = kinds.size === 1
+        ? ({ fixture: 'in a clamp', rapid: 'rapid in metal' }[only] ?? `${only} in metal`)
+        : 'collisions';
+      fiveLabel.className = 'sim-load sim-five bad';
+      fiveLabel.replaceChildren(`\u26a0 ${found.length}${found.length >= 200 ? '+' : ''} ${what}`);
+      fiveLabel.title = `${found.length} place${found.length === 1 ? '' : 's'} where the tool is `
+        + 'where it should not be (holder, shank, clamp or a rapid in metal). Click to go to the '
+        + 'first, and again for the next.';
+      fiveLabel.onclick = () => {
+        findingAt = (findingAt + 1) % found.length;
+        const step = found[findingAt].step;
+        if (playing) setPlaying(false);
+        seekSeconds(sim.times[Math.min(step, sim.times.length - 1)] ?? 0);
+      };
+      return;
+    }
+    const five = sim?.five;
+    if (!five || !(five.cutSteps > 0)) {
+      fiveLabel.replaceChildren();
+      fiveLabel.className = 'sim-load sim-five';
+      fiveLabel.title = '';
+      return;
+    }
+    const slow = five.deadShare > 0.25 || five.meanRatio < 0.15;
+    fiveLabel.className = `sim-load sim-five${slow ? ' warn' : ''}`;
+    fiveLabel.replaceChildren(`\u00d8 ${Math.round(five.meanRatio * 100)}% \u00b7 ${(five.peakMrr / 1000).toFixed(1)} cm\u00b3/min`);
+    fiveLabel.title = `The cutter works at ${(five.meanRatio * 100).toFixed(0)}% of its own radius on `
+      + 'average (weighted by the metal it takes), and removes at most '
+      + `${(five.peakMrr / 1000).toFixed(2)} cm\u00b3 a minute. ${(five.deadShare * 100).toFixed(0)}% of the `
+      + 'metal is taken within a tenth of the radius of the axis, where the edge is going almost '
+      + 'nowhere. Click to go to the heaviest cut.';
+    fiveLabel.onclick = () => {
+      if (!(five.peakMrrAt >= 0)) return;
+      if (playing) setPlaying(false);
+      seekSeconds(sim.times[Math.min(five.peakMrrAt + 1, sim.times.length - 1)] ?? 0);
+    };
+  };
+
   const root = el('div', { id: 'sim', class: 'collapsed' }, [
     el('span', { class: 'sim-label' }, ['Simulation']),
     // The two single steps are mirror images of each other. Step back used to
@@ -343,6 +401,7 @@ export function buildTimeline(onSeek, onClose) {
     currentLabel,
     loadLabel,
     verifyLabel,
+    fiveLabel,
     timeLabel,
     el('button', {
       class: 'sim-btn sim-close', title: 'Close simulation', 'aria-label': 'Close simulation',
@@ -360,6 +419,7 @@ export function buildTimeline(onSeek, onClose) {
       drawBands(sim, ops);
       drawLoad(sim, ops);
       drawVerify(sim, ops);
+      drawFive(sim);
       root.classList.remove('collapsed');
       seekSeconds(0);
     },

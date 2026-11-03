@@ -14,6 +14,8 @@
 import { el, dialogCloseButton } from './layout.js';
 import { opsForMode } from '../engine/toolpath.js';
 import { OP_GROUPS, strategyCard, opIcon } from './op-catalog.js';
+import { isFiveAxisOp } from '../engine/five/ops.js';
+import { fiveAxisEnabled } from './settings.js';
 
 /**
  * @param options.current the strategy already chosen, marked as such
@@ -29,7 +31,12 @@ export function openStrategyPicker({
   // A turning operation in a milling setup is meaningless and the reverse is
   // too, so the picker offers one set or the other rather than a list with four
   // entries that cannot work here.
-  const cards = opsForMode(mode).map(strategyCard);
+  // The 5-axis beta's strategies are offered only with the Experimental switch
+  // on — except to the operation that already is one, so changing its strategy
+  // does not make its own card vanish from under it.
+  const cards = opsForMode(mode)
+    .filter((type) => !isFiveAxisOp(type) || fiveAxisEnabled() || type === current)
+    .map(strategyCard);
   // With nothing chosen yet, the first card *as laid out* — the top-left one,
   // under "Prepare the stock". It was the first in the engine's list, which
   // since the command operation arrived is "Command (G-code)" on both machines:
