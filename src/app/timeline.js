@@ -329,7 +329,25 @@ export function buildTimeline(onSeek, onClose) {
    * on the cutter the work was done, the figure leaning the tool is for.
    */
   let findingAt = -1;
+  // red marks on the track, one for every place the tool is where it should not be: the
+  // scrub bar says *when*, which a count in a label does not
+  const ticks = el('div', { class: 'sim-ticks', 'aria-hidden': 'true' });
+  const drawTicks = (sim) => {
+    ticks.replaceChildren();
+    const found = sim?.findings ?? [];
+    if (!found.length || !(sim.totalSeconds > 0)) return;
+    const seen = new Set();
+    for (const f of found) {
+      const at = sim.times[Math.min(f.step, sim.times.length - 1)] ?? 0;
+      // half a percent of the track is as close as two marks can be told apart
+      const left = Math.round((at / sim.totalSeconds) * 200) / 2;
+      if (seen.has(left)) continue;
+      seen.add(left);
+      ticks.append(el('span', { class: 'sim-tick', style: `left:${left}%` }));
+    }
+  };
   const drawFive = (sim) => {
+    drawTicks(sim);
     const found = sim?.findings ?? [];
     fiveLabel.onclick = null;
     findingAt = -1;
@@ -397,7 +415,7 @@ export function buildTimeline(onSeek, onClose) {
       }, [icon('skip-forward')]),
     ]),
     speedSelect,
-    el('div', { class: 'sim-track' }, [slider, bandStrip]),
+    el('div', { class: 'sim-track' }, [slider, ticks, bandStrip]),
     currentLabel,
     loadLabel,
     verifyLabel,
@@ -431,6 +449,11 @@ export function buildTimeline(onSeek, onClose) {
     /** What the keys do — the same as the buttons, see shortcuts.js. */
     togglePlay() { setPlaying(!playing); },
     step(delta) { jump(delta); },
+    /** Put the playhead at a step — what the collision band's Show button does. */
+    seekToStep(step, sim) {
+      if (playing) setPlaying(false);
+      seekSeconds(sim?.times?.[Math.min(step, sim.times.length - 1)] ?? 0);
+    },
   };
 }
 

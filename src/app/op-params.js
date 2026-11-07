@@ -652,13 +652,32 @@ export const OP_PARAM_GROUPS = [
           + 'program — the setup assistant checks this against the machine.',
       },
       {
+        key: 'axisTol', label: 'Lean may stray from the normal by (°)', min: 0, max: 45, step: 1,
+        ops: ['finish5'],
+        hint: 'A ball nose cuts the same surface with the same ball when it is a few degrees '
+          + 'off the normal; all that moves is the point on it that does the cutting. So the '
+          + 'direction the cutter leans toward is allowed to stray this far from the surface, '
+          + 'and the turntable turns as little as that freedom allows — most of all close to '
+          + 'vertical, where a degree of lean is a half turn of the table. 0 follows the '
+          + 'normal exactly and spins the table wherever the surface rolls.',
+      },
+      {
+        key: 'flatBelow', label: 'Follow the surface above (°)', min: 0, max: 45, step: 1,
+        ops: ['finish5'],
+        hint: 'On a gentle slope the direction the surface faces turns fast while the slope '
+          + 'barely changes — a dome\'s crown is a degree of lean that faces every way in turn, '
+          + 'and chasing it is half a turn of the turntable for nothing the cutter can feel. '
+          + 'Below this slope the cutter takes its lean only from the lead; it is faded in '
+          + 'to the whole surface normal by twice the slope. 0 follows every slope.',
+      },
+      {
         key: 'axisRate', label: 'Turn no faster than (°/mm)', min: 0.5, max: 90, step: 0.5,
         ops: ['finish5'],
-        hint: 'How quickly the lean may change along the path. The table has to '
-          + 'swing at the feed rate: a smooth lean is a path the machine can '
-          + 'follow, a jumpy one is a path it slows to a crawl for. The direction '
-          + 'the cutter leans toward is held to twice this, because close to '
-          + 'vertical a small change of lean is a half turn of the turntable.',
+        hint: 'How quickly the lean may change along the path. A surface with a crease '
+          + 'asks for a jump; the cutter is allowed this many degrees per millimetre to get '
+          + 'there, and a path that asks for more is followed late rather than all at once. '
+          + 'The control slows the feed where the table cannot keep up, so this is a limit '
+          + 'on how far the lean may lag the surface, not on the machine.',
       },
     ],
   },

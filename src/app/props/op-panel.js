@@ -5,6 +5,7 @@
 // what is cutting it; what did it do last time; where on the part does it
 // apply; and only then the numbers.
 
+import { opCollisionRisk } from '../op-status.js';
 import { el } from '../layout.js';
 import { strategyCard, opIcon, describeIntent } from '../op-catalog.js';
 import { openStrategyPicker } from '../strategy-picker.js';
@@ -74,6 +75,39 @@ function intentRow(doc, op) {
  * which is what they always were: two more things you might be looking at, not
  * two things you are always looking at.
  */
+/**
+ * The cut is deeper than the tool reaches: the holder, or a shank wider than the
+ * cutter, would be down in the work. Said at the top of the operation, above every
+ * tab, in red and in words — it is the one setting mistake that ends in the
+ * spindle nose in the part, and it used to be a grey line on the Result tab that
+ * nobody had open when they set the depth.
+ */
+function collisionBanner(doc, op, app) {
+  const risk = opCollisionRisk(doc, op);
+  if (!risk) return null;
+  const limit = el('button', {
+    type: 'button',
+    class: 'collision-fix',
+    title: `Set Bottom Z to ${risk.bottomZ} — as deep as this tool can go`,
+    onclick: () => {
+      doc.updateItem(op.params, { bottomZ: risk.bottomZ }, 'limit depth to the tool');
+      app?.ui?.setStatus?.(`Bottom Z set to ${risk.bottomZ} — the deepest ${risk.kind} clearance allows`);
+    },
+  }, [`Limit the depth to Z ${risk.bottomZ}`]);
+  return el('div', { class: 'collision-banner', role: 'alert' }, [
+    el('div', { class: 'collision-title' }, [
+      el('span', { class: 'collision-icon', 'aria-hidden': 'true' }, ['\u26a0']),
+      `THE ${risk.kind.toUpperCase()} WILL HIT THE PART`,
+    ]),
+    el('div', { class: 'collision-body' }, [
+      `This cut goes ${risk.depth.toFixed(1)}mm deep. The cutter reaches ${risk.maxDepth.toFixed(1)}mm `
+      + `before the ${risk.kind} — wider than the slot it cuts — comes down on the wall. `
+      + 'Take less depth, or fit a longer cutter.',
+    ]),
+    el('div', { class: 'collision-actions' }, [limit]),
+  ]);
+}
+
 export function opSections(doc, op, app) {
   const rows = [strategyRow(doc, op, app)];
   const intent = intentRow(doc, op);
@@ -86,6 +120,8 @@ export function opSections(doc, op, app) {
     return rows;
   }
   rows.push(toolSelectRow(doc, op, app));
+  const danger = collisionBanner(doc, op, app);
+  if (danger) rows.push(danger);
 
   // Regions are faces picked off the model, which is a milling idea: a turned
   // part is a profile — a radius for every Z — and there are no faces on it to

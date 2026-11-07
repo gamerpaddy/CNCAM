@@ -168,8 +168,10 @@ the machine can reach the face.
 **Simultaneous 5-axis is a beta**, off until you switch it on under
 *Options → Experimental*. One strategy so far — **5-axis finish**, a raster over a
 surface with the cutter leaning to it (a lead and a tilt from the surface normal,
-a limit on how far from vertical, a limit on how fast the lean may change, and
-backed off toward upright wherever the holder would be in the part) — on a
+a limit on how far from vertical, a limit on how fast the lean may change, a
+tolerance on how far the lean may stray from the normal so the turntable turns as
+little as the surface allows, lifting out before the turntable runs into its stop,
+and backed off toward upright wherever the holder would be in the part) — on a
 table-table trunnion (A/C or B/C). The post writes the tool tip and the two
 rotary words under tool-centre-point (`G43.4`, or LinuxCNC's trt kinematics), or
 writes machine axes itself with an inverse-time feed for a control that has no

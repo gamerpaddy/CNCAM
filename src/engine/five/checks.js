@@ -14,7 +14,7 @@
 
 import { MOVE_STRIDE, OP, FEED, isTilted } from '../cl.js';
 import {
-  chooseAngles, tipToMachine, recentre, POLE_DEG,
+  chooseAngles, tipToMachine, recentre, POLE_DEG, unwindsBefore, liftedAfter,
 } from './kinematics.js';
 import { angleBetween } from './tilt-sweep.js';
 
@@ -43,6 +43,8 @@ export function fiveChecks(cl, five) {
   let angles = Object.fromEntries(letters.map((l) => [l, 0]));
   let prev = null;
   let prevAxis = null;
+  let prevPoint = null;
+  let lifted = false;
   let unreachable = 0;
   let firstUnreachable = -1;
   let why = null;
@@ -65,7 +67,11 @@ export function fiveChecks(cl, five) {
     const axis = tilted ? [d[o + 4], d[o + 5], d[o + 6]] : [0, 0, 1];
     const rapid = d[o] === OP.RAPID || d[o + 7] === FEED.RAPID;
     // the post unwinds the table when it swings at rapid — see post/five.js
-    if (rapid && prevAxis && angleBetween(prevAxis, axis) > 1e-6) angles = recentre(angles, machine);
+    if (prevPoint && unwindsBefore({ lifted, rapid, swings: prevAxis && angleBetween(prevAxis, axis) > 1e-6 })) {
+      angles = recentre(angles, machine);
+    }
+    lifted = liftedAfter({ lifted, rapid, rises: Boolean(prevPoint) && point[2] > prevPoint[2] + 1e-9 });
+    prevPoint = point;
     prevAxis = axis;
     const choice = chooseAngles(axis, machine, angles);
     if (!choice.reachable) {

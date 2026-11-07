@@ -9,7 +9,9 @@
 import { el } from './layout.js';
 import { plural } from '../engine/text.js';
 import { openContextMenu } from './context-menu.js';
-import { opStatus, opBlockedReason, opPreflight } from './op-status.js';
+import {
+  opStatus, opBlockedReason, opPreflight, opCollisionRisk,
+} from './op-status.js';
 import { OP_LABELS } from '../engine/toolpath.js';
 import { toolIcon, describeTool } from './tool-shape.js';
 import { isPhoto } from './tool-photo.js';
@@ -689,6 +691,14 @@ function statusBadges(doc, op) {
     }
     // never generated: say whether it *would* work, so a problem is found
     // while the settings are on screen rather than after a wait
+    // a cut the tool is too short for is not a warning: the badge says so in red
+    const risk = opCollisionRisk(doc, op);
+    if (risk) {
+      return [el('span', {
+        class: 'tree-badge danger',
+        title: `The ${risk.kind} will hit the part: ${risk.text}`,
+      }, ['\u26a0'])];
+    }
     const problems = opPreflight(doc, op);
     return problems.length
       ? [el('span', { class: 'tree-badge warn', title: problems.join('\n') }, ['!'])]

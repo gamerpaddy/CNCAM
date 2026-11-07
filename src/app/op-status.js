@@ -307,6 +307,37 @@ export function opStatus(doc, op) {
  * from the settings alone, so they can be shown while the settings are being
  * edited — which is when they can still be acted on.
  */
+/**
+ * Whether this cut is deeper than the tool can go before its holder (or a shank
+ * wider than the cutter) is down in the slot — a crash, not a setting.
+ *
+ * It was one line among the preflight notes, in the same small type as "stepdown
+ * is zero", and a cut that drives the spindle nose into the part read as a
+ * suggestion. It is a different kind of problem: nothing about it is a matter of
+ * degree, and the way to fix it is to take less depth or fit a longer tool, so it
+ * is answered with those two numbers and drawn as the danger it is.
+ *
+ * @returns null, or { kind, depth, maxDepth, bottomZ, text } — `bottomZ` is the
+ *   deepest Bottom Z the tool can reach
+ */
+export function opCollisionRisk(doc, op) {
+  const tool = doc.project.tools.find((t) => t.id === op.toolId);
+  const p = op.params ?? {};
+  if (!tool || !REACHES_DOWN.has(op.type) || isLatheTool(tool.type)) return null;
+  if (!(p.topZ > p.bottomZ)) return null;
+  const depth = p.topZ - p.bottomZ;
+  const { ok, maxDepth, kind } = reachCheck(tool, depth);
+  if (ok) return null;
+  return {
+    kind,
+    depth,
+    maxDepth,
+    bottomZ: Math.round((p.topZ - maxDepth) * 1000) / 1000,
+    text: `This cut is ${depth.toFixed(1)}mm deep and the ${kind} is wider than the `
+      + `cutter from ${maxDepth.toFixed(1)}mm up — it would rub the wall.`,
+  };
+}
+
 export function opPreflight(doc, op) {
   const notes = [];
   const p = op.params ?? {};
@@ -375,14 +406,8 @@ export function opPreflight(doc, op) {
   // the flutes has to stay above the work, because the slot is only as wide as
   // the cutter. A V bit on a 4mm collet shank runs out after 8mm however much
   // flute it has. See engine/tool-geometry.js.
-  if (tool && REACHES_DOWN.has(op.type) && p.topZ > p.bottomZ) {
-    const depth = p.topZ - p.bottomZ;
-    const { ok, maxDepth, kind } = reachCheck(tool, depth);
-    if (!ok) {
-      notes.push(`This cut is ${depth.toFixed(1)}mm deep and the ${kind} is wider than the `
-        + `cutter from ${maxDepth.toFixed(1)}mm up — it would rub the wall.`);
-    }
-  }
+  const risk = opCollisionRisk(doc, op);
+  if (risk) notes.push(risk.text);
   // A project from before the field stopped at 1×D, or a hand edit.
   if (STEPPED.has(op.type) && p.stepover > 1 + 1e-9
     && !(op.type === 'slot' && !(p.slotWidth > 0))) {

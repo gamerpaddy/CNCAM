@@ -1008,10 +1008,31 @@ rotary centre (`setup.five.pivot`) — tool length never enters. The closed-form
 solve is `indexing.js solveAxisVector`; `chooseAngles` picks between its two
 branches ((A,C) and (−A,C+180)), unwinds to stay continuous and inside the
 limits, and holds C at the pole. `recentre` brings the axes back within half a
-turn of zero, which the post does whenever it *swings at rapid* (between passes,
-at clearance) so a long program does not wind a turntable up to its stop. Which
+turn of zero, which the post does at a moment the tool is clear of the work: a rapid
+that swings the spindle, or the first move after the tool has been lifted out
+(`unwindsBefore` / `liftedAfter` are the one description — the post, `checks.js` and
+`finish5.js` all call them; a pass split because the turntable ran out of room
+resumes from the same point with the same axis, so there is no swing to unwind in).
+Which
 way each axis counts is `rotary[i].sign`; whether the control keeps the tip itself
 is `machine.tcp` (`kins` | `g43.4` | `none`).
+
+**Following the surface** (`strategies/finish5.js`). The lean the law asks for is the
+surface normal (robust plane fit, so a tread beside a riser is not read as a wall),
+faded to vertical below `flatBelow` of slope, then smoothed as a *vector* (that is what
+lets it cross the pole). The turntable follows the lean's *direction*, a half-turn
+quantity — (ψ+180°, −m) is the same axis, A going through zero while C stays put. A ball
+nose cuts the same surface from a few degrees off the normal, so `relaxLean` lets the
+direction stray by `axisTol` and finds the shortest string through that freedom, in the
+plane of the lean: a lean within the tolerance of vertical is *free* (any line through
+the pole is within reach of it) and carries no direction, which is what keeps a lean
+that passes the pole at two degrees from sweeping a half turn of C. What is left is
+inherent: the normal's direction turns half a turn round each hill, and the rotaries
+slow the feed there (a sine surface with 3mm of relief per 25mm is about 1.4× the
+time at 900mm/min). The strategy also *walks the angle solver itself* — same solver,
+same order, same unwinding rule — and lifts out and resumes where C would come within
+25° of its stop, so no cut ever flips branch. Its `five: { rotary }` job argument
+comes from the machine (`program.js five5For`); without one it assumes A ±120 / C ±360.
 
 **The post** (`post/five.js`) turns tip and axis into blocks. Each move is cut
 into pieces so no block swings the spindle more than 2° or a rotary axis more

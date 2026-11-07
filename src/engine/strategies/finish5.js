@@ -46,17 +46,27 @@ import {
 } from '../heights.js';
 import { finishingWindow } from './parallel3d.js';
 import { toolShells, leaningKernels } from '../five/tilt-kernel.js';
+import { chooseAngles, recentre, trunnionOf } from '../five/kinematics.js';
 import { bodyTouchTilted, angleBetween, blendAxis } from '../five/tilt-sweep.js';
 
 const RAD = Math.PI / 180;
 const DEG = 180 / Math.PI;
 const UP = Object.freeze([0, 0, 1]);
 
+
 /** How many tilted kernels are kept: one per distinct leaning, reused all over the part. */
 const KERNELS = 256;
 
+/** A table-table machine as the post will see it, for a program made without one named. */
+const STANDARD_TRUNNION = {
+  rotary: [
+    { letter: 'A', axis: [1, 0, 0], min: -120, max: 120 },
+    { letter: 'C', axis: [0, 0, 1], min: -360, max: 360 },
+  ],
+};
+
 export function generateFinish5({
-  mesh, tool, params: given, stock, regions, earlier = null,
+  mesh, tool, params: given, stock, regions, earlier = null, five = null,
 }) {
   const clear = clearOfRoughing(given, earlier);
   const { params } = clear;
@@ -72,7 +82,9 @@ export function generateFinish5({
   const side = (params.tiltAngle ?? 0) * RAD;
   const maxTilt = Math.min(85, Math.max(0, params.maxTilt ?? 35)) * RAD;
   const fixed = params.tiltMode === 'fixed';
-  const maxTurn = Math.max(0.5, params.axisRate ?? 10);
+  const maxTurn = Math.max(0.5, params.axisRate ?? 40);
+  const followFrom = Math.min(45, Math.max(0, params.flatBelow ?? 12)) * RAD;
+  const axisTol = Math.min(45, Math.max(0, params.axisTol ?? 8)) * RAD;
 
   const cl = new CLBuilder();
   cl.toolChange(tool.number);
@@ -156,32 +168,158 @@ export function generateFinish5({
   };
   const probe = scope.probeWith(surfaceAt);
 
+  /**
+   * The lowest tip at (x, y) for a cutter leaning like `lean`.
+   *
+   * The drop-cutter answers for the grid cell nearest the point, so read at a point
+   * it is a staircase: a tip moving along a slope sees its height step by a cell's
+   * worth of slope every cell, and the path that follows is a row of tiny stairs —
+   * thirty thousand points where a planar slope needs two. The height is the
+   * bilinear blend of the four cells round the point instead.
+   */
   const tipAt = (x, y, lean, fallback) => {
+    const cs = map.cellSize;
+    const fx = (x - map.min[0]) / cs;
+    const fy = (y - map.min[1]) / cs;
+    const i0 = Math.floor(fx);
+    const j0 = Math.floor(fy);
+    const u = fx - i0;
+    const v = fy - j0;
+    const at = (i, j) => dropCutter(map, lean.kernel, map.min[0] + i * cs, map.min[1] + j * cs);
+    const z00 = at(i0, j0);
+    const z10 = at(i0 + 1, j0);
+    const z01 = at(i0, j0 + 1);
+    const z11 = at(i0 + 1, j0 + 1);
+    if (Number.isFinite(z00) && Number.isFinite(z10) && Number.isFinite(z01) && Number.isFinite(z11)) {
+      return z00 * (1 - u) * (1 - v) + z10 * u * (1 - v) + z01 * (1 - u) * v + z11 * u * v + stockToLeave;
+    }
     const z = dropCutter(map, lean.kernel, x, y);
     return Number.isFinite(z) ? z + stockToLeave : fallback;
   };
 
   // --- the tilt law --------------------------------------------------------------
 
-  const reach = Math.max(1, Math.min(8, Math.round((0.25 * R) / map.cellSize)));
+  // The normal is the surface's *slope over the patch the cutter touches*, not its
+  // slope at one cell. A mesh is facets, and a heightmap is a staircase of them:
+  // read at a point the gradient jumps at every crease and every cell edge, and the
+  // axis that follows it jumps with it. A ball nose cannot feel anything narrower
+  // than a fraction of its own radius, so that is the scale the slope is measured
+  // at — a plane fitted by least squares to the heights within it.
+  const patch = Math.max(2, Math.min(12, Math.round((0.45 * R) / map.cellSize)));
+  // how far a cell may stand off the fitted plane and still count as the same surface
+  const tau = Math.max(0.1, 0.06 * R, 3 * map.cellSize);
+  const cells = [];
   /** The surface's unit normal at (x, y), or null where the map has no surface to read. */
   const normalAt = (x, y) => {
     const ci = Math.round((x - map.min[0]) / map.cellSize);
     const cj = Math.round((y - map.min[1]) / map.cellSize);
-    const at = (i, j) => {
-      if (i < 0 || j < 0 || i >= map.width || j >= map.height) return null;
-      const h = map.data[j * map.width + i];
-      return h === map.floor ? null : h;
+    cells.length = 0;
+    let total = 0;
+    for (let dj = -patch; dj <= patch; dj++) {
+      for (let di = -patch; di <= patch; di++) {
+        if (di * di + dj * dj > patch * patch) continue;
+        total++;
+        const i = ci + di;
+        const j = cj + dj;
+        if (i < 0 || j < 0 || i >= map.width || j >= map.height) continue;
+        const h = map.data[j * map.width + i];
+        if (h === map.floor) continue;
+        cells.push(di * map.cellSize, dj * map.cellSize, h);
+      }
+    }
+    // a patch that is mostly off the part says nothing about its slope
+    if (cells.length / 3 < 0.6 * total) return null;
+    // The surface the cutter is on is the plane most of the patch lies on. Several
+    // first guesses are refitted — each reweighing the cells by how close they are to
+    // the plane — and the one that ends up explaining the most of the patch wins:
+    //
+    //   * the cells nearest the point, fitted flat out — right on a slope;
+    //   * every cell — right on a face of any size;
+    //   * level with the cell under the point — right at the edge of a tread, where a
+    //     fit over its neighbourhood sees a riser and a drop as well and reports a slope
+    //     that is neither;
+    //   * level with the median height — right where the point itself is the odd one out.
+    //
+    // A plain least-squares plane has none of this: a cutter at the foot of a wall was
+    // leaned 45° over on a floor that is flat, because the wall was in the patch.
+    const inner = (Math.max(1.5, patch / 3) * map.cellSize) ** 2;
+    const heights = [];
+    for (let n = 0; n < cells.length; n += 3) heights.push(cells[n + 2]);
+    heights.sort((p, q) => p - q);
+    const median = heights[heights.length >> 1];
+    let under = median;
+    let nearest = Infinity;
+    for (let n = 0; n < cells.length; n += 3) {
+      const d2 = cells[n] * cells[n] + cells[n + 1] * cells[n + 1];
+      if (d2 < nearest) { nearest = d2; under = cells[n + 2]; }
+    }
+
+    /** Weighted least squares of z = a·x + b·y + c, weights from `weigh(dx, dy, h)`. */
+    const fit = (weigh) => {
+      let sxx = 0, sxy = 0, sx = 0, syy = 0, sy = 0, sw = 0, sxz = 0, syz = 0, sz = 0;
+      for (let n = 0; n < cells.length; n += 3) {
+        const dx = cells[n], dy = cells[n + 1], h = cells[n + 2];
+        const w = weigh(dx, dy, h);
+        if (w === 0) continue;
+        sxx += w * dx * dx; sxy += w * dx * dy; sx += w * dx; syy += w * dy * dy; sy += w * dy; sw += w;
+        sxz += w * dx * h; syz += w * dy * h; sz += w * h;
+      }
+      // the 3x3 normal equations, by Cramer's rule
+      const det = sxx * (syy * sw - sy * sy) - sxy * (sxy * sw - sy * sx) + sx * (sxy * sy - syy * sx);
+      if (Math.abs(det) < 1e-12 * Math.max(1, sw * sw * sw)) return null;
+      return [
+        (sxz * (syy * sw - sy * sy) - sxy * (syz * sw - sy * sz) + sx * (syz * sy - syy * sz)) / det,
+        (sxx * (syz * sw - sy * sz) - sxz * (sxy * sw - sy * sx) + sx * (sxy * sz - syz * sx)) / det,
+        (sxx * (syy * sz - sy * syz) - sxy * (sxy * sz - sx * syz) + sxz * (sxy * sy - syy * sx)) / det,
+      ];
     };
-    const xp = at(ci + reach, cj);
-    const xm = at(ci - reach, cj);
-    const yp = at(ci, cj + reach);
-    const ym = at(ci, cj - reach);
-    if (xp === null || xm === null || yp === null || ym === null) return null;
-    const gx = (xp - xm) / (2 * reach * map.cellSize);
-    const gy = (yp - ym) / (2 * reach * map.cellSize);
-    const n = Math.hypot(gx, gy, 1);
-    return [-gx / n, -gy / n, 1 / n];
+    const robust = (p) => (dx, dy, h) => {
+      const r = (h - (p[0] * dx + p[1] * dy + p[2])) / tau;
+      return 1 / (1 + r * r * r * r);
+    };
+    const explained = (p) => {
+      let sum = 0;
+      const w = robust(p);
+      for (let n = 0; n < cells.length; n += 3) sum += w(cells[n], cells[n + 1], cells[n + 2]);
+      return sum;
+    };
+    const guesses = [
+      fit((dx, dy) => (dx * dx + dy * dy <= inner ? 1 : 0)),
+      fit(() => 1),
+      [0, 0, under],
+      [0, 0, median],
+    ];
+    let best = null;
+    let bestScore = -1;
+    for (let plane of guesses) {
+      if (!plane) continue;
+      for (let pass = 0; pass < 4; pass++) plane = fit(robust(plane)) ?? plane;
+      const score = explained(plane);
+      if (score > bestScore) { bestScore = score; best = plane; }
+    }
+    if (!best) return null;
+    const n = Math.hypot(best[0], best[1], 1);
+    return [-best[0] / n, -best[1] / n, 1 / n];
+  };
+
+  /**
+   * A normal for every point of a run, taking the nearest known one where the surface
+   * cannot be read.
+   *
+   * The edge of the part is where the patch the slope is measured over runs off it,
+   * and answering "no normal" there put the cutter upright for the last few
+   * millimetres of every row — a jump from the lean the surface asked for to none,
+   * at the very place the cutter is swinging out over the edge. The surface does not
+   * change direction because the grid ran out; the last slope read is the best
+   * account of it.
+   */
+  const filled = (normals) => {
+    const out = normals.slice();
+    let last = null;
+    for (let i = 0; i < out.length; i++) { if (out[i]) last = out[i]; else if (last) out[i] = last; }
+    last = null;
+    for (let i = out.length - 1; i >= 0; i--) { if (out[i]) last = out[i]; else if (last) out[i] = last; }
+    return out;
   };
 
   /** Lean `axis` toward vertical by `scale` (1 = as it is, 0 = upright). */
@@ -194,12 +332,38 @@ export function generateFinish5({
   };
 
   /**
+   * The surface normal with its sideways lean faded out where the surface is gentle.
+   *
+   * What the lean does along the feed is the lead's business and is kept whole. What
+   * it does *across* the feed is the direction the surface faces, and on a gentle
+   * slope that direction turns fast while the slope barely changes: a dome's crown
+   * is a degree of lean that faces every way in turn, and following it is half a turn
+   * of the turntable for nothing the cutter can feel. So the across-feed lean is
+   * weighted by how steep the surface is, from none at `flatBelow` to all of it
+   * twice that — which costs the cutter at most a few degrees off the normal where
+   * the normal is nearly vertical anyway, and the turntable the whole swing.
+   */
+  const gentled = (normal, heading) => {
+    if (followFrom <= 0) return normal;
+    const lean = Math.hypot(normal[0], normal[1]);
+    const slope = Math.asin(Math.min(1, lean));
+    const t = Math.min(1, Math.max(0, (slope - followFrom) / followFrom));
+    const w = t * t * (3 - 2 * t);
+    if (w >= 1 || lean < 1e-9) return normal;
+    const along = normal[0] * heading[0] + normal[1] * heading[1];
+    const across = (-normal[0] * heading[1] + normal[1] * heading[0]) * w;
+    const hx = along * heading[0] - across * heading[1];
+    const hy = along * heading[1] + across * heading[0];
+    return [hx, hy, Math.sqrt(Math.max(0, 1 - hx * hx - hy * hy))];
+  };
+
+  /**
    * The axis the law asks for at a point: the surface normal (or vertical),
    * leaned back from the feed by `lead` and to the side by `side`, and never
    * further than `maxTilt` from vertical.
    */
   const lawAxis = (normal, heading) => {
-    const base = fixed || !normal ? UP : normal;
+    const base = fixed || !normal ? UP : gentled(normal, heading);
     // the feed direction, in the plane square to the base
     const dot = heading[0] * base[0] + heading[1] * base[1];
     let f = [heading[0] - dot * base[0], heading[1] - dot * base[1], -dot * base[2]];
@@ -223,7 +387,145 @@ export function generateFinish5({
   };
 
   /**
-   * Hold the axis to `maxTurn` degrees per millimetre of path, both ways along it.
+   * Smooth the lean along a run: a Gaussian over about a third of the cutter's
+   * radius, applied to the lean *vector* (the horizontal part of the axis).
+   *
+   * What the law asks for is as noisy as the surface under it, and a ball nose
+   * cannot follow detail finer than itself anyway — the contact patch is a
+   * fraction of the radius wide. Averaging the vector rather than the angles is
+   * what lets it cross the pole: two leans on either side of vertical average to a
+   * lean near vertical, where averaging their azimuths would give one of the two
+   * directions it is not.
+   */
+  const smoothLean = (axes, spacing) => {
+    if (axes.length < 3) return axes;
+    const sigma = Math.max(0.8, (0.35 * R) / spacing);
+    const radius = Math.min(14, Math.ceil(3 * sigma));
+    const weights = [];
+    for (let k = -radius; k <= radius; k++) weights.push(Math.exp(-(k * k) / (2 * sigma * sigma)));
+    return axes.map((_, i) => {
+      let hx = 0, hy = 0, w = 0;
+      for (let k = -radius; k <= radius; k++) {
+        const j = i + k;
+        if (j < 0 || j >= axes.length) continue;
+        const wk = weights[k + radius];
+        hx += axes[j][0] * wk; hy += axes[j][1] * wk; w += wk;
+      }
+      hx /= w; hy /= w;
+      const m = Math.hypot(hx, hy);
+      return [hx, hy, Math.sqrt(Math.max(0, 1 - m * m))];
+    });
+  };
+
+  /**
+   * Turn the turntable as little as the cutter's freedom allows.
+   *
+   * The lean the law asks for is a vector that wanders about the pole — where a surface
+   * rolls gently, the lead and the slope cancel and re-emerge again and again — and
+   * every time it passes near the middle its direction swings through half a turn. The
+   * turntable follows the *direction*. But a ball nose does not care to the degree: an
+   * axis a dozen degrees off the normal cuts the same surface with the same ball, and the
+   * only thing that moves is the point on it that does the cutting. So the direction is
+   * free to stray from where the law put it by as much as keeps the axis within
+   * `axisTol` of the law's — and close to the pole, where a half turn of direction is a
+   * degree or two of axis, that is *all* of it.
+   *
+   * What is wanted of the direction inside that freedom is the least turning, which is
+   * the shortest string through the tube it is allowed to lie in: pulled straight, and
+   * touching the tube's sides only where it must bend. That is found by relaxation —
+   * each point toward the middle of its neighbours, then back inside its own bounds —
+   * which settles on it. The lean's size is not touched, only which way it faces, so
+   * a lean that was following a slope exactly goes on doing so.
+   */
+  /**
+   * The direction of each lean made continuous, a half turn at a time, *through* the
+   * stretches where it is free. A lean within the tolerance of vertical has no
+   * direction worth keeping — any line through the pole lies within reach of it — so
+   * it must not carry one: a lean that passes the pole at two degrees sweeps through
+   * a whole half turn there, and following that is the turntable spinning for nothing.
+   * The directions on either side are joined the short way instead (a lean on the far
+   * side of the pole being the same line with its sign turned).
+   *
+   * @returns { psi, free } — the unwrapped direction (the last known one, at a free
+   *   point) and whether the point is free
+   */
+  const halfTurn = (axes, reach) => {
+    const n = axes.length;
+    const psi = new Float64Array(n);
+    const free = new Uint8Array(n);
+    let last = null;
+    for (let i = 0; i < n; i++) {
+      const m = Math.hypot(axes[i][0], axes[i][1]);
+      if (m <= reach[i]) { free[i] = 1; psi[i] = last ?? 0; continue; }
+      let target = Math.atan2(axes[i][1], axes[i][0]);
+      if (last !== null) {
+        let d = target - last;
+        d -= Math.PI * Math.round(d / Math.PI);
+        target = last + d;
+      }
+      psi[i] = target;
+      last = target;
+    }
+    // a run that starts free takes the direction of the first point that is not
+    const first = free.indexOf(0);
+    if (first > 0) for (let i = 0; i < first; i++) psi[i] = psi[first];
+    return { psi, free };
+  };
+
+  const relaxLean = (axes) => {
+    const n = axes.length;
+    if (n < 3 || axisTol <= 0) return axes;
+    const sinTol = Math.sin(axisTol);
+    // the distance in the plane of the lean that the axis may move: an axis `axisTol`
+    // away is no further than that, and a little less where the lean is steep
+    const reach = axes.map((a) => sinTol * Math.max(0.2, a[2]));
+    const { psi, free } = halfTurn(axes, reach);
+    // how far the direction may turn before the line it makes is out of reach of the lean
+    const room = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const m = Math.hypot(axes[i][0], axes[i][1]);
+      room[i] = free[i] ? 4 * Math.PI : Math.asin(Math.min(1, reach[i] / m));
+    }
+    const lo = Array.from(psi, (v, i) => v - room[i]);
+    const hi = Array.from(psi, (v, i) => v + room[i]);
+    // free points start on the straight line between their neighbours that are not
+    const at = Float64Array.from(psi);
+    for (let i = 0; i < n; i++) {
+      if (!free[i]) continue;
+      let a = i - 1; while (a >= 0 && free[a]) a--;
+      let b = i + 1; while (b < n && free[b]) b++;
+      if (a >= 0 && b < n) at[i] = psi[a] + (psi[b] - psi[a]) * (i - a) / (b - a);
+      else if (a >= 0) at[i] = psi[a];
+      else if (b < n) at[i] = psi[b];
+    }
+    // the shortest string through the tube: each point toward the middle of its
+    // neighbours (over-relaxed, since the string is long), then back inside its bounds
+    for (let round = 0; round < 1500; round++) {
+      let moved = 0;
+      for (let pass = 0; pass < 2; pass++) {
+        for (let k = 0; k < n; k++) {
+          const i = pass === 0 ? k : n - 1 - k;
+          const left = at[Math.max(0, i - 1)];
+          const right = at[Math.min(n - 1, i + 1)];
+          const next = Math.min(hi[i], Math.max(lo[i], at[i] + 1.85 * ((left + right) / 2 - at[i])));
+          moved = Math.max(moved, Math.abs(next - at[i]));
+          at[i] = next;
+        }
+      }
+      if (moved < 1e-6) break;
+    }
+    // the lean along the string: the part of the wanted lean that lies on it
+    return axes.map((a, i) => {
+      const c = Math.cos(at[i]);
+      const s_ = Math.sin(at[i]);
+      const h = Math.max(-0.999999, Math.min(0.999999, a[0] * c + a[1] * s_));
+      return [h * c, h * s_, Math.sqrt(1 - h * h)];
+    });
+  };
+
+  /**
+   * Hold the axis to `maxTurn` degrees per millimetre of path, both ways along it,
+   * and the direction it leans toward to twice that.
    *
    * One sweep forward and one back is not enough: pulling a point toward its
    * successor on the way back undoes the limit against its predecessor, so the
@@ -236,59 +538,62 @@ export function generateFinish5({
       const turn = angleBetween(from, to);
       return turn > most ? blendAxis(from, to, most / turn) : to;
     };
+    const out = limitAzimuth(axes, spacing * 2 * maxTurn);
     for (let round = 0; round < 8; round++) {
       let moved = false;
-      for (let i = 1; i < axes.length; i++) {
-        const next = clamp(axes[i - 1], axes[i]);
-        if (next !== axes[i]) { axes[i] = next; moved = true; }
+      for (let i = 1; i < out.length; i++) {
+        const next = clamp(out[i - 1], out[i]);
+        if (next !== out[i]) { out[i] = next; moved = true; }
       }
-      for (let i = axes.length - 2; i >= 0; i--) {
-        const next = clamp(axes[i + 1], axes[i]);
-        if (next !== axes[i]) { axes[i] = next; moved = true; }
+      for (let i = out.length - 2; i >= 0; i--) {
+        const next = clamp(out[i + 1], out[i]);
+        if (next !== out[i]) { out[i] = next; moved = true; }
       }
       if (!moved) break;
     }
-    return limitAzimuth(axes, spacing * 2 * maxTurn);
+    return out;
   };
 
   /**
    * Hold the direction the cutter leans toward to `most` degrees per sweep.
    *
-   * The 3-D limit above is blind to the pole. Close to vertical a lean can swing
-   * clean round the other side of it — from tilted one way by a degree to tilted
-   * the opposite way by a degree — and that is two degrees of axis and a half turn
-   * of the turntable. Left alone it is a block of the program in which C spins
-   * through 180°. Held to a rate of its own, the lean's direction follows the law
-   * as fast as the turntable can, and where it cannot the cutter is a degree or
-   * two from where the law put it — which is all there is *to* lose there, since
-   * the whole lean is a degree or two.
-   *
-   * It is a rate on the azimuth, not on the angle, which is why it binds near the
-   * pole and nowhere else: at a 30° lean it is the same limit as the one above.
+   * The angle limit is blind to the pole: close to vertical a lean can swing round
+   * to the other side of it, two degrees of axis and a half turn of the turntable.
+   * But a lean on the *opposite* side of the pole is the same lean with its sign
+   * turned — the machine does it by A going through zero while C stays put — so
+   * the direction is only ever a half-turn quantity: `m` is a signed lean along a
+   * direction ψ, and (ψ + 180°, −m) is the same axis. Limiting ψ in those terms
+   * costs nothing for a path that goes through the pole, and for one that goes
+   * *near* it costs at most the size of the lean there, which is small precisely
+   * where the turntable would be asked to spin. Limiting the full-turn azimuth
+   * instead, which this used to do, held the lean on the wrong side of the pole
+   * long after it had come out the other — thirty degrees off the surface.
    */
   const limitAzimuth = (axes, most) => {
-    const tilt = axes.map((a) => Math.acos(Math.min(1, Math.max(-1, a[2]))));
-    const az = axes.map((a) => Math.atan2(a[1], a[0]));
-    // unwrap, so a lean passing through ±180° is a small step and not a lap
-    for (let i = 1; i < az.length; i++) {
-      while (az[i] - az[i - 1] > Math.PI) az[i] -= 2 * Math.PI;
-      while (az[i] - az[i - 1] < -Math.PI) az[i] += 2 * Math.PI;
-    }
     const cap = most * RAD;
-    for (let round = 0; round < 8; round++) {
-      let moved = false;
-      for (let i = 1; i < az.length; i++) {
-        const d = az[i] - az[i - 1];
-        if (Math.abs(d) > cap + 1e-12) { az[i] = az[i - 1] + Math.sign(d) * cap; moved = true; }
+    const sweep = (list) => {
+      const out = [];
+      let psi = null;
+      for (const a of list) {
+        const m = Math.hypot(a[0], a[1]);
+        if (m < 1e-9) { out.push(a); continue; }
+        const target = Math.atan2(a[1], a[0]);
+        if (psi === null) psi = target;
+        // the way round a half turn that is shorter, and the sign it takes
+        let d = target - psi;
+        d -= Math.PI * Math.round(d / Math.PI);
+        const step = Math.max(-cap, Math.min(cap, d));
+        psi += step;
+        const along = m * Math.cos(target - psi);
+        // signed lean along ψ — the part of the wanted lean the capped direction can carry
+        const lean = Math.abs(step - d) < 1e-12 ? m * Math.sign(Math.cos(target - psi) || 1) : along;
+        const h = Math.min(Math.abs(lean), 0.999999) * Math.sign(lean || 1);
+        out.push([h * Math.cos(psi), h * Math.sin(psi), Math.sqrt(1 - h * h)]);
       }
-      for (let i = az.length - 2; i >= 0; i--) {
-        const d = az[i] - az[i + 1];
-        if (Math.abs(d) > cap + 1e-12) { az[i] = az[i + 1] + Math.sign(d) * cap; moved = true; }
-      }
-      if (!moved) break;
-    }
-    return axes.map((a, i) => (tilt[i] < 1e-9 ? a
-      : [Math.sin(tilt[i]) * Math.cos(az[i]), Math.sin(tilt[i]) * Math.sin(az[i]), Math.cos(tilt[i])]));
+      return out;
+    };
+    // forward, then back over the result, so the lag does not all fall on one side
+    return sweep(sweep(axes).reverse()).reverse();
   };
 
   // the shank and the holder against the part: the heightmap, seen as stock the
@@ -313,7 +618,9 @@ export function generateFinish5({
    * check — easing any point it would hit toward vertical and trying again.
    */
   const solveRun = (samples, heading) => {
-    const raw = samples.map((p) => lawAxis(normalAt(p[0], p[1]), heading));
+    const law0 = filled(samples.map((p) => normalAt(p[0], p[1]))).map((n) => lawAxis(n, heading));
+    const sm0 = smoothLean(law0, ds);
+    const raw = relaxLean(sm0);
     const scale = new Float64Array(samples.length).fill(1);
     let leans = null;
     let z = null;
@@ -344,7 +651,25 @@ export function generateFinish5({
     return thin(out, tolerance, 0.5);
   };
 
-  const state = { cutting: false, last: null };
+  // Where the turntable will be as this is cut.
+  //
+  // The lean's direction makes the turntable go round, and a surface with hills and
+  // hollows in it winds it one more turn each time a row goes round one — the turntable
+  // has a travel, and a program that runs it into the end of that travel flips branch in the
+  // middle of a cut (A through to the other sign, C half a turn back). The post cannot
+  // prevent that, it only writes the angles. So this follows them: the same solver the post
+  // uses, in the same order, from the same place, and where the next stretch of cut would take
+  // C to within a margin of the end of its travel the tool lifts out instead. The swing at
+  // clearance is where the post turns the table back within half a turn of zero.
+  const machine = five?.rotary?.length ? { rotary: five.rotary } : STANDARD_TRUNNION;
+  const turn = trunnionOf(machine)?.turn;
+  const margin = 25;
+  const roomFor = (angles) => !turn || (
+    angles[turn.letter] <= (turn.max ?? Infinity) - margin
+    && angles[turn.letter] >= (turn.min ?? -Infinity) + margin);
+  const state = {
+    cutting: false, last: null, angles: Object.fromEntries(machine.rotary.map((a) => [a.letter, 0])),
+  };
   const linkMax = Math.max(0, params.linkDistance ?? tool.diameter * 3);
 
   const cutTo = (p) => {
@@ -398,19 +723,51 @@ export function generateFinish5({
     return points;
   };
 
+  /**
+   * Walk points through the angle solver from `from`: the angles at each, and the index of
+   * the first that leaves the turntable too little room (or -1).
+   */
+  const track = (points, from) => {
+    let angles = from;
+    for (let i = 0; i < points.length; i++) {
+      angles = chooseAngles(points[i].a, machine, angles).angles;
+      if (!roomFor(angles)) return { end: angles, tight: i };
+    }
+    return { end: angles, tight: -1 };
+  };
+
   const emitRun = (run) => {
     if (run.length === 0) return;
     const first = run[0];
-    const link = state.cutting ? rideLink(state.last, first) : null;
+    let link = state.cutting ? rideLink(state.last, first) : null;
     if (link) {
-      for (const p of link) cutTo(p);
+      // would carrying on from here take the turntable to the end of its travel?
+      const through = track([...link, ...run], state.angles);
+      if (through.tight >= 0) link = null;
+    }
+    let from;
+    if (link) {
+      from = state.angles;
     } else {
       if (state.cutting) retract();
       beginAt(first);
+      // the post turns the table back within half a turn of zero in the swing at clearance
+      from = recentre(state.angles, machine);
     }
-    for (let k = link ? 0 : 1; k < run.length; k++) cutTo(run[k]);
+    // cut as far as the turntable has room for; the rest is a run of its own, begun from the last point
+    const walked = track(run, link ? track(link, from).end : from);
+    const stop = walked.tight > 0 ? walked.tight : run.length;
+    if (link) for (const p of link) cutTo(p);
+    for (let k = link ? 0 : 1; k < stop; k++) cutTo(run[k]);
     state.cutting = true;
-    state.last = run[run.length - 1];
+    state.last = run[stop - 1];
+    state.angles = track(run.slice(0, stop), link ? track(link, from).end : from).end;
+    if (stop < run.length) {
+      // out of room: lift out, and take up again from the point the cut got to
+      retract();
+      state.angles = recentre(state.angles, machine);
+      emitRun(run.slice(stop - 1));
+    }
   };
 
   // --- the raster ----------------------------------------------------------------
@@ -532,7 +889,9 @@ function leanTurn(a, b) {
   if (Math.hypot(a[0], a[1]) < 1e-6 || Math.hypot(b[0], b[1]) < 1e-6) return 0;
   let d = Math.abs(Math.atan2(b[1], b[0]) - Math.atan2(a[1], a[0])) * DEG;
   if (d > 180) d = 360 - d;
-  return d;
+  // a lean on the far side of the pole is the same lean with its sign turned, which
+  // the turntable does not move for: only the half turn counts
+  return Math.min(d, 180 - d);
 }
 
 function boundsOf(positions) {

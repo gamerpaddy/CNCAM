@@ -166,8 +166,10 @@ export const STRATEGY_DEFAULTS = {
     tiltMode: 'normal',
     leadAngle: 8,
     tiltAngle: 0,
-    maxTilt: 35,
-    axisRate: 10,
+    maxTilt: 45,
+    axisRate: 40,
+    flatBelow: 12,
+    axisTol: 8,
   },
   parallel3d: {
     stepover: 0.08,         // finishing: cusp height, not material removal

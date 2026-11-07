@@ -440,6 +440,14 @@ function capOfAssembly(tool, withHolder) {
 }
 
 const SPINDLE_UP = new THREE.Vector3(0, 0, 1);
+
+/** Drawn over everything, so a collision is never hidden by the thing it is in. */
+const COLLISION_RENDER_ORDER = 50;
+
+/** Show or hide the red shell on the tool's shank and holder. */
+function glowTool(group, on) {
+  for (const glow of group.userData?.glows ?? []) glow.visible = on;
+}
 const LEAN = new THREE.Vector3();
 
 /**
@@ -1690,6 +1698,7 @@ export class SimulationView {
       // a lathe tool works in the plane the bar is drawn in; it has no Y
       this.cutter.position.set(x, this.sim?.kind === 'turn' ? 0 : y, z);
       leanTo(this.cutter, state.axis);
+      glowTool(this.cutter, !!state.collision);
       this.cutter.visible = true;
       return undefined;
     }
@@ -1711,7 +1720,24 @@ export class SimulationView {
     // the ZX plane against a bar that *is* spinning.
     if (this.sim?.kind === 'turn') return this.setTurningTool(state);
     const group = new THREE.Group();
+    const glows = [];
     for (const { kind, points } of toolSections(tool)) {
+      // A red shell over the shank and the holder, shown while the tool is inside the part. Built
+      // whether or not they are drawn: hiding the holder is a choice about the picture, not
+      // about whether it hit anything.
+      if (kind !== 'cutting') {
+        const shell = new THREE.LatheGeometry(
+          points.map(([r, z]) => new THREE.Vector2(Math.max(r, 1e-4) * 1.08 + 0.15, z)), 48);
+        shell.rotateX(Math.PI / 2);
+        const glow = new THREE.Mesh(shell, new THREE.MeshBasicMaterial({
+          color: 0xff1f1f, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        }));
+        glow.visible = false;
+        glow.renderOrder = COLLISION_RENDER_ORDER;
+        glows.push(glow);
+        group.add(glow);
+      }
       // The shank and the holder are what turn "the cutter reaches" into "the
       // cutter reaches and the holder does not". Hiding them is a choice, not
       // the default — see app/settings.js.
@@ -1749,6 +1775,8 @@ export class SimulationView {
     if (cap) group.add(cap);
     group.position.set(...position);
     leanTo(group, state.axis);
+    group.userData.glows = glows;
+    glowTool(group, !!state.collision);
     // Drawn after the surface, and still depth-tested against it, so the tool is
     // hidden where it is buried in solid stock and shows where it is in the open.
     group.traverse((n) => { n.renderOrder = CUTTER_RENDER_ORDER; });
@@ -1962,7 +1990,74 @@ export class SimulationView {
     this.group.visible = visible;
   }
 
+  /**
+   * Mark every place the tool was found where it should not be.
+   *
+   * A red sphere at each, with a halo and a beam standing up from it, drawn over the
+   * part with the depth test off — a collision under an overhang or inside a pocket is
+   * exactly the one you cannot see, and a marker that is hidden by the thing it marks
+   * says nothing. Close ones are merged: two hundred spheres along one wall are one
+   * wall. The one the playhead was sent to is drawn larger (`focusFinding`).
+   */
+  setFindings(sim) {
+    this.clearFindings();
+    const found = sim?.findings ?? [];
+    if (!found.length || !sim?.tip) return;
+    const size = Math.max(sim.width * sim.cellSize, sim.height * sim.cellSize);
+    const r = Math.max(0.6, size * 0.012);
+    const group = new THREE.Group();
+    const taken = [];
+    for (const f of found) {
+      const p = f.at ?? [sim.tip[f.step * 3], sim.tip[f.step * 3 + 1], sim.tip[f.step * 3 + 2]];
+      if (taken.some((q) => Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]) < r * 2.5)) continue;
+      taken.push(p);
+      const marker = new THREE.Group();
+      marker.position.set(p[0], p[1], p[2]);
+      const core = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), new THREE.MeshBasicMaterial({
+        color: 0xff2a2a, depthTest: false, transparent: true, opacity: 0.95,
+      }));
+      const halo = new THREE.Mesh(new THREE.SphereGeometry(r * 2.4, 14, 10), new THREE.MeshBasicMaterial({
+        color: 0xff2a2a, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending,
+        depthTest: false, depthWrite: false,
+      }));
+      const beam = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.18, r * 0.18, r * 14, 6), new THREE.MeshBasicMaterial({
+        color: 0xff5050, transparent: true, opacity: 0.8, depthTest: false,
+      }));
+      beam.rotation.x = Math.PI / 2;
+      beam.position.z = r * 7;
+      for (const mesh of [core, halo, beam]) mesh.renderOrder = COLLISION_RENDER_ORDER;
+      marker.add(core, halo, beam);
+      marker.userData.finding = f;
+      group.add(marker);
+    }
+    this.findingGroup = group;
+    this.group.add(group);
+    this.requestRender?.();
+  }
+
+  /** Draw the marker nearest this finding large, so the Show button lands somewhere. */
+  focusFinding(finding) {
+    if (!this.findingGroup) return;
+    for (const marker of this.findingGroup.children) {
+      const f = marker.userData.finding;
+      const near = f && finding && Math.abs(f.step - finding.step) <= 2;
+      marker.scale.setScalar(near ? 2.2 : 1);
+    }
+    this.requestRender?.();
+  }
+
+  clearFindings() {
+    if (!this.findingGroup) return;
+    this.findingGroup.parent?.remove(this.findingGroup);
+    this.findingGroup.traverse((node) => {
+      node.geometry?.dispose();
+      node.material?.dispose();
+    });
+    this.findingGroup = null;
+  }
+
   clear() {
+    this.clearFindings();
     this.setCutter(null);
     // rebuilt rather than reused: its size comes from the grid, and the next
     // simulation is a different grid

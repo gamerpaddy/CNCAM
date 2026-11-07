@@ -203,6 +203,7 @@ export function bodyTouchTilted(world, tip, axis, shells, stockTop, eps) {
   const reach = heightOf(body, shells.bodySampler, axis);
   let worst = 0;
   let kind = null;
+  let where = null;
   for (let j = j0; j <= j1; j++) {
     const ey = origin[1] + j * cellSize - tip[1];
     const row = j * width;
@@ -214,10 +215,14 @@ export function bodyTouchTilted(world, tip, axis, shells, stockTop, eps) {
       const z = reach(origin[0] + i * cellSize - tip[0], ey);
       if (z === Infinity) continue;
       const over = stands - (tip[2] + z);
-      if (over > worst) { worst = over; kind = body.kind[last.index] ?? 'holder'; }
+      if (over > worst) {
+        worst = over;
+        kind = body.kind[last.index] ?? 'holder';
+        where = [origin[0] + i * cellSize, origin[1] + j * cellSize, stands];
+      }
     }
   }
-  return worst > eps ? { depth: worst, kind } : null;
+  return worst > eps ? { depth: worst, kind, at: where } : null;
 }
 
 function clampIndex(v, n) { return v < 0 ? 0 : v > n - 1 ? n - 1 : v; }

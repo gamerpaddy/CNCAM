@@ -32,7 +32,7 @@
 // XY in the machine's own frame, so a table left at C77 would cut it 77° round.
 
 import {
-  chooseAngles, tipToMachine, machineToTip, toWritten, recentre, POLE_DEG,
+  chooseAngles, tipToMachine, machineToTip, toWritten, recentre, POLE_DEG, unwindsBefore, liftedAfter,
 } from '../engine/five/kinematics.js';
 import { angleBetween, blendAxis } from '../engine/five/tilt-sweep.js';
 import { isTilted } from '../engine/cl.js';
@@ -198,7 +198,11 @@ export function fiveAxisWriter(five, motion, hooks) {
     // in the way: the moment to unwind the table — turn each axis back within a
     // half turn of zero, which is the same pose — so that a long program does
     // not wind a turntable up to the end of its travel one pass at a time.
-    if (m.rapid && tip && angleBetween(axis, a) > 1e-6) {
+    // The same goes for the next move of any kind after the tool has been lifted out of the
+    // work: a pass that ends because the turntable ran out of room lifts, and begins the next
+    // from the same point with the same axis — no swing to unwind in, and the plunge that
+    // follows may not be a rapid either.
+    if (tip && unwindsBefore({ lifted: write.lifted, rapid: m.rapid, swings: angleBetween(axis, a) > 1e-6 })) {
       const home = recentre(angles, machine);
       if (letters.some((l) => Math.abs(home[l] - angles[l]) > 1e-9)) {
         block(w, modal, m, tip, home, 0, true, 0);
@@ -206,6 +210,7 @@ export function fiveAxisWriter(five, motion, hooks) {
       }
     }
     const poses = piecesTo(point, a);
+    const before0 = tip;
     let before = tip;
     for (const { p, k, choice } of poses) {
       if (!choice.reachable) {
@@ -231,11 +236,16 @@ export function fiveAxisWriter(five, motion, hooks) {
       before = p;
       axis = k;
     }
+    // lifted: this move rose, and nothing has cut since
+    write.lifted = liftedAfter({
+      lifted: write.lifted, rapid: m.rapid, rises: Boolean(before0) && point[2] > before0[2] + 1e-9,
+    });
     tip = point;
     axis = a;
   };
 
   write.started = false;
+  write.lifted = false;
   write.warnings = [];
 
   /**

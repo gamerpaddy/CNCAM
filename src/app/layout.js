@@ -622,7 +622,11 @@ export function buildLayout(root, actions, project) {
       }, ['Import a model…']),
     ]),
   ]);
-  const viewport = el('div', { id: 'viewport' }, [canvas, sceneLabel, emptyState, viewTools]);
+  // The simulation's collisions, in a red band across the top of the view. A status line is
+  // read once and forgotten, and what it said — the holder is in the part — is the one
+  // result of a simulation that should still be on screen while you look at it.
+  const simAlert = el('div', { class: 'sim-alert', role: 'alert', hidden: '' });
+  const viewport = el('div', { id: 'viewport' }, [canvas, sceneLabel, emptyState, viewTools, simAlert]);
   const props = el('div', { id: 'props', class: 'panel', 'aria-label': 'Properties' });
 
   // --- the status line ------------------------------------------------------
@@ -828,6 +832,38 @@ export function buildLayout(root, actions, project) {
         ? `Generate — ${outdated} to compute` : 'Generate');
       summary.textContent = text;
       summary.title = title || text;
+    },
+    /**
+     * @param alert { title, detail, count, onShow(index), kind } or null to put it away
+     */
+    setAlert(alert) {
+      simAlert.replaceChildren();
+      simAlert.hidden = !alert;
+      if (!alert) return;
+      simAlert.dataset.kind = alert.kind ?? 'holder';
+      let at = -1;
+      const counter = el('span', { class: 'sim-alert-count' }, [`${alert.count}`]);
+      const show = (delta) => {
+        at = (at + delta + alert.count) % alert.count;
+        counter.textContent = `${at + 1} / ${alert.count}`;
+        alert.onShow?.(at);
+      };
+      simAlert.append(
+        el('span', { class: 'sim-alert-icon', 'aria-hidden': 'true' }, ['\u26a0']),
+        el('div', { class: 'sim-alert-text' }, [
+          el('div', { class: 'sim-alert-title' }, [alert.title]),
+          el('div', { class: 'sim-alert-detail' }, [alert.detail]),
+        ]),
+        el('div', { class: 'sim-alert-actions' }, [
+          el('button', { type: 'button', title: 'Previous collision', onclick: () => show(-1) }, ['\u2039']),
+          counter,
+          el('button', { type: 'button', title: 'Go to the collision', onclick: () => show(1) }, ['Show \u203a']),
+          el('button', {
+            type: 'button', class: 'sim-alert-close', title: 'Dismiss', 'aria-label': 'Dismiss',
+            onclick: () => { simAlert.hidden = true; },
+          }, ['\u00d7']),
+        ]),
+      );
     },
     setStatus(text, isError = false) {
       statusText.textContent = text;

@@ -27,13 +27,14 @@ import { orientationFor, indexingWarnings } from '../../engine/indexing.js';
 import { wrapFor, wrapWarnings, wrapExtent, linearExtent } from '../../engine/wrap.js';
 import { fiveFor } from '../../engine/five/post-data.js';
 import { fiveChecks } from '../../engine/five/checks.js';
+import { trunnionOf } from '../../engine/five/kinematics.js';
 import {
   buildGcode, postsFor, defaultPostFor, PackedLineMap,
 } from '../../post/index.js';
 import { renderGcodePanel } from '../gcode-panel.js';
 import {
   opStatus, formatTime, opFingerprint, toolNumberClashes, toolChangesIn, opBlockedReason,
-  stalePicks,
+  stalePicks, opCollisionRisk,
 } from '../op-status.js';
 import { resolveRegions } from '../regions-ui.js';
 import {
@@ -233,6 +234,9 @@ export function makeProgramActions(ctx, space) {
             // everything past a Z. The strategies need the fixtures themselves
             // to work that out. See engine/fixtures.js chuckLimit.
             fixtures: structuredClone(setup.fixtures ?? []),
+            // The rotary axes, for the one strategy that has to know where the turntable is
+            // going to be as it cuts: see engine/strategies/finish5.js
+            five: five5For(doc.machineRecord()),
             // What the operations ahead of this one are, for the strategies whose
             // path depends on them: a turning pass that opens a hole starts from
             // the hole the drill made rather than the one the drawing ends up
@@ -378,6 +382,18 @@ export function makeProgramActions(ctx, space) {
       // goes. Said per operation, with the machine's own travel checked on
       // where the linear axes really go.
       limits.unshift(...fiveWarnings());
+      // a cut deeper than its tool reaches is a crash, and first among the things to say
+      for (const { op } of [...doc.allOperations()]) {
+        if (!op.enabled || !doc.toolpaths.has(op.id)) continue;
+        const risk = opCollisionRisk(doc, op);
+        if (risk) {
+          limits.unshift({
+            level: 'error',
+            text: `${op.name}: the ${risk.kind} will hit the part — the cut is ${risk.depth.toFixed(1)}mm deep and `
+              + `the tool reaches ${risk.maxDepth.toFixed(1)}mm. Limit the depth or fit a longer cutter`,
+          });
+        }
+      }
       // Two cutters on one T number is a wrong-tool crash and it is invisible
       // in the file — the second change is dropped as a restatement of the
       // first. The operation panel says so too, but this is the moment the
@@ -483,6 +499,11 @@ export function makeProgramActions(ctx, space) {
   }
 
   /** The box every move of the program stays inside, in setup coordinates. */
+  /** The rotary axes as the strategies see them: plain data, or null for a machine without a trunnion. */
+  function five5For(machine) {
+    return trunnionOf(machine) ? { rotary: structuredClone(machine.rotary) } : null;
+  }
+
   /**
    * What each 5-axis operation of the job asks of this machine, as warnings in
    * the shape `machineWarnings` makes — or why one cannot be posted at all.
@@ -708,6 +729,11 @@ export function makeProgramActions(ctx, space) {
       ctx.viewport.simulation.repaint(ctx.simulation.playback);
       ctx.viewport.setSimulationMode(true);
       ctx.ui.timeline.show(sim, ops);
+      // where the tool is in something it should not be: marked on the part, and said in
+      // a band across the view that stays until it is dismissed
+      ctx.viewport.simulation.setFindings(sim);
+      showCollisionAlert(sim, ops);
+      ctx.viewport.requestRender();
       // Truncation means the tail of the program is *not on screen*, which looks
       // exactly like a toolpath that cuts nothing — so it is an error, and it
       // says what to do about it.
@@ -847,8 +873,44 @@ export function makeProgramActions(ctx, space) {
     return ctx.ui.setStatus(`Cleared ${plural(count, 'toolpath')} — Generate to compute them again`);
   }
 
+  /**
+   * The collisions of a simulation, in a band across the top of the view — or nothing.
+   *
+   * The holder or the shank in the part comes first; it is the one that ends with the
+   * spindle nose in the work. A clamp is next, a rapid in metal after that.
+   */
+  function showCollisionAlert(sim, ops) {
+    const found = sim.findings ?? [];
+    const kinds = [
+      ['holder', 'THE HOLDER HITS THE PART', 'The cutter is too short for this depth: the holder is wider than the slot and comes down on the wall.'],
+      ['shank', 'THE SHANK HITS THE PART', 'The shank is wider than the slot the cutter cuts and comes down on the wall.'],
+      ['fixture', 'THE TOOL HITS A CLAMP', 'The leaning holder or shank reaches a clamp.'],
+      ['rapid', 'A RAPID MOVE CUTS METAL', 'A G0 move runs into stock at full traverse.'],
+    ];
+    const pick = kinds.find(([kind]) => found.some((f) => f.kind === kind));
+    if (!pick) return ctx.ui.setAlert(null);
+    const [kind, title, why] = pick;
+    const mine = found.filter((f) => f.kind === kind);
+    const worst = mine.reduce((m, f) => Math.max(m, f.depth), 0);
+    const opIndex = sim.opEnds ? sim.opEnds.findIndex((end) => end > mine[0].step) : -1;
+    const where = ops[opIndex]?.name;
+    return ctx.ui.setAlert({
+      kind,
+      title,
+      count: mine.length,
+      detail: `${why} ${mine.length >= 200 ? '200 or more places' : plural(mine.length, 'place')}`
+        + `${where ? `, first in ${where}` : ''}, up to ${worst.toFixed(1)}mm.`,
+      onShow: (index) => {
+        ctx.ui.timeline.seekToStep(mine[index].step, sim);
+        ctx.viewport.simulation.focusFinding(mine[index]);
+        ctx.viewport.requestRender();
+      },
+    });
+  }
+
   function closeSimulation({ quiet = false } = {}) {
     ctx.simulation = null;
+    ctx.ui.setAlert?.(null);
     ctx.viewport.simulation.clear();
     ctx.viewport.setSimulationMode(false);
     ctx.ui.timeline.hide();

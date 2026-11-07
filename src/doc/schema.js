@@ -387,8 +387,10 @@ export function createOperation(type = 'contour2d') {
       tiltMode: 'normal',   // 'normal' | 'fixed'
       leadAngle: 0,
       tiltAngle: 0,
-      maxTilt: 35,
-      axisRate: 10,
+      maxTilt: 45,
+      axisRate: 40,
+      flatBelow: 12,
+      axisTol: 8,
       peck: 0,            // drill peck depth; 0 = plain G81
       dwell: 0,           // seconds paused at depth; > 0 with no peck = G82
       // how close a hole's diameter must be to the drill's to count as a match

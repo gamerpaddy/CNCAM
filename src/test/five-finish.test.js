@@ -7,13 +7,19 @@ import { test, assert } from './runner.js';
 import { generateToolpath } from '../engine/toolpath.js';
 import { simulateRemoval, SimulationPlayback } from '../engine/simulate.js';
 import { MOVE_STRIDE, OP, eachMove } from '../engine/cl.js';
-import { makeRevolved } from './fixtures.js';
+import { makeRevolved, makeStepped } from './fixtures.js';
+import { createMachine, rotaryPreset } from '../doc/machines.js';
+import { chooseAngles, recentre, unwindsBefore, liftedAfter } from '../engine/five/kinematics.js';
 import { buildHeightmap } from '../geom/heightmap.js';
 import { toolSections } from '../engine/tool-geometry.js';
 import { defaultParamsFor } from '../engine/op-defaults.js';
 import { opBlockedReason } from '../app/op-status.js';
 import { setSetting, resetSettings } from '../app/settings.js';
-import { createTool, createOperation } from '../doc/schema.js';
+import { createTool, createOperation, createSetup } from '../doc/schema.js';
+import { meshFromSoup } from '../geom/mesh.js';
+import { buildGcode } from '../post/index.js';
+import { fiveFor } from '../engine/five/post-data.js';
+import { fiveChecks } from '../engine/five/checks.js';
 
 const DOME_R = 10;
 const STOCK = { kind: 'box', min: [-12, -12, 0], max: [12, 12, 11] };
@@ -99,7 +105,7 @@ test('5-axis finishing leans the cutter, in unit vectors within its limit, and s
 });
 
 test('with the normal for a law the cutter leans out along the slope, as far as the surface does', () => {
-  const cl = finish5(dome(), { leadAngle: 0, maxTilt: 50 });
+  const cl = finish5(dome(), { leadAngle: 0, maxTilt: 50, flatBelow: 0, axisTol: 0 });
   let checked = 0;
   eachMove(cl, (op, x, y, z, i, j, k) => {
     if (op !== OP.LINE) return;
@@ -252,4 +258,176 @@ test('the 5-axis operation is refused while the beta is off and runs when it is 
   setSetting('fiveAxisBeta', true);
   assert.eq(opBlockedReason(doc, op), null);
   resetSettings();
+});
+
+// --- how it follows the surface -----------------------------------------------
+
+test('with no lead and no fade the axis is the sphere\'s own normal, to a couple of degrees', () => {
+  // the part is a hemisphere, so the true normal at (x, y) is (x, y, √(R²−ρ²))/R and the
+  // cutter has nothing to be wrong about except how it reads the surface
+  const cl = finish5(dome(), { leadAngle: 0, flatBelow: 0, axisTol: 0, maxTilt: 60 });
+  const errors = [];
+  eachMove(cl, (op, x, y, z, i, j, k) => {
+    if (op !== OP.LINE) return;
+    const rho = Math.hypot(x, y);
+    if (rho < 1.5 || rho > DOME_R * 0.75) return;      // the crown, where it has no direction, and the foot
+    const t = Math.asin(rho / DOME_R);
+    const n = [(Math.sin(t) * x) / rho, (Math.sin(t) * y) / rho, Math.cos(t)];
+    errors.push((Math.acos(Math.min(1, n[0] * i + n[1] * j + n[2] * k)) * 180) / Math.PI);
+  });
+  errors.sort((a, b) => a - b);
+  assert.ok(errors.length > 100, `${errors.length} moves`);
+  const p90 = errors[Math.floor(errors.length * 0.9)];
+  assert.ok(p90 < 3, `90% of moves within ${p90.toFixed(1)}° of the normal`);
+  assert.ok(errors[errors.length - 1] < 8, `worst ${errors[errors.length - 1].toFixed(1)}°`);
+});
+
+test('the lead is the only thing between the axis and the normal where the surface is smooth', () => {
+  const lead = 8;
+  const cl = finish5(dome(), { leadAngle: lead, flatBelow: 0, axisTol: 0, maxTilt: 60 });
+  const errors = [];
+  eachMove(cl, (op, x, y, z, i, j, k) => {
+    if (op !== OP.LINE) return;
+    const rho = Math.hypot(x, y);
+    if (rho < 2 || rho > DOME_R * 0.7) return;
+    const t = Math.asin(rho / DOME_R);
+    const n = [(Math.sin(t) * x) / rho, (Math.sin(t) * y) / rho, Math.cos(t)];
+    errors.push((Math.acos(Math.min(1, n[0] * i + n[1] * j + n[2] * k)) * 180) / Math.PI);
+  });
+  errors.sort((a, b) => a - b);
+  assert.close(errors[errors.length >> 1], lead, 2, 'median error is the lead');
+  assert.ok(errors[Math.floor(errors.length * 0.9)] < lead + 4, 'and no more than a few degrees beyond it');
+});
+
+test('a cutter on a flat tread is not leaned over by the riser beside it', () => {
+  // two terraces, each flat: the only reason for the cutter to lean on either is the lead.
+  // A plain fit of the slope over the neighbourhood of a point at the edge of a tread sees the
+  // riser as well and reports a wall.
+  const { mesh, height } = makeStepped({ base: 40, top: 20, baseHeight: 10, topHeight: 10 });
+  const stock = { kind: 'box', min: [-2, -2, 0], max: [42, 42, height + 2] };
+  const cl = generateToolpath({
+    type: 'finish5', name: 'steps', tool: BALL, mesh, stock,
+    params: {
+      ...defaultParamsFor('finish5', { stock, tool: BALL }),
+      topZ: height + 2, bottomZ: 0.5, clearanceHeight: height + 12, stepover: 0.15, tolerance: 0.02, leadAngle: 8,
+    },
+  });
+  let checked = 0;
+  let worst = 0;
+  eachMove(cl, (op, x, y, z, i, j, k) => {
+    if (op !== OP.LINE) return;
+    // on a tread: the top at z=20 or the base at z=10 (the tip stands on it, ball nose)
+    if (Math.abs(z - 20) > 0.05 && Math.abs(z - 10) > 0.05) return;
+    checked++;
+    worst = Math.max(worst, (Math.acos(Math.min(1, k)) * 180) / Math.PI);
+  });
+  assert.ok(checked > 50, `${checked} moves on a tread`);
+  assert.ok(worst < 8 + 4, `leans ${worst.toFixed(1)}° on a flat tread with an 8° lead`);
+});
+
+test('a row over a crown passes through the pole and does not spin the turntable round it', () => {
+  const machine = createMachine({ kind: 'mill', rotary: rotaryPreset('AC') });
+  const cl = finish5(dome(), { leadAngle: 8 });
+  let angles = { A: 0, C: 0 };
+  let prev = null;
+  let blocks = 0;
+  let big = 0;
+  let worst = 0;
+  eachMove(cl, (op, x, y, z, i, j, k, feedClass) => {
+    const rapid = op === OP.RAPID || feedClass === 0;
+    if (rapid) angles = recentre(chooseAngles([i, j, k], machine, angles).angles, machine);
+    else {
+      const next = chooseAngles([i, j, k], machine, angles);
+      if (prev) {
+        const turn = Math.max(Math.abs(next.angles.C - angles.C), Math.abs(next.angles.A - angles.A));
+        blocks++;
+        if (turn > 30) big++;
+        worst = Math.max(worst, turn);
+      }
+      angles = next.angles;
+    }
+    prev = rapid ? null : 1;
+  });
+  // The turntable has to go round *somewhere* — a dome's normals face every way — but
+  // not in a few blocks of a few degrees of lean each: only a handful of the cutting
+  // blocks may turn an axis more than 30°, and none may turn one anywhere near a half turn.
+  assert.ok(big <= Math.max(3, blocks * 0.01), `${big} of ${blocks} cutting blocks turn an axis more than 30°`);
+  assert.ok(worst < 90, `a cutting block turns an axis ${worst.toFixed(0)}°`);
+});
+
+// --- a surface that rolls --------------------------------------------------------
+
+/** z = f(x, y) over a W×D block, as a triangle soup on a grid */
+function heightField(f, W, D, step = 0.5) {
+  const nx = Math.round(W / step);
+  const ny = Math.round(D / step);
+  const soup = [];
+  const p = (i, j) => [(i * W) / nx, (j * D) / ny, f((i * W) / nx, (j * D) / ny)];
+  for (let i = 0; i < nx; i++) {
+    for (let j = 0; j < ny; j++) {
+      const a = p(i, j), b = p(i + 1, j), c = p(i + 1, j + 1), d = p(i, j + 1);
+      soup.push(...a, ...b, ...c, ...a, ...c, ...d);
+    }
+  }
+  return meshFromSoup(new Float32Array(soup));
+}
+
+function rolling() {
+  const top = 13.5;
+  const mesh = heightField((x, y) => 10 + 3 * Math.sin(x / 4) * Math.cos(y / 5), 40, 30);
+  const stock = { kind: 'box', min: [-2, -2, 0], max: [42, 32, top + 2] };
+  const machine = createMachine({ kind: 'mill', rotary: rotaryPreset('AC') });
+  const cl = generateToolpath({
+    type: 'finish5', name: 'hills', tool: BALL, mesh, stock,
+    params: {
+      ...defaultParamsFor('finish5', { stock, tool: BALL }),
+      topZ: top + 2, bottomZ: 0.5, clearanceHeight: top + 12,
+    },
+    five: { rotary: machine.rotary },
+  });
+  const setup = createSetup();
+  setup.five = { enabled: true, pivot: [0, 0, -100] };
+  return { cl, machine, five: fiveFor(setup, machine, cl) };
+}
+
+test('over hills and hollows the turntable is never run into its stop, and no cut flips branch', () => {
+  const { cl, machine, five } = rolling();
+  const checks = fiveChecks(cl, five);
+  assert.eq(checks.stats.flips, 0, 'no cutting move turns a rotary axis more than 90° from the one before');
+  const text = buildGcode('linuxcnc', [{
+    name: 'hills', cl, wcs: 'G54', setup: 's', setupName: 's', orientation: null, wrap: null, five,
+  }], {}).text;
+  let worst = 0;
+  for (const m of text.matchAll(/\bC(-?[\d.]+)/g)) worst = Math.max(worst, Math.abs(+m[1]));
+  const stop = machine.rotary.find((a) => a.letter === 'C').max;
+  assert.ok(worst < stop - 15, `C reaches ${worst.toFixed(0)}° of ±${stop}°`);
+  assert.ok(!/jumps \d+ degrees/.test(text), 'and the file does not warn of a jump between cutting blocks');
+});
+
+test('the tool lifts out and starts again when the turntable runs out of room, and the post unwinds there', () => {
+  const { cl, machine } = rolling();
+  // walk it the way the post does and count the unwinds: more than one means a pass was
+  // split where the turntable was nearly at its stop, and C came back within half a turn
+  let angles = { A: 0, C: 0 };
+  let prevAxis = null;
+  let prevPoint = null;
+  let lifted = false;
+  let unwinds = 0;
+  for (let n = 0; n < cl.count; n++) {
+    const o = n * MOVE_STRIDE;
+    const rapid = cl.moves[o] === OP.RAPID;
+    const axis = [cl.moves[o + 4], cl.moves[o + 5], cl.moves[o + 6]];
+    const point = [cl.moves[o + 1], cl.moves[o + 2], cl.moves[o + 3]];
+    const swings = prevAxis && Math.acos(Math.min(1, prevAxis[0] * axis[0] + prevAxis[1] * axis[1] + prevAxis[2] * axis[2])) > 1e-6;
+    if (unwindsBefore({ lifted, rapid, swings })) {
+      const home = recentre(angles, machine);
+      if (Math.abs(home.C - angles.C) > 1e-9) unwinds++;
+      angles = home;
+    }
+    lifted = liftedAfter({ lifted, rapid, rises: Boolean(prevPoint) && point[2] > prevPoint[2] + 1e-9 });
+    angles = chooseAngles(axis, machine, angles).angles;
+    prevAxis = axis;
+    prevPoint = point;
+  }
+  assert.ok(unwinds >= 1, `${unwinds} unwinds: the hills wind the table more than a turn`);
 });

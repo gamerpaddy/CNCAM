@@ -226,6 +226,7 @@ function bodyTouch(heights, mask, grid, at, body, stockTop) {
   const { width, height, cellSize, origin } = grid;
   let worst = 0;
   let kind = null;
+  let where = null;
   for (const cylinder of body) {
     const floor = at[2] + cylinder.bottom;
     // nothing stands that high, however wide the tool is up there
@@ -248,10 +249,12 @@ function bodyTouch(heights, mask, grid, at, body, stockTop) {
         if (ex * ex + ey * ey > r2) continue;
         worst = over;
         kind = cylinder.kind;
+        // the metal the body is in, where it stands: what the viewport marks
+        where = [origin[0] + i * cellSize, origin[1] + j * cellSize, heights[cell]];
       }
     }
   }
-  return worst > BODY_EPS ? { depth: worst, kind } : null;
+  return worst > BODY_EPS ? { depth: worst, kind, at: where } : null;
 }
 
 /**
@@ -286,7 +289,7 @@ function countTap(tapCut, took, radius, cellSize, step) {
 /** Add one step's collision, if it had one, to the tally. */
 function countBody(bodyCut, touch, step, note = null) {
   if (!touch) return;
-  note?.(touch.kind ?? 'holder', step, touch.depth);
+  note?.(touch.kind ?? 'holder', step, touch.depth, null, touch.at ?? null);
   bodyCut.count++;
   if (touch.depth > bodyCut.depth) {
     bodyCut.depth = touch.depth;
@@ -441,8 +444,8 @@ export function simulateRemoval({
   // one is and not only that there was one. Capped: a program that is wrong
   // everywhere is wrong at the first two hundred places too.
   const findings = [];
-  const note = (kind, at, depth, name = null) => {
-    if (findings.length < MAX_FINDINGS) findings.push({ kind, step: at, depth, name });
+  const note = (kind, at, depth, name = null, where = null) => {
+    if (findings.length < MAX_FINDINGS) findings.push({ kind, step: at, depth, name, at: where });
   };
   const world = tilting
     ? { heights, mask, grid, columns, marks: { cells: new Uint32Array(cellCount), epoch: 0 } }
@@ -1952,6 +1955,28 @@ export class PlaybackClock {
  * Which tool it is still comes from `opEnds`, which is the same list the
  * timeline draws its bands from.
  */
+const collisionSteps = new WeakMap();
+
+/**
+ * The collision the tool is in at this step, or null: what the viewport turns the
+ * holder red for while it is playing through one.
+ */
+export function collisionAt(sim, step) {
+  if (!sim?.findings?.length) return null;
+  let byStep = collisionSteps.get(sim);
+  if (!byStep) {
+    byStep = new Map();
+    for (const f of sim.findings) {
+      const kept = byStep.get(f.step);
+      if (!kept || f.depth > kept.depth) byStep.set(f.step, f);
+    }
+    collisionSteps.set(sim, byStep);
+  }
+  // a step either side counts: the sweep notes a collision on the piece it is made in and the
+  // tool is drawn at the end of it, so the playhead is a piece out from the number in the record
+  return byStep.get(step) ?? byStep.get(step - 1) ?? byStep.get(step + 1) ?? null;
+}
+
 export function positionAtStep(sim, ops, step) {
   if (ops.length === 0) return null;
   const { tip, opEnds, stepCount } = sim ?? {};
@@ -1966,6 +1991,8 @@ export function positionAtStep(sim, ops, step) {
   return {
     position: [tip[k * 3], tip[k * 3 + 1], tip[k * 3 + 2]],
     axis,
+    // a step the tool is inside something it should not be: the holder, a clamp
+    collision: collisionAt(sim, at),
     tool: ops[Math.min(index, ops.length - 1)].tool,
   };
 }
@@ -2009,5 +2036,6 @@ export function positionAtTime(sim, ops, seconds) {
       start.position[2] + (target.position[2] - start.position[2]) * frac,
     ],
     axis: blendAxis(start.axis, target.axis, frac),
+    collision: target.collision,
   };
 }

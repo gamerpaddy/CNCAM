@@ -42,6 +42,25 @@ const DEG = 180 / Math.PI;
 export const POLE_DEG = 1;
 
 /**
+ * When a program unwinds the turntable — the one description, for the post that does it, the
+ * checks that predict it and the strategy that plans round it. The table is turned back within
+ * half a turn of zero (the same pose) at a moment when the tool is clear of the work: a rapid
+ * that swings the spindle, or the first move after the tool has been lifted out, which is how a
+ * pass that ran out of turntable begins again from the same point with the same axis.
+ */
+export function unwindsBefore({ lifted, rapid, swings }) {
+  return Boolean(lifted || (rapid && swings));
+}
+
+/** Whether the tool counts as lifted out after a move: it rapided up, and nothing has cut since. */
+export function liftedAfter({ lifted, rapid, rises }) {
+  return Boolean(rapid && (lifted || rises));
+}
+
+/** Within this many degrees of vertical the turntable is held where it is — see chooseAngles. */
+export const POLE_HOLD_DEG = 0.6;
+
+/**
  * The trunnion a machine is, or null — and then the 5-axis beta does not apply.
  *
  * Table-table means a tilt axis (about X or Y) carrying a turntable about Z,
@@ -142,6 +161,29 @@ export function chooseAngles(k, machine, prev = null) {
   const t = trunnion.tilt;
   const u = trunnion.turn;
   const nearPole = tilt < POLE_DEG;
+
+  // Within half a degree of vertical the direction of the lean is arithmetic noise: a lean
+  // of a tenth of a degree has *an* azimuth, and it is whatever the last digit of the
+  // interpolation made it. Taken at its word it swings the turntable a quarter turn for a
+  // point and swings it back for the next — a blip of a hundred degrees at the one place the
+  // path goes through the pole. So the turntable stays where it is, and the tilt takes whichever
+  // sign leaves the axis nearest the one asked for, which is out by less than the tilt itself.
+  if (prev && tilt < POLE_HOLD_DEG) {
+    const held = prev[u.letter] ?? 0;
+    let best = null;
+    for (const sign of [1, -1]) {
+      const angles = { [t.letter]: sign * tilt, [u.letter]: held };
+      const got = axisFromAngles(angles, machine);
+      const miss = Math.hypot(got[0] - k[0], got[1] - k[1], got[2] - k[2]);
+      const travel = Math.abs(angles[t.letter] - (prev[t.letter] ?? 0));
+      if (!best || miss + 1e-6 * travel < best.miss + 1e-6 * best.travel) best = { angles, miss, travel };
+    }
+    const inRange = [t, u].every((axis) => (axis.min == null || best.angles[axis.letter] >= axis.min - 1e-6)
+      && (axis.max == null || best.angles[axis.letter] <= axis.max + 1e-6));
+    if (inRange) {
+      return { angles: best.angles, reachable: true, branch: 0, nearPole, tilt };
+    }
+  }
 
   let branches = axisBranches(k, machine);
   if (branches.length === 0) {

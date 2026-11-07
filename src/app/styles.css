@@ -629,6 +629,31 @@ input.tree-rename:focus { outline: none; }
   padding: 0 5px;
 }
 .tree-item.selected .tree-badge { color: #fff; background: rgba(0, 0, 0, 0.25); }
+.tree-badge.danger {
+  background: #b3141b; color: #fff; font-weight: 700;
+  box-shadow: 0 0 0 2px rgba(255, 60, 60, 0.35);
+}
+.tree-item.selected .tree-badge.danger { background: #d0202a; }
+
+.collision-banner {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: #b3141b;
+  color: #fff;
+  border: 2px solid #ff6b6b;
+  border-radius: 8px;
+  box-shadow: 0 0 0 3px rgba(255, 40, 40, 0.22);
+}
+.collision-title { font-weight: 800; letter-spacing: 0.04em; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+.collision-icon { font-size: 20px; line-height: 1; }
+.collision-body { font-size: 12.5px; line-height: 1.45; margin-top: 4px; }
+.collision-actions { margin-top: 8px; }
+.collision-fix {
+  background: #fff; color: #8f0e14; border: 0; border-radius: 5px;
+  padding: 4px 12px; font-weight: 700; cursor: pointer;
+}
+.collision-fix:hover { background: #ffe3e3; }
+
 .tree-badge.warn {
   color: #1a1b1e;
   background: var(--warn);
@@ -1686,6 +1711,51 @@ button.pick-active {
 .sim-load:empty, .sim-verify:empty { visibility: hidden; }
 .sim-load:hover, .sim-verify:hover { border-color: var(--border-strong); color: var(--fg); }
 .sim-load.warn { color: var(--warn); }
+
+/* The tool is where it should not be: the one result of a simulation that has to be
+   impossible to read past. A red band across the view, red marks on the scrub bar, a red
+   badge on the operation, a red banner on its settings. */
+.sim-alert {
+  position: absolute;
+  top: 10px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex; align-items: center; gap: 12px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  padding: 8px 12px;
+  background: #b3141b;
+  color: #fff;
+  border: 2px solid #ff6b6b;
+  border-radius: 8px;
+  box-shadow: 0 0 0 4px rgba(255, 40, 40, 0.28), 0 8px 28px rgba(0, 0, 0, 0.55);
+  animation: sim-alert-pulse 1.6s ease-in-out infinite;
+}
+.sim-alert[hidden] { display: none; }
+@keyframes sim-alert-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(255, 40, 40, 0.28), 0 8px 28px rgba(0, 0, 0, 0.55); }
+  50% { box-shadow: 0 0 0 9px rgba(255, 40, 40, 0.1), 0 8px 28px rgba(0, 0, 0, 0.55); }
+}
+@media (prefers-reduced-motion: reduce) { .sim-alert { animation: none; } }
+.sim-alert-icon { font-size: 26px; line-height: 1; flex: none; }
+.sim-alert-title { font-weight: 800; font-size: 14px; letter-spacing: 0.04em; }
+.sim-alert-detail { font-size: 12px; opacity: 0.95; margin-top: 2px; max-width: 54ch; }
+.sim-alert-text { min-width: 0; }
+.sim-alert-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; white-space: nowrap; }
+.sim-alert-actions button {
+  background: rgba(0, 0, 0, 0.32); color: #fff; border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 5px; padding: 3px 10px; cursor: pointer; font-weight: 600;
+}
+.sim-alert-actions button:hover { background: rgba(0, 0, 0, 0.55); }
+.sim-alert-count { font-variant-numeric: tabular-nums; font-size: 12px; min-width: 3.2em; text-align: center; }
+
+.sim-track { position: relative; }
+.sim-ticks { position: absolute; left: 0; right: 0; top: 0; height: 16px; pointer-events: none; z-index: 2; }
+.sim-tick {
+  position: absolute; top: 0; width: 3px; height: 100%;
+  margin-left: -1px; background: #ff3b3b; border-radius: 1px;
+  box-shadow: 0 0 5px 1px rgba(255, 60, 60, 0.85);
+}
 .sim-five { min-width: 0; }
 .sim-five.bad { color: var(--danger-text); }
 /* The verification verdict, beside the load. Its own colours: a gouge is not a
