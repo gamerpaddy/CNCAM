@@ -15,7 +15,7 @@ import { mergeTolerance } from '../simplify.js';
 import {
   offsetLoops, diffLoops, offsetNormalized, loopArea, unionWithHoles,
 } from '../../geom/clipper.js';
-import { SilhouetteStack } from '../../geom/silhouette.js';
+import { SilhouetteStack, silhouetteAbove } from '../../geom/silhouette.js';
 import { depthLevelsFor, depthRefusal, stockOutline } from '../stock.js';
 import { applyRegionsToArea, regionRefusal } from '../regions.js';
 import { loopBorderedBy, pointInLoops, distanceToLoops } from '../../geom/inside.js';
@@ -134,6 +134,8 @@ export function generateClear({
   let zEntry = params.topZ;
   let cutAnything = false;
   let finalShadow = null;
+  let finalZ = params.bottomZ;
+  const allowance = Math.max(0, params.stockToLeave ?? 0);
   // What each level cleared, for where the finish passes may come down — see
   // engine/ground.js.
   const ground = new Ground({ stock, topZ: params.topZ });
@@ -145,13 +147,24 @@ export function generateClear({
   const leading = (lead.type ?? 'none') !== 'none' && lead.radius > 0;
   const levels = depthLevelsFor(params, mesh, tool);
   for (const z of levels) {
-    finalShadow = silhouette.down(z);
+    // The part as it stands the allowance *below* the cutter, not level with
+    // it. Stock to leave is a skin over the part, and a skin has a thickness
+    // upward as well as outward: measured level with the tip it was only ever
+    // sideways, so on a wall leaning 30 degrees off the flat a pass asked to leave
+    // 0.3mm left 0.15mm, and on anything nearly flat between two levels it left
+    // nothing — the corner of the cutter came down to the finished surface.
+    // Flat floors were already right (their levels sit the allowance above
+    // them, see depthLevelsFor); this is the same promise on a slope. The
+    // silhouette starts a hair above what it is asked for, so a floor exactly
+    // the allowance below a level is still the floor and not an obstacle.
+    finalShadow = silhouette.down(z - allowance);
+    finalZ = z;
     // What the part occupies at this level, as the cutter sees it. The region
     // is bounded by exactly this wherever the part bounds it, so a boundary
     // lying against it is a wall and one that is not is an edge the earlier
     // pass left — see ringSide.
-    const keepout = offsetLoops(finalShadow, r + (params.stockToLeave ?? 0), tolerance);
-    const region = regionAt(finalShadow, params.stockToLeave ?? 0, z);
+    const keepout = offsetLoops(finalShadow, r + allowance, tolerance);
+    const region = regionAt(finalShadow, allowance, z);
     if (region.length === 0) continue;
     const leadRoom = leading ? roomFor(keepout) : null;
 
@@ -242,9 +255,13 @@ export function generateClear({
     const laps = finishLaps(params.topZ, params.bottomZ, fluteLengthOf(tool));
     for (let i = 1; i <= finishPasses; i++) {
       const remaining = params.stockToLeave * (1 - i / finishPasses);
-      const keepout = offsetLoops(finalShadow, r + remaining, tolerance);
+      // the same skin, thinner: the part as it stands `remaining` below the
+      // last level, which for the final pass is the part itself
+      const shadow = remaining < allowance - 1e-9
+        ? silhouetteAbove(mesh, finalZ - remaining, { tolerance }) : finalShadow;
+      const keepout = offsetLoops(shadow, r + remaining, tolerance);
       const leadRoom = leading ? roomFor(keepout) : null;
-      for (const loop of regionAt(finalShadow, remaining)) {
+      for (const loop of regionAt(shadow, remaining)) {
         // The region's boundary is the part on one side and the stock edge on
         // the other, and only one of them is a wall. Re-cutting the stock edge
         // is a lap of the billet perimeter with the cutter tangent to it —

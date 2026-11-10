@@ -785,13 +785,15 @@ test('waterline reads the cutter shape, not just its diameter', () => {
       'the cylinder answer leaves the same millimetre however fine the passes');
   }
 
-  // The real answer's error *is* a sampling one: the profile is asked about on
-  // the pass grid, so it shrinks with the stepdown and is always well inside
-  // the cusp that stepdown leaves anyway (2mm and 0.5mm here).
+  // The real answer no longer depends on the stepdown at all. The bands the
+  // profile is asked about on the pass grid are still there, and still safe,
+  // but the drop-cutter field is intersected with them and on a slope it is the
+  // tighter of the two: what is left is a cell of that field, not a share of
+  // the stepdown. It used to be 0.46mm at a 0.5mm stepdown.
   const coarse = stockLeftUnderABall(at(1, ball));
   const fine = stockLeftUnderABall(at(0.25, ball));
-  assert.ok(coarse < 0.7, `a 1mm stepdown leaves ${coarse.toFixed(2)}mm, against 1.02`);
-  assert.ok(fine < coarse * 0.7, `a 0.25mm one leaves ${fine.toFixed(2)}mm`);
+  assert.ok(coarse < 0.12, `a 1mm stepdown leaves ${coarse.toFixed(2)}mm, against 1.02`);
+  assert.ok(fine < 0.12, `a 0.25mm one leaves ${fine.toFixed(2)}mm`);
 
   // And the direction that error is allowed to point, which is the whole reason
   // the residual above is what it is. Each band of the cutter's profile is

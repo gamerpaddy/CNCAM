@@ -11,7 +11,7 @@ import {
   buildFaces, buildEdges, faceFootprint, edgeFootprint, edgePolylines, edgeAtPoint,
 } from '../geom/faces.js';
 import { fixtureLoops } from '../engine/fixtures.js';
-import { clearedStack } from '../engine/rest.js';
+import { clearedStack, deductedBefore } from '../engine/rest.js';
 import { depthLevelsFor } from '../engine/stock.js';
 import { regionReachFor } from '../engine/op-reach.js';
 import { offsetLoops } from '../geom/clipper.js';
@@ -227,12 +227,12 @@ export function syncRegionOverlays(doc, viewport) {
  * Disabled operations are skipped, because a disabled operation is not going to
  * run and its ground is still standing.
  */
-function clearedByEarlier(doc, op, setup, mesh, tool) {
-  if (!setup || !op.params?.restMachining) return [];
+function clearedByEarlier(doc, op, setup, mesh, tool, stock) {
+  if (!setup) return [];
   const earlier = [];
-  for (const previous of setup.operations ?? []) {
-    if (previous.id === op.id) break;
-    if (!previous.enabled) continue;
+  // Which passes count is rest.js's to say: all of them with rest machining
+  // on, and the facing ones regardless for a roughing pass.
+  for (const previous of deductedBefore(op, setup.operations)) {
     const cl = doc.toolpaths.get(previous.id);
     const previousTool = doc.project.tools.find((t) => t.id === previous.toolId);
     if (cl && previousTool) earlier.push({ cl, tool: previousTool });
@@ -249,7 +249,7 @@ function clearedByEarlier(doc, op, setup, mesh, tool) {
   // repeated with rest machining on cut 11054mm against the 6310mm of the pass
   // it was supposed to be cleaning up after.
   return clearedStack(earlier, depthLevelsFor(op.params, mesh, tool),
-    { tolerance: op.params.tolerance ?? 0.01 });
+    { tolerance: op.params.tolerance ?? 0.01, stock });
 }
 
 /**
@@ -287,7 +287,8 @@ function wallBandFor(mode, includeGrow, params) {
   return Math.max(includeGrow * -2 + allowance + WALL_TANGENCY, EDGE_BAND);
 }
 
-export function resolveRegions(doc, op, transformMeshFn, setup = null, tool = null, mesh = null) {
+export function resolveRegions(doc, op, transformMeshFn, setup = null, tool = null, mesh = null,
+  stock = null) {
   // `edgePaths` is the picked edges as they are — polylines in space, in
   // machining order. The three loop lists are filters, and a filter is flat by
   // nature; an operation that runs *along* what was picked needs the height too.
@@ -301,7 +302,7 @@ export function resolveRegions(doc, op, transformMeshFn, setup = null, tool = nu
   const { cutRadius, includeGrow } = regionReachFor(op, tool);
   const tolerance = op.params?.tolerance ?? 0.01;
 
-  const cleared = clearedByEarlier(doc, op, setup, mesh, tool);
+  const cleared = clearedByEarlier(doc, op, setup, mesh, tool, stock);
   if (cleared.length) { out.cleared.push(...cleared); any = true; }
 
   // The setup's clamps are already in setup space — they were measured off the

@@ -28,7 +28,10 @@
 import { CLBuilder } from '../cl.js';
 import { plural } from '../text.js';
 import { mergeTolerance } from '../simplify.js';
-import { offsetLoops, unionLoops } from '../../geom/clipper.js';
+import { offsetLoops, unionLoops, intersectLoops, cleanLoops } from '../../geom/clipper.js';
+import {
+  buildHeightmap, buildToolKernel, toolLocationField, regionAbove,
+} from '../../geom/heightmap.js';
 import { SilhouetteStack } from '../../geom/silhouette.js';
 import { computeBounds } from '../../geom/mesh.js';
 import { depthPasses } from '../stock.js';
@@ -126,6 +129,33 @@ export function profileSteps(tool, spacing, maxBands = 12) {
   return steps;
 }
 
+/** Cell reads a tool-location field may cost: about three seconds of planning. */
+const FIELD_BUDGET = 2.5e9;
+
+/**
+ * The drop-cutter field for a shaped cutter, on a grid as fine as the budget
+ * allows. The cost goes as nodes times the cells under the cutter, which is
+ * the fourth power of one over the cell, so the cell is solved for rather than
+ * picked: a small part with a small cutter gets a fine one, a large part a
+ * coarser one, and both take about as long.
+ */
+function fieldKeepout(mesh, tool, tolerance) {
+  const r = tool.diameter / 2;
+  const box = computeBounds(mesh.positions);
+  const area = (box.max[0] - box.min[0] + 2 * r) * (box.max[1] - box.min[1] + 2 * r);
+  const cellSize = Math.max(tolerance, 0.04, ((area * Math.PI * r * r) / FIELD_BUDGET) ** 0.25);
+  const pad = r + 3 * cellSize;
+  const map = buildHeightmap(mesh, {
+    cellSize,
+    floor: box.min[2] - 1,
+    bounds: {
+      min: [box.min[0] - pad, box.min[1] - pad, box.min[2]],
+      max: [box.max[0] + pad, box.max[1] + pad, box.max[2]],
+    },
+  });
+  return { map, field: toolLocationField(map, buildToolKernel(tool, map.cellSize)) };
+}
+
 export function generateWaterline({
   mesh, tool, params: given, regions, stock, fixtures, earlier = null,
 }) {
@@ -205,6 +235,17 @@ export function generateWaterline({
   };
   const copyOf = (loops) => loops.map((loop) => loop.slice());
 
+  // A shaped cutter is asked a second way as well, and the two answers are
+  // intersected. The bands above are safe and, off a vertical wall, a long way
+  // out: each pairs the silhouette at the bottom of a band with the cutter at
+  // the top of it, and on a slope both halves of that are slack. A 6mm ball on a
+  // 27 degree ramp stood 0.95mm further off than it touches and left 0.46mm on a
+  // finishing pass, and no number of bands closes it. The drop cutter knows
+  // where the ball really sits, so its field is contoured at each level and the
+  // tool may go wherever *either* answer says it may. On a wall the bands are
+  // exact and win; on a slope the field wins, to within a cell.
+  const tight = steps.length > 1 ? fieldKeepout(mesh, tool, tolerance) : null;
+
   const levels = [];
   for (const z of passZs) {
     // the union of "how close may the tool get to what stands above *this*
@@ -230,6 +271,11 @@ export function generateWaterline({
       const key = [...widest].map(([shadow, radius]) => `${shadowIds.get(shadow)}@${radius}`).join('|');
       if (!unions.has(key)) unions.set(key, unionLoops(pieces));
       raw = copyOf(unions.get(key));
+    }
+    if (tight && raw.length) {
+      let above = unionLoops(regionAbove(tight.field, tight.map, z));
+      if (above.length && stockToLeave > 0) above = offsetLoops(above, stockToLeave, tolerance);
+      raw = above.length ? cleanLoops(intersectLoops(raw, above), tolerance / 2) : [];
     }
     if (raw.length === 0) continue;
     const { closed, open } = applyRegionsToPaths(raw, regions, { ...clip, z });

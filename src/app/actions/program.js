@@ -23,6 +23,7 @@ const MAX_CHECKED_PROGRAM = 2_000_000;
 import { transformMesh } from '../../engine/setup.js';
 import { turningProfile, barFromStock } from '../../engine/lathe.js';
 import { estimateSeconds, generateToolpath, READS_EARLIER } from '../../engine/toolpath.js';
+import { deductedBefore } from '../../engine/rest.js';
 import { orientationFor, indexingWarnings } from '../../engine/indexing.js';
 import { wrapFor, wrapWarnings, wrapExtent, linearExtent } from '../../engine/wrap.js';
 import { fiveFor } from '../../engine/five/post-data.js';
@@ -200,10 +201,12 @@ export function makeProgramActions(ctx, space) {
           meshPrepared = true;
         }
         // Rest machining reads what the operations above this one actually cut,
-        // so those have to have finished before this one is described. Only
-        // then, and only in that setup: making every job wait for the one
-        // before it would serialise a pool that exists to run them at once.
-        if (op.params?.restMachining && jobs.length) await Promise.all(jobs);
+        // so those have to have finished before this one is described — and a
+        // roughing pass reads the facing passes ahead of it the same way,
+        // whatever it is set to (engine/rest.js deductedBefore). Only then:
+        // making every job wait for the one before it would serialise a pool
+        // that exists to run them at once.
+        if (jobs.length && deductedBefore(op, setup.operations).length) await Promise.all(jobs);
 
         // What this toolpath is *of*, taken now — as the job is sent, not when it
         // comes back. Taken on the way back, it described whatever the operation
@@ -230,7 +233,7 @@ export function makeProgramActions(ctx, space) {
             // the mesh goes through as well as the tool: rest machining has to
             // know which depths this operation will cut at before it can say
             // what is already gone at each of them — see regions-ui.js
-            regions: resolveRegions(doc, op, intoSetup, setup, tool, mesh),
+            regions: resolveRegions(doc, op, intoSetup, setup, tool, mesh, stock),
             // An imported DXF the pass follows instead of the part's own
             // outline. Placed here rather than in the worker because where a
             // drawing sits depends on the stock, which is a document question.

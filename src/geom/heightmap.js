@@ -439,3 +439,100 @@ export function dropCutter(map, kernel, x, y) {
   }
   return best === -Infinity ? floor : best;
 }
+
+/**
+ * The lowest legal tip height at every node of the map: the drop cutter asked
+ * once everywhere, for the strategies that need the answer as a field rather
+ * than along a path (waterline with a shaped cutter contours it).
+ *
+ * @returns Float32Array, width x height, row-major like the map
+ */
+export function toolLocationField(map, kernel) {
+  const { width, height, cellSize } = map;
+  const field = new Float32Array(width * height);
+  for (let j = 0; j < height; j++) {
+    const y = map.min[1] + j * cellSize;
+    for (let i = 0; i < width; i++) {
+      field[j * width + i] = dropCutter(map, kernel, map.min[0] + i * cellSize, y);
+    }
+  }
+  return field;
+}
+
+/**
+ * Where a field stands above `level`, as closed loops: marching squares.
+ *
+ * Loops run with the high side on their left, so outer boundaries come out
+ * counter-clockwise and holes clockwise, which is what the polygon booleans
+ * read as solid and void.
+ *
+ * A crossing is placed by linear interpolation between the two nodes either
+ * side of it, but never further than half way from the low node. Each value
+ * is the drop cutter rounded to its node, so it speaks for the half cell round
+ * that node and no more: a point past the midpoint belongs to the high node,
+ * and nothing is known about it except that the tool may not be assumed to
+ * fit. Clamping there keeps the contour on ground the low node vouches for.
+ *
+ * The outermost ring of nodes is read as low whatever it holds, so every loop
+ * closes. Callers build the map wider than the part by more than the cutter.
+ */
+export function regionAbove(field, map, level) {
+  const { width: W, height: H, cellSize, min } = map;
+  const high = (i, j) => i > 0 && j > 0 && i < W - 1 && j < H - 1 && field[j * W + i] > level;
+  // edge ids: 2k is the edge from node k to the node on its right, 2k+1 the one above it
+  const next = new Map();
+  const link = (a, b) => next.set(a, b);
+  for (let j = 0; j < H - 1; j++) {
+    for (let i = 0; i < W - 1; i++) {
+      const k = j * W + i;
+      const code = (high(i, j) ? 1 : 0) | (high(i + 1, j) ? 2 : 0)
+        | (high(i + 1, j + 1) ? 4 : 0) | (high(i, j + 1) ? 8 : 0);
+      if (code === 0 || code === 15) continue;
+      const e0 = 2 * k; const e1 = 2 * (k + 1) + 1; const e2 = 2 * (k + W); const e3 = 2 * k + 1;
+      switch (code) {
+        case 1: link(e0, e3); break;
+        case 2: link(e1, e0); break;
+        case 3: link(e1, e3); break;
+        case 4: link(e2, e1); break;
+        case 5: link(e0, e1); link(e2, e3); break;
+        case 6: link(e2, e0); break;
+        case 7: link(e2, e3); break;
+        case 8: link(e3, e2); break;
+        case 9: link(e0, e2); break;
+        case 10: link(e3, e0); link(e1, e2); break;
+        case 11: link(e1, e2); break;
+        case 12: link(e3, e1); break;
+        case 13: link(e0, e1); break;
+        default: link(e3, e0); break;   // 14
+      }
+    }
+  }
+  const pointOn = (edge, out) => {
+    const k = edge >> 1;
+    const i = k % W; const j = (k - i) / W;
+    const vertical = edge & 1;
+    const i2 = vertical ? i : i + 1; const j2 = vertical ? j + 1 : j;
+    const aHigh = high(i, j);
+    // from the low node toward the high one
+    const [li, lj, hi, hj] = aHigh ? [i2, j2, i, j] : [i, j, i2, j2];
+    const low = field[lj * W + li]; const top = field[hj * W + hi];
+    let t = top > low && low <= level ? (level - low) / (top - low) : 0;
+    if (!(t >= 0)) t = 0;
+    if (t > 0.5) t = 0.5;
+    out.push(min[0] + (li + (hi - li) * t) * cellSize, min[1] + (lj + (hj - lj) * t) * cellSize);
+  };
+  const loops = [];
+  for (const start of [...next.keys()]) {
+    if (!next.has(start)) continue;
+    const loop = [];
+    let edge = start;
+    while (next.has(edge)) {
+      pointOn(edge, loop);
+      const to = next.get(edge);
+      next.delete(edge);
+      edge = to;
+    }
+    if (loop.length >= 6) loops.push(loop);
+  }
+  return loops;
+}

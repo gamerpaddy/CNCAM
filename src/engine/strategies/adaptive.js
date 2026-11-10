@@ -44,7 +44,7 @@ import { SilhouetteStack } from '../../geom/silhouette.js';
 import { depthLevelsFor, depthRefusal, stockOutline } from '../stock.js';
 import { applyRegionsToArea, regionRefusal } from '../regions.js';
 import { orientLoop } from '../leads.js';
-import { cutSpanWithRamp } from '../linking.js';
+import { cutSpanWithRamp, rampSlopeFor } from '../linking.js';
 import { applyCutting } from '../cutting.js';
 import { entryPlane, crossingPlane, goHome } from '../heights.js';
 import { mergeTolerance } from '../simplify.js';
@@ -194,7 +194,9 @@ export function generateAdaptive({
 
   const levels = depthLevelsFor(params, mesh, tool);
   for (const z of levels) {
-    const shadow = silhouette.down(z);
+    // the part as it stands the allowance below the tip: the skin left on is as
+    // thick upward as it is outward — see the note in clear2d.js
+    const shadow = silhouette.down(z - Math.max(0, stockToLeave));
     // where the centre may go, and what is still standing at this level
     let allowed = applyRegionsToArea(
       diffLoops(outer, offsetLoops(shadow, r + stockToLeave, tolerance)),
@@ -951,9 +953,22 @@ class LevelCutter {
     }
     // A ramp starts from the top of what it enters, which is the level above
     // unless that left something standing here — see topAt.
+    const zTop = Math.max(this.zEntry, this.topAt(sx, sy));
+    // An entry's passes are leads, not cuts: they open the hole the rest of the
+    // peel starts from. But only its *passes*. Every move of an entry used to be
+    // written as a lead, the way down included, and a lead runs at the cutting
+    // feed — so the one move that most needs the plunge feed, the descent into
+    // solid, was posted at five times it.
+    const sink = entry
+      ? (x, y, z, feed = FEED.CUT) => this.emit(x, y, z, feed === FEED.CUT ? FEED.LEAD : feed)
+      : this.emit;
+    if (entry && this.rampAngle > 0 && zTop > this.z + 1e-9 && isClosed(span)) {
+      this.cursor = this.helixDown(span, zTop, sink);
+      return;
+    }
     this.cursor = cutSpanWithRamp(
-      entry ? (x, y, z) => this.emit(x, y, z, FEED.LEAD) : this.emit,
-      span, Math.max(this.zEntry, this.topAt(sx, sy)), this.z, this.rampAngle,
+      sink,
+      span, zTop, this.z, this.rampAngle,
       {
         // a span no longer than the cutter is wide cannot be ramped into — see
         // engine/linking.js
@@ -963,6 +978,63 @@ class LevelCutter {
         },
       },
     );
+  }
+
+  /**
+   * Down into solid round the opening circle of a seeded peel: a helix.
+   *
+   * The circle that opens a walled-off region — a pocket, a hole the peel from
+   * outside cannot reach — is deliberately small, no wider than a bite, and so
+   * its whole circumference is shorter than the cutter is wide. The open-span
+   * ramp reads that as "too short to ramp" and plunges, which is right for an
+   * arc that goes nowhere and wrong for a circle: going round it *is* somewhere
+   * to go. It plunged a flat end mill 6.7mm straight down into a closed pocket,
+   * and a flat end mill does not cut at its centre.
+   *
+   * So the tool goes round the circle on its way down, at the ramp angle, and
+   * takes one more lap at depth to flatten what the last turn left. More laps
+   * are allowed than a zig-zag is given: a lap here is a few millimetres, and
+   * steepening the helix to save them is the wrong trade.
+   *
+   * @returns the [x, y] the tool finishes on
+   */
+  helixDown(span, zTop, emit) {
+    const ring = span.slice(0, -1);
+    const n = ring.length;
+    const lap = pathLength(span);
+    const depth = zTop - this.z;
+    const { slope, steepened } = rampSlopeFor(depth, lap, this.rampAngle, HELIX_LAPS);
+    if (steepened) {
+      this.report.steepest = Math.max(this.report.steepest, (Math.atan(slope) * 180) / Math.PI);
+    }
+    this.report.helixes = (this.report.helixes ?? 0) + 1;
+    emit(ring[0][0], ring[0][1], zTop, FEED.PLUNGE);     // through air to the top of the metal
+    let z = zTop;
+    let i = 0;
+    for (let guard = n * (HELIX_LAPS + 2); guard > 0 && z > this.z + 1e-9; guard--) {
+      const a = ring[i % n];
+      const b = ring[(i + 1) % n];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const dz = len * slope;
+      i++;
+      if (dz <= 1e-12) continue;
+      if (z - dz <= this.z + 1e-9) {
+        const f = (z - this.z) / dz;
+        emit(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, this.z, FEED.RAMP);
+        z = this.z;
+        emit(b[0], b[1], this.z, FEED.LEAD);
+        break;
+      }
+      z -= dz;
+      emit(b[0], b[1], z, FEED.RAMP);
+    }
+    if (z > this.z + 1e-9) emit(ring[i % n][0], ring[i % n][1], this.z, FEED.PLUNGE);   // a degenerate ring
+    // once round at depth
+    for (let k = 1; k <= n; k++) {
+      const q = ring[(i + k) % n];
+      emit(q[0], q[1], this.z, FEED.LEAD);
+    }
+    return ring[i % n];
   }
 
   /**
@@ -1176,6 +1248,17 @@ function densify(pts, step) {
     }
   }
   return out;
+}
+
+/** The most turns a helical entry takes before it is steepened instead. */
+const HELIX_LAPS = 40;
+
+/** Does a span of [x, y] points end where it began? */
+function isClosed(span) {
+  if (span.length < 4) return false;
+  const a = span[0];
+  const b = span[span.length - 1];
+  return Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6;
 }
 
 /** A closed CCW circle, as a flat loop. */

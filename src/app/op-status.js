@@ -6,6 +6,7 @@
 // the properties panel can put in front of them.
 
 import { toolpathStats, READS_EARLIER } from '../engine/toolpath.js';
+import { deductedBefore } from '../engine/rest.js';
 import {
   roughingLeftover as leftoverAfter, suggestedEntryGap, stepsTooTallFor,
 } from '../engine/heights.js';
@@ -211,8 +212,12 @@ export function opFingerprint(doc, op, setup = null) {
     // Boring is the same on a lathe: it starts from the hole the drill ahead
     // of it made (see engine/strategies/turning.js drilledHole), so changing
     // that drill changes the bore without touching the bore's own settings.
-    (op.params?.restMachining || READS_EARLIER.has(op.type)) && setup
-      ? earlierFingerprints(doc, op, setup) : null,
+    //
+    // And a roughing pass leaves out what a facing pass ahead of it took off,
+    // with rest machining off (engine/rest.js deductedBefore) — so that facing
+    // pass is part of it too, and only that one: a roughing pass must not go
+    // out of date because a drill above it changed its peck.
+    setup ? earlierFingerprints(doc, op, setup) : null,
   ]);
 }
 
@@ -236,6 +241,10 @@ function fiveMachineFacts(doc) {
  * it: rest machining, and the strategies in `READS_EARLIER`.
  */
 function earlierFingerprints(doc, op, setup) {
+  const deducted = deductedBefore(op, setup.operations);
+  if (!READS_EARLIER.has(op.type)) {
+    return deducted.length ? deducted.map((previous) => opFingerprint(doc, previous, setup)) : null;
+  }
   const out = [];
   for (const previous of setup.operations ?? []) {
     if (previous.id === op.id) break;

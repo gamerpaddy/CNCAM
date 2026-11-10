@@ -21,6 +21,7 @@
 
 import {
   diffLoops, intersectLoops, clipOpenPaths, loopToOpenPath, offsetLoops, loopArea,
+  unionWithHoles,
 } from '../geom/clipper.js';
 import { pointInLoops } from '../geom/inside.js';
 
@@ -190,8 +191,58 @@ export function applyRegionsToArea(loops, regions, {
   let out = loops;
   if (include.length) out = intersectLoops(out, include);
   if (avoid.length) out = diffLoops(out, avoid);
-  if (cleared.length) out = diffLoops(out, cleared);
+  if (cleared.length) {
+    out = diffLoops(out, cleared);
+    out = reachingMetal(out, clearedAt(regions, z), radius, tolerance);
+  }
   return out;
+}
+
+/** The thinnest film of standing metal a rest pass goes back for, in mm. */
+const FILM = 0.02;
+
+/**
+ * What is left of a region once the cleared ground is out of it, less the
+ * pieces that have no metal to cut.
+ *
+ * The deduction is a boolean between two shapes that are, along every wall the
+ * earlier cutter reached, *the same curve* — the part offset by one radius and
+ * the part offset by another and brought back. They agree to within the arc
+ * tolerance and not exactly, so what survives the subtraction along such a wall
+ * is a string of slivers a few microns wide, one at each facet of a round hole.
+ * Each of them is a region, and a region gets an entry and a pass: a ⌀3 cutter
+ * cleaning up after a ⌀8 one on the hole plate made 455 separate descents, 32
+ * of them at every level round a hole the ⌀8 had finished, and 4.1m of ramping
+ * for 0.8m of cut.
+ *
+ * Whether a piece is worth visiting is not a question about its own width — a
+ * slot exactly as wide as the cutter is a region of no width at all with a
+ * cutter's worth of metal in it. It is a question about the metal. So: take
+ * everything the cutter would sweep from the surviving centres, remove what is
+ * already cleared, and what remains is the standing metal those centres are
+ * there for. A piece is kept when some of that metal is thicker than a film,
+ * and dropped when none of it is.
+ *
+ * Whole pieces, kept or dropped; never trimmed. Trimming would put a new edge
+ * through a region the walker is about to offset, for the sake of a few
+ * millimetres of path.
+ */
+function reachingMetal(loops, cleared, radius, tolerance) {
+  if (loops.length === 0 || cleared.length === 0 || !(radius > 0)) return loops;
+  const film = Math.max(FILM, 2 * tolerance);
+  const metal = diffLoops(offsetLoops(loops, radius, tolerance), cleared);
+  const thick = metal.length ? offsetLoops(metal, -film / 2, tolerance) : [];
+  if (thick.length === 0) return [];
+  // back out to full size, and then to every centre whose cutter touches it
+  const within = offsetLoops(thick, film / 2 + radius + tolerance, tolerance);
+  const pieces = unionWithHoles(loops);
+  const kept = [];
+  let dropped = 0;
+  for (const { outer, holes } of pieces) {
+    if (intersectLoops([outer, ...holes], within).length === 0) { dropped++; continue; }
+    kept.push(outer, ...holes);
+  }
+  return dropped ? kept : loops;
 }
 
 /**

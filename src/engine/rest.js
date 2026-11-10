@@ -32,8 +32,51 @@
 // of feed motion removed no metal at all.
 
 import { eachMove, OP, FEED } from './cl.js';
-import { bufferOpenPaths, unionLoops } from '../geom/clipper.js';
+import { bufferOpenPaths, unionLoops, diffLoops } from '../geom/clipper.js';
 import { profileTable } from './tool-geometry.js';
+import { stockOutline } from './stock.js';
+
+/**
+ * The roughing strategies that start from the billet as it stands, and so are
+ * told what a facing pass ahead of them took off without being asked.
+ *
+ * Rest machining is a switch, and off is the right default for it: whether a
+ * second cutter should skip the first one's ground is a decision. Facing is not
+ * like that. A facing pass exists to remove the top of the billet, the roughing
+ * pass after it opens with a level across the top of the billet, and nobody
+ * means the second one to repeat the first. It did: on the step plate the whole
+ * of the opening level ran through air a face mill had already been over, 2.1m
+ * of a Z-level rough and 7.3m of an adaptive one — a third of that operation.
+ *
+ * Only these two, because they are the ones that cut a level at the top of the
+ * stock. A second facing pass at the same height is a spring pass and has to
+ * stay one.
+ */
+const ROUGHS_THE_BILLET = new Set(['clear2d', 'adaptive']);
+
+/**
+ * The operations ahead of `op` whose cuts it leaves out, in program order.
+ *
+ * All of them with rest machining on; the facing passes otherwise, for the
+ * strategies above. One answer, because three places need it and they may not
+ * disagree: what is deducted (app/regions-ui.js), what the operation's
+ * fingerprint is made from (app/op-status.js), and which jobs have to finish
+ * before this one is described (app/actions/program.js).
+ *
+ * Disabled operations are skipped — a pass that is not going to run has cleared
+ * nothing.
+ */
+export function deductedBefore(op, operations) {
+  const all = !!op?.params?.restMachining;
+  if (!all && !ROUGHS_THE_BILLET.has(op?.type)) return [];
+  const out = [];
+  for (const previous of operations ?? []) {
+    if (previous.id === op.id) break;
+    if (!previous.enabled) continue;
+    if (all || previous.type === 'face') out.push(previous);
+  }
+  return out;
+}
 
 /**
  * Radii are grouped into buckets this wide, in mm, before the paths are chained.
@@ -49,6 +92,23 @@ import { profileTable } from './tool-geometry.js';
  * Rounded *down*, so a bucket never claims more reach than the tool had.
  */
 const RADIUS_BUCKET = 0.05;
+
+/**
+ * How far above the depth asked about a move may sit and still be *at* it, in mm.
+ *
+ * The moves are stored as 32-bit floats and the depth asked about is a double,
+ * and the two are the same number only when it happens to be a binary fraction:
+ * a level at Z-10.7 is stored as -10.69999981, which is above -10.7. Compared
+ * to a billionth of a millimetre, a pass that cut *exactly the level being
+ * asked about* never counted — and two roughing passes on one part share their
+ * levels by construction, because both add one at each of the part's flats.
+ * Measured on the step plate, an adaptive rest pass after a complete Z-level
+ * rough: 5.86m of feed, 98.3% of it through air.
+ *
+ * A float this size is good to better than a hundred-thousandth of a
+ * millimetre; a tenth of a micron of standing metal is not a cut.
+ */
+const SAME_LEVEL = 1e-4;
 
 /**
  * The XY area earlier programs have already cleared down to `z`.
@@ -103,8 +163,48 @@ export function clearedStack(earlier, levels, options = {}) {
   const zs = [...new Set(levels)].filter((z) => Number.isFinite(z)).sort((a, b) => a - b);
   // deepest first, which is also smallest first: the area only grows as the
   // question moves up the part
+  const outside = options.stock ? outsideOf(options.stock, options.tolerance ?? 0.01) : [];
   return zs.map((z) => ({ z, loops: clearedArea(earlier, z, options) }))
-    .filter((slice) => slice.loops.length > 0);
+    .filter((slice) => slice.loops.length > 0)
+    .map((slice) => (outside.length
+      ? { z: slice.z, loops: unionLoops([...slice.loops, ...outside]) } : slice));
+}
+
+/** How far round the billet "there is nothing out here" is stated, in mm. */
+const FAR = 1000;
+
+/**
+ * Everything that is not billet: a wide frame with the stock's footprint cut
+ * out of it.
+ *
+ * What an earlier pass cleared is read off where its cutter went, and a cutter
+ * does not go far past the edge of the stock — so the area it leaves stops a
+ * radius or so outside the billet, and the ground beyond that reads as *not
+ * cleared*. It is the one place that needs no clearing at all. A rest pass
+ * handed that deduction found a band between "cleared" and the edge of its own
+ * region, all the way round the billet, and cut it: a lap round the outside of
+ * the stock at every level, 489mm of it on the step plate, through nothing.
+ *
+ * Joined to a slice only where an earlier pass cleared something at that depth
+ * — a level nobody has touched keeps the empty answer, and with it the path it
+ * always had. Inside the footprint by the same hair `clearedArea` reaches past
+ * a swept edge, and for the same reason: two booleans must not share an edge.
+ */
+function outsideOf(stock, tolerance) {
+  const hole = stockOutline(stock, -tolerance);
+  if (!hole.length) return [];
+  let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
+  for (const loop of hole) {
+    for (let i = 0; i + 1 < loop.length; i += 2) {
+      if (loop[i] < x0) x0 = loop[i];
+      if (loop[i] > x1) x1 = loop[i];
+      if (loop[i + 1] < y0) y0 = loop[i + 1];
+      if (loop[i + 1] > y1) y1 = loop[i + 1];
+    }
+  }
+  if (!(x1 > x0) || !(y1 > y0)) return [];
+  const frame = [x0 - FAR, y0 - FAR, x1 + FAR, y0 - FAR, x1 + FAR, y1 + FAR, x0 - FAR, y1 + FAR];
+  return diffLoops([frame], hole);
 }
 
 /**
@@ -178,11 +278,11 @@ function cuttingPathsBelow(cl, z, tool) {
     // A drill is a cut too, and the hole it leaves is exactly the tool: its one
     // move stands for the whole depth, so it counts wherever it ends up.
     const drilling = op === OP.DRILL;
-    const low = moveZ <= z + 1e-9;
+    const low = moveZ <= z + SAME_LEVEL;
     if (drilling && low) {
       pathsFor(bucketFor(moveZ)).push([x, y, x, y]);
       current = null;
-    } else if (cutting && low && prev && prev[2] <= z + 1e-9) {
+    } else if (cutting && low && prev && prev[2] <= z + SAME_LEVEL) {
       const radius = bucketFor(Math.max(moveZ, prev[2]));
       if (!current || radius !== currentRadius) {
         current = [prev[0], prev[1]];
