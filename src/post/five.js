@@ -69,6 +69,15 @@ export function fiveAxisWriter(five, motion, hooks) {
   const mode = five.tcp;
   const pivot = five.pivot ?? [0, 0, 0];
   const none = mode === 'none';
+  const tolerance = five.tipTolerance ?? TIP_TOLERANCE;
+  if (!Number.isFinite(tolerance) || tolerance <= 0) throw new Error('5-axis interpolation tolerance must be a positive finite number');
+  const fail = (code, detail, data = {}) => {
+    const error = new Error(`${five.operation ?? '5-axis operation'}: ${detail}`);
+    error.code = code;
+    error.finding = { operation: five.operation, move: sourceMove, ...data };
+    throw error;
+  };
+  let sourceMove = -1;
   const letters = five.rotary.map((a) => a.letter);
   const rotaryFeed = Math.min(
     ...five.rotary.map((a) => a.maxFeed ?? DEFAULT_ROTARY_FEED), DEFAULT_ROTARY_FEED,
@@ -104,7 +113,7 @@ export function fiveAxisWriter(five, motion, hooks) {
    * The poses between the last one and this one: the tip and the axis at each,
    * and the angles that point the spindle that way.
    */
-  const piecesTo = (point, a) => {
+  const piecesTo = (point, a, rapid) => {
     const swing = angleBetween(axis, a);
     let n = Math.max(1, Math.ceil(swing / MAX_SWING));
     // …and by what the rotary axes actually do to get there
@@ -119,6 +128,7 @@ export function fiveAxisWriter(five, motion, hooks) {
         const p = tip ? lerp(tip, point, t) : point;
         const k = blendAxis(axis, a, t);
         const choice = chooseAngles(k, machine, from);
+        if (!choice.reachable) fail('FIVE_AXIS_UNREACHABLE', choice.reason ?? 'Requested orientation is outside rotary travel', { orientation: k, angles: choice.angles, fraction: t });
         out.push({ p, k, choice });
         from = choice.angles;
       }
@@ -148,14 +158,19 @@ export function fiveAxisWriter(five, motion, hooks) {
       poses = finer;
       worst = next;
     }
-    if (none && tip) {
+    if (none && tip && !rapid) {
       // without TCP the joints go in straight lines and the tip follows them:
       // cut it finer until the tip is where the CL said to within tolerance
       for (let round = 0; round < 6; round++) {
-        if (deviation(poses) <= TIP_TOLERANCE) break;
+        if (deviation(poses) <= tolerance) break;
+        if (n * 2 > 8192) break;
         n *= 2;
         poses = walk(n);
       }
+    }
+    if (none && tip && !rapid) {
+      const error = deviation(poses);
+      if (error > tolerance) fail('FIVE_AXIS_TOLERANCE', `Interpolation error ${error.toFixed(6)} mm exceeds ${tolerance} mm; refinement budget exhausted`, { error, tolerance });
     }
     return poses;
   };
@@ -168,16 +183,14 @@ export function fiveAxisWriter(five, motion, hooks) {
     let prevMachine = tipToMachine(tip, angles, machine, pivot);
     for (const { p, k, choice } of poses) {
       const here = tipToMachine(p, choice.angles, machine, pivot);
-      // halfway through the block the control has every axis halfway
-      const midAngles = Object.fromEntries(letters.map(
-        (l) => [l, (prevAngles[l] + choice.angles[l]) / 2]));
-      const midMachine = [
-        (prevMachine[0] + here[0]) / 2, (prevMachine[1] + here[1]) / 2, (prevMachine[2] + here[2]) / 2,
-      ];
-      // where that is on the part: undo the table's turn at the halfway angles
-      const mid = machineToTipAt(midMachine, midAngles);
-      const want = lerp(prevPoint, p, 0.5);
-      worst = Math.max(worst, Math.hypot(mid[0] - want[0], mid[1] - want[1], mid[2] - want[2]));
+      for (const t of [0.25, 0.5, 0.75]) {
+        const midAngles = Object.fromEntries(letters.map(
+          l => [l, prevAngles[l] + (choice.angles[l] - prevAngles[l]) * t]));
+        const midMachine = lerp(prevMachine, here, t);
+        const mid = machineToTipAt(midMachine, midAngles);
+        const want = lerp(prevPoint, p, t);
+        worst = Math.max(worst, Math.hypot(mid[0] - want[0], mid[1] - want[1], mid[2] - want[2]));
+      }
       prevPoint = p;
       prevAngles = choice.angles;
       prevMachine = here;
@@ -187,6 +200,7 @@ export function fiveAxisWriter(five, motion, hooks) {
   const machineToTipAt = (x, a) => machineToTip(x, a, machine, pivot);
 
   const write = (w, modal, m) => {
+    sourceMove = m.sourceMove ?? sourceMove + 1;
     if (!write.started) {
       write.started = true;
       if (none) { w.line('G93'); modal.force('F'); }
@@ -209,7 +223,7 @@ export function fiveAxisWriter(five, motion, hooks) {
         angles = home;
       }
     }
-    const poses = piecesTo(point, a);
+    const poses = piecesTo(point, a, m.rapid);
     const before0 = tip;
     let before = tip;
     for (const { p, k, choice } of poses) {

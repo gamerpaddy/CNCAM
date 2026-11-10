@@ -518,7 +518,7 @@ export function opPreflight(doc, op) {
       notes.push('The cutter is offset from the line, so the mark will not land on it.');
     }
   }
-  if ((op.type === 'parallel3d' || op.type === 'waterline' || op.type === 'finish5') && tool?.type === 'flat') {
+  if ((op.type === 'parallel3d' || op.type === 'waterline' || isFiveAxisOp(op.type)) && tool?.type === 'flat') {
     notes.push('A flat cutter leaves steps on curved surfaces — a ball or bull nose '
       + 'follows the form.');
   }

@@ -64,7 +64,12 @@ export function importCad(buffer, kind, linearDeflection) {
   const id = nextId++;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject, kind });
-    getWorker().postMessage({ id, kind, buffer, linearDeflection }, [buffer]);
+    try {
+      getWorker().postMessage({ id, kind, buffer, linearDeflection }, [buffer]);
+    } catch (err) {
+      pending.delete(id);
+      reject(err);
+    }
   });
 }
 

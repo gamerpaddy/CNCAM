@@ -198,7 +198,7 @@ export function pickToolFor(type, tools) {
     if (matches.length === 0) continue;
     // finishing and anything going down a hole want the small one; everything
     // else wants the stiff one
-    const wantSmallest = type === 'engrave' || type === 'parallel3d' || type === 'waterline' || type === 'finish5'
+    const wantSmallest = type === 'engrave' || type === 'parallel3d' || type === 'waterline' || type.startsWith('finish5')
       || type === 'turnFinish' || type === 'turnBore' || type === 'turnGroove';
     return matches.sort((a, b) => (wantSmallest ? a.diameter - b.diameter : b.diameter - a.diameter))[0];
   }

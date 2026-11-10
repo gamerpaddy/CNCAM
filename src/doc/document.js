@@ -696,6 +696,7 @@ export class Document extends EventTarget {
    */
   restore(project, meshes = new Map()) {
     this.project = project;
+    this.pending.clear();
     this.meshes = new Map(meshes);
     this.toolpaths.clear();
     this.fingerprints.clear();

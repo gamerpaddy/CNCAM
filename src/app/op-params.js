@@ -24,8 +24,11 @@ export const CUT_DIRECTION_LABELS = {
   both: 'Either way — shortest path',
 };
 
-export const PATTERNS = ['zigzag', 'oneway', 'flow'];
+export const PATTERNS = ['zigzag', 'oneway', 'flow', 'concentric', 'spiral', 'radial'];
 export const PATTERN_LABELS = {
+  concentric: 'Concentric (around centre)',
+  spiral: 'Spiral (outside to centre)',
+  radial: 'Radial (centre outward)',
   zigzag: 'Zig-zag',
   oneway: 'One-way',
   flow: 'Follow slope (3D)',
@@ -392,7 +395,9 @@ export const OP_PARAM_GROUPS = [
         // nothing anywhere to say so.
         key: 'stepover', label: 'Stepover (×D)', step: 0.05, min: 0.01, max: 1,
         ops: ['face', 'pocket', 'clear2d', 'parallel3d', 'finish5', 'bore', 'slot'],
-        labelFor: (op) => (op.type === 'bore' ? 'Radial step (×D)'
+        labelFor: (op) => (op.type === 'finish5' && op.params.pattern === 'radial' ? 'Outer spacing (×D)'
+          : op.type === 'finish5' && op.params.pattern === 'spiral' ? 'Spiral pitch (×D)'
+          : op.type === 'bore' ? 'Radial step (×D)'
           : op.type === 'slot' ? 'Step between lanes (×D)' : null),
         hint: 'Fraction of the tool diameter stepped between passes',
         // a slot no wider than the cutter is one lane; there is nothing to step
@@ -523,16 +528,34 @@ export const OP_PARAM_GROUPS = [
         key: 'pattern', label: 'Pattern', type: 'select',
         options: PATTERNS, labels: PATTERN_LABELS,
         ops: ['face', 'parallel3d', 'finish5'],
-        // facing is a flat operation; there is no slope for it to follow, and the
-        // 5-axis finish is a raster whatever else it does
-        filterOptions: (op) => (op.type === 'face' || op.type === 'finish5'
-          ? PATTERNS.filter((p) => p !== 'flow') : PATTERNS),
+        filterOptions: (op) => PATTERNS.filter(p =>
+          ['concentric','spiral','radial'].includes(p) ? op.type.startsWith('finish5') : p === 'flow' ? op.type === 'parallel3d' : true),
+        hint: 'Concentric makes circular laps; Spiral winds inward; Radial cuts spokes. All use setup XY. Zig-zag and One-way use straight raster passes.',
+
       },
+      {
+        key: 'ringDirection', label: 'Ring direction', type: 'select',
+        options: ['alternate','cw','ccw'], labels: {alternate:'Alternate',cw:'Clockwise',ccw:'Counterclockwise'},
+        ops: ['finish5'], when: op => op.params.pattern === 'concentric',
+        hint: 'Direction viewed from +Z toward setup XY. A fixed direction may require more rotary unwinds.',
+      },
+      {
+        key: 'radialDirection', label: 'Spoke direction', type: 'select',
+        options: ['alternate','outward','inward'], labels: {alternate:'Alternate',outward:'Centre outward',inward:'Outside inward'},
+        ops: ['finish5'], when: op => op.params.pattern === 'radial',
+        hint: 'Alternate joins neighbouring spokes where verified. One-way spokes retract between passes.',
+      },
+      ...['X','Y'].map(axis => ({
+        key: `patternCenter${axis}`, label: `Pattern centre ${axis} (mm)`,
+        nullable: true, placeholder: 'Automatic', step: 0.1, ops: ['finish5'],
+        when: op => ['concentric','spiral','radial'].includes(op.params.pattern),
+        hint: 'Setup coordinates. Leave empty to use the centre of the machining boundary.',
+      })),
       {
         key: 'angleDeg', label: 'Raster angle (°)', min: -360, max: 360,
         ops: ['face', 'parallel3d', 'finish5'],
         hint: 'Direction the raster lines run, measured from +X',
-        when: (op) => (op.params.pattern ?? 'zigzag') !== 'flow',
+        when: (op) => !['flow', 'concentric', 'spiral', 'radial'].includes(op.params.pattern ?? 'zigzag'),
       },
       {
         key: 'linkDistance', label: 'Stay down across (mm)', min: 0, step: 1,

@@ -42,7 +42,11 @@ export class UndoStack {
     if (this.collecting) return fn();   // a nested group joins the outer one
     const batch = [];
     this.collecting = batch;
-    try { fn(); } finally { this.collecting = null; }
+    let failure;
+    try { fn(); } catch (err) { failure = err; }
+    finally { this.collecting = null; }
+    // Preserve completed work in history even if a later step failed.
+    if (batch.length === 0 && failure) throw failure;
     if (batch.length === 0) return undefined;
     const command = batch.length === 1 ? batch[0] : {
       label: label ?? batch[0].label,
@@ -53,6 +57,7 @@ export class UndoStack {
     this.done.push(command);
     if (this.done.length > this.limit) this.done.shift();
     this.undone.length = 0;
+    if (failure) throw failure;
     return undefined;
   }
 

@@ -64,7 +64,15 @@ export class WorkerPool {
 
   dispatch(worker, task) {
     this.active.set(task.id, { ...task, worker });
-    worker.postMessage({ id: task.id, job: task.job, args: task.args }, task.transfer);
+    try {
+      worker.postMessage({ id: task.id, job: task.job, args: task.args }, task.transfer);
+    } catch (err) {
+      this.active.delete(task.id);
+      task.reject(err);
+      const next = this.queue.shift();
+      if (next) this.dispatch(worker, next);
+      else this.idle.push(worker);
+    }
   }
 
   onMessage(worker, msg) {
@@ -99,7 +107,13 @@ export class WorkerPool {
     // so a crash with work queued behind it left Generate on "Generating…"
     // for good. A replacement takes the next one.
     const next = this.queue.shift();
-    if (next) this.dispatch(this.spawn(), next);
+    if (next) {
+      try { this.dispatch(this.spawn(), next); }
+      catch (err) {
+        next.reject(err);
+        for (const task of this.queue.splice(0)) task.reject(err);
+      }
+    }
   }
 
   /** Cooperative cancel: worker checks between slices. */

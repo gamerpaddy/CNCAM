@@ -94,6 +94,7 @@ export function makeProgramActions(ctx, space) {
     // first thing anyone did after generating was close it by hand.
     if (ctx.simulation) closeSimulation({ quiet: true });
 
+    const projectAtStart = doc.project;
     const jobs = [];
     let disabled = 0;
     let unusable = 0;
@@ -123,7 +124,8 @@ export function makeProgramActions(ctx, space) {
     const failed = [];
     for (const setup of doc.setups()) {
       const { meshes, stock, matrix, offset } = resolveSetupSpace(setup);
-      const mesh = meshes.length ? mergeMeshes(meshes) : null;
+      let mesh = null;
+      let meshPrepared = false;
       // picked faces are stored in model space; move them into setup space so
       // they line up with the toolpaths
       const intoSetup = (m) => transformMesh(m, matrix, offset);
@@ -193,6 +195,10 @@ export function makeProgramActions(ctx, space) {
           reused++;
           continue;
         }
+        if (!meshPrepared) {
+          mesh = meshes.length ? mergeMeshes(meshes) : null;
+          meshPrepared = true;
+        }
         // Rest machining reads what the operations above this one actually cut,
         // so those have to have finished before this one is described. Only
         // then, and only in that setup: making every job wait for the one
@@ -250,19 +256,22 @@ export function makeProgramActions(ctx, space) {
             // or replaced, while the worker ran. Its path then belongs to
             // nothing: it sat in the store for the rest of the session, and
             // bumped the epoch that tells the viewport and the post to redraw.
-            if (!doc.findItem('op', op.id)) return;
+            if (doc.project !== projectAtStart || doc.findItem('op', op.id) !== op) return;
             doc.toolpaths.set(op.id, cl);
             doc.fingerprints.set(op.id, fingerprint);
             doc.failures.delete(op.id);
           }, (err) => {
+            if (doc.project !== projectAtStart || doc.findItem('op', op.id) !== op) return;
             console.error(err);
             doc.toolpaths.delete(op.id);
             doc.fingerprints.delete(op.id);
             failed.push({ op, message: err?.message ?? String(err) });
             doc.failures.set(op.id, err?.message ?? String(err));
           }).finally(() => {
-            doc.pending.delete(op.id);
-            drawArrived();
+            if (doc.project === projectAtStart) {
+              doc.pending.delete(op.id);
+              drawArrived();
+            }
           }),
         );
       }
@@ -303,6 +312,7 @@ export function makeProgramActions(ctx, space) {
     try {
       await Promise.all(jobs);
       finished = true;
+      if (doc.project !== projectAtStart) return;
       const cls = doc.enabledToolpaths();
       ctx.viewport.setToolpaths(doc.visibleToolpaths());
       const posted = refreshGcodePreview();
@@ -1049,15 +1059,20 @@ export function makeProgramActions(ctx, space) {
       // Skipped on a program too big to re-read while somebody is waiting. The
       // check is a courtesy on top of a preview, never something it may hang on.
       check: { maxLength: MAX_CHECKED_PROGRAM, fitTolerance: settings.arcTolerance },
-    }).then(({ text, lineMap, postCheck }) => {
+    }).then(({ text, lineMap, postCheck, checkStatus }) => {
       if (seq !== previewSeq || ctx.lastProgram !== shown) return;
-      ctx.lastProgram = { text, lineMap: new PackedLineMap(lineMap), ops, postCheck };
+      ctx.lastProgram = { text, lineMap: new PackedLineMap(lineMap), ops, postCheck, checkStatus };
       renderGcodePanel(ctx.ui.gcode, ctx.lastProgram, ctx);
       if (show) ctx.ui.showGcodePanel();
     }, (err) => {
       console.error(err);
       // asked again next time, rather than remembered as built
-      if (seq === previewSeq) previewKey = null;
+      if (seq === previewSeq) {
+        previewKey = null;
+        ctx.lastProgram = null;
+        renderGcodePanel(ctx.ui.gcode, null, ctx);
+        ctx.ui.setStatus(`Posting failed: ${err.message}`, true);
+      }
     }).finally(() => {
       if (previewBuild === build) previewBuild = null;
     });
@@ -1163,6 +1178,7 @@ export function makeProgramActions(ctx, space) {
   }
 
   async function exportGcode() {
+    try {
     await freshenForExport();
     const ops = postableOps();
     if (ops.length === 0) return ctx.ui.setStatus('Generate toolpaths before exporting', true);
@@ -1176,6 +1192,9 @@ export function makeProgramActions(ctx, space) {
     const left = leftOut();
     return ctx.ui.setStatus(`Exported ${plural(ops.length, 'operation')} — ${doc.postId()} post`
       + left.text, left.count > 0);
+    } catch (err) {
+      ctx.ui.setStatus(`Export blocked: ${err.message}`, true);
+    }
   }
 
   /**
@@ -1250,6 +1269,7 @@ export function makeProgramActions(ctx, space) {
    * that are no longer there.
    */
   async function exportOperationsSeparately() {
+    try {
     await freshenForExport();
     const ops = postableOps();
     if (ops.length === 0) return ctx.ui.setStatus('Generate toolpaths before exporting', true);
@@ -1276,10 +1296,14 @@ export function makeProgramActions(ctx, space) {
       ? `Exported ${plural(written, 'operation')} into ${folder} — ${doc.postId()} post`
       : `Exported ${plural(written, 'operation')} to your downloads — ${doc.postId()} post`)
       + left.text, left.count > 0);
+    } catch (err) {
+      ctx.ui.setStatus(`Export blocked: ${err.message}`, true);
+    }
   }
 
   /** One operation, on its own, from the operation's menu in the tree. */
   async function exportOneOperation(op) {
+    try {
     await freshenForExport(op);
     const cl = doc.toolpaths.get(op?.id);
     const setup = cl ? doc.findSetupOf(op.id) : null;
@@ -1294,6 +1318,9 @@ export function makeProgramActions(ctx, space) {
       return ctx.ui.setStatus('Export cancelled — nothing was written');
     }
     return ctx.ui.setStatus(`Exported ${op.name} — ${doc.postId()} post`);
+    } catch (err) {
+      ctx.ui.setStatus(`Export blocked: ${err.message}`, true);
+    }
   }
 
   /**

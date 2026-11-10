@@ -158,6 +158,10 @@ export const STRATEGY_DEFAULTS = {
   // 5-axis finishing. A touch of lead by default: a ball nose cutting on its tip
   // is cutting at no speed at all, and leaning it a few degrees is the point.
   finish5: {
+    patternCenterX: null,
+    patternCenterY: null,
+    radialDirection: 'alternate',
+    ringDirection: 'alternate',
     stepover: 0.1,
     tolerance: 0.01,
     pattern: 'zigzag',

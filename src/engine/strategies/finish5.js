@@ -38,6 +38,7 @@
 // points by position alone and would forget the axis between them.
 
 import { CLBuilder } from '../cl.js';
+import { checkMotion } from '../five/motion-check.js';
 import { buildHeightmap, buildToolKernel, dropCutter } from '../../geom/heightmap.js';
 import { regionRefusal } from '../regions.js';
 import { applyCutting } from '../cutting.js';
@@ -45,7 +46,7 @@ import {
   approach, entryPlane, clearOfRoughing, roughingNote,
 } from '../heights.js';
 import { finishingWindow } from './parallel3d.js';
-import { toolShells, leaningKernels } from '../five/tilt-kernel.js';
+import { toolShells, leaningKernels, buildTiltedKernel } from '../five/tilt-kernel.js';
 import { chooseAngles, recentre, trunnionOf } from '../five/kinematics.js';
 import { bodyTouchTilted, angleBetween, blendAxis } from '../five/tilt-sweep.js';
 
@@ -119,6 +120,15 @@ export function generateFinish5({
     return cl.finish();
   }
   const { box } = scope;
+  const patternCentre = () => {
+    const cx=params.patternCenterX ?? (box.min[0]+box.max[0])/2;
+    const cy=params.patternCenterY ?? (box.min[1]+box.max[1])/2;
+    if(!Number.isFinite(cx) || !Number.isFinite(cy)) throw new Error('5-axis pattern centre must contain finite coordinates');
+    const radius=Math.hypot(Math.max(Math.abs(box.min[0]-cx),Math.abs(box.max[0]-cx)),
+      Math.max(Math.abs(box.min[1]-cy),Math.abs(box.max[1]-cy)));
+    return {cx,cy,radius};
+  };
+
 
   const shells = toolShells(tool);
   const upright = buildToolKernel(tool, map.cellSize);
@@ -397,23 +407,26 @@ export function generateFinish5({
    * lean near vertical, where averaging their azimuths would give one of the two
    * directions it is not.
    */
-  const smoothLean = (axes, spacing) => {
+  const smoothLean = (axes, samples, closed = false) => {
     if (axes.length < 3) return axes;
-    const sigma = Math.max(0.8, (0.35 * R) / spacing);
-    const radius = Math.min(14, Math.ceil(3 * sigma));
-    const weights = [];
-    for (let k = -radius; k <= radius; k++) weights.push(Math.exp(-(k * k) / (2 * sigma * sigma)));
-    return axes.map((_, i) => {
-      let hx = 0, hy = 0, w = 0;
-      for (let k = -radius; k <= radius; k++) {
-        const j = i + k;
-        if (j < 0 || j >= axes.length) continue;
-        const wk = weights[k + radius];
-        hx += axes[j][0] * wk; hy += axes[j][1] * wk; w += wk;
+    const arc = new Float64Array(samples.length);
+    for(let i=1;i<samples.length;i++) arc[i]=arc[i-1]+Math.hypot(
+      samples[i][0]-samples[i-1][0],samples[i][1]-samples[i-1][1],samples[i][2]-samples[i-1][2]);
+    const period=axes.length-1,total=arc[period];
+    const sigma=Math.max(0.8*ds,0.35*R);
+    const radius=closed ? Math.min(14,Math.floor((period-1)/2)) : 14;
+    return axes.map((_,i)=>{
+      let hx=0,hy=0,w=0;
+      for(let k=-radius;k<=radius;k++){
+        const j=closed ? ((i+k)%period+period)%period : i+k;
+        if(j<0||j>=axes.length)continue;
+        let distance=Math.abs(arc[j]-arc[i]);
+        if(closed)distance=Math.min(distance,Math.max(0,total-distance));
+        const weight=Math.exp(-(distance*distance)/(2*sigma*sigma));
+        hx+=axes[j][0]*weight;hy+=axes[j][1]*weight;w+=weight;
       }
-      hx /= w; hy /= w;
-      const m = Math.hypot(hx, hy);
-      return [hx, hy, Math.sqrt(Math.max(0, 1 - m * m))];
+      hx/=w;hy/=w;
+      return [hx,hy,Math.sqrt(Math.max(0,1-hx*hx-hy*hy))];
     });
   };
 
@@ -490,13 +503,18 @@ export function generateFinish5({
     const hi = Array.from(psi, (v, i) => v + room[i]);
     // free points start on the straight line between their neighbours that are not
     const at = Float64Array.from(psi);
-    for (let i = 0; i < n; i++) {
-      if (!free[i]) continue;
-      let a = i - 1; while (a >= 0 && free[a]) a--;
-      let b = i + 1; while (b < n && free[b]) b++;
-      if (a >= 0 && b < n) at[i] = psi[a] + (psi[b] - psi[a]) * (i - a) / (b - a);
-      else if (a >= 0) at[i] = psi[a];
-      else if (b < n) at[i] = psi[b];
+    // Fill each free interval once. Scanning left and right independently at
+    // every free point was quadratic on long near-vertical spiral sections.
+    for (let i = 0; i < n;) {
+      if (!free[i]) { i++; continue; }
+      const start = i;
+      while (i < n && free[i]) i++;
+      const left = start - 1, right = i;
+      for (let k = start; k < right; k++) {
+        if (left >= 0 && right < n) at[k] = psi[left] + (psi[right] - psi[left]) * (k - left) / (right - left);
+        else if (left >= 0) at[k] = psi[left];
+        else if (right < n) at[k] = psi[right];
+      }
     }
     // the shortest string through the tube: each point toward the middle of its
     // neighbours (over-relaxed, since the string is long), then back inside its bounds
@@ -532,21 +550,22 @@ export function generateFinish5({
    * sweeps repeat until a whole round changes nothing. Each only moves a point
    * toward a neighbour, so it settles in a few rounds.
    */
-  const limitTurn = (axes, spacing) => {
-    const most = maxTurn * spacing;
-    const clamp = (from, to) => {
+  const limitTurn = (axes, samples) => {
+    const distances = samples.map((p, i) => i ? Math.hypot(p[0]-samples[i-1][0], p[1]-samples[i-1][1], p[2]-samples[i-1][2]) : Infinity);
+    const clamp = (from, to, distance) => {
+      const most = maxTurn * distance;
       const turn = angleBetween(from, to);
       return turn > most ? blendAxis(from, to, most / turn) : to;
     };
-    const out = limitAzimuth(axes, spacing * 2 * maxTurn);
+    const out = limitAzimuth(axes, distances.map(d => d * 2 * maxTurn));
     for (let round = 0; round < 8; round++) {
       let moved = false;
       for (let i = 1; i < out.length; i++) {
-        const next = clamp(out[i - 1], out[i]);
+        const next = clamp(out[i - 1], out[i], distances[i]);
         if (next !== out[i]) { out[i] = next; moved = true; }
       }
       for (let i = out.length - 2; i >= 0; i--) {
-        const next = clamp(out[i + 1], out[i]);
+        const next = clamp(out[i + 1], out[i], distances[i+1]);
         if (next !== out[i]) { out[i] = next; moved = true; }
       }
       if (!moved) break;
@@ -569,12 +588,13 @@ export function generateFinish5({
    * instead, which this used to do, held the lean on the wrong side of the pole
    * long after it had come out the other — thirty degrees off the surface.
    */
-  const limitAzimuth = (axes, most) => {
-    const cap = most * RAD;
-    const sweep = (list) => {
+  const limitAzimuth = (axes, limits) => {
+    const sweep = (list, reverse=false) => {
       const out = [];
       let psi = null;
-      for (const a of list) {
+      for (let index=0;index<list.length;index++) {
+        const a=list[index];
+        const cap=(limits[reverse ? list.length-index : index] ?? Infinity) * RAD;
         const m = Math.hypot(a[0], a[1]);
         if (m < 1e-9) { out.push(a); continue; }
         const target = Math.atan2(a[1], a[0]);
@@ -593,7 +613,7 @@ export function generateFinish5({
       return out;
     };
     // forward, then back over the result, so the lag does not all fall on one side
-    return sweep(sweep(axes).reverse()).reverse();
+    return sweep(sweep(axes).reverse(),true).reverse();
   };
 
   // the shank and the holder against the part: the heightmap, seen as stock the
@@ -610,7 +630,35 @@ export function generateFinish5({
   // --- a row of the raster -------------------------------------------------------
 
   const ds = Math.max(map.cellSize, Math.min(step / 2, R / 3));
-  const stats = { points: 0, tiltSum: 0, tiltMax: 0, eased: 0, held: 0 };
+  const stats = { points: 0, tiltSum: 0, tiltMax: 0, eased: 0, held: 0, omitted: 0 };
+  // Bounded verification against the strategy's discretized cutter kernels.
+  // Body tests use the interpolated axis; cutting heights retain the same
+  // angular/grid resolution as path generation (not continuous certification).
+  const exactKernels=new Map();
+  const requiredAt = (p,exact=false) => {
+    if(!exact) return tipAt(p.x,p.y,leaning(p.a),-Infinity);
+    const key=p.a.join(',');
+    let kernel=exactKernels.get(key);
+    if(!kernel) {
+      const tilt=Math.acos(Math.min(1,Math.max(-1,p.a[2]))) * DEG;
+      kernel=tilt<1e-7 ? upright : buildTiltedKernel(shells.cutting,p.a,map.cellSize,rise);
+      exactKernels.set(key,kernel);
+      if(exactKernels.size>256) exactKernels.delete(exactKernels.keys().next().value);
+    }
+    return tipAt(p.x,p.y,{kernel},-Infinity);
+  };
+  const motionCheck = (a, b) => checkMotion(a, b, {
+    spacing: Math.max(0.01, Math.min(map.cellSize / 2, ds / 2)),
+    check: (p) => {
+      if (scope.probeWith(() => p.z)(p.x,p.y)[2] === null) return 'outside machining window';
+      if (bodyHits([p.x,p.y,p.z],p.a)) return 'shank or holder collision';
+      const required=requiredAt(p);
+      if (Number.isFinite(required) && p.z < required - tolerance
+        && p.z < requiredAt(p,true) - tolerance) return 'cutter interference';
+      return null;
+    },
+  });
+
 
   /**
    * One run of the raster as points that carry their axis: the law, the turn
@@ -618,14 +666,17 @@ export function generateFinish5({
    * check — easing any point it would hit toward vertical and trying again.
    */
   const solveRun = (samples, heading) => {
-    const law0 = filled(samples.map((p) => normalAt(p[0], p[1]))).map((n) => lawAxis(n, heading));
-    const sm0 = smoothLean(law0, ds);
+    const law0 = filled(samples.map((p) => normalAt(p[0], p[1]))).map((n, i) => lawAxis(n, typeof heading === 'function' ? heading(samples[i]) : heading));
+    const closed = samples.length > 3 && Math.hypot(samples[0][0]-samples.at(-1)[0],samples[0][1]-samples.at(-1)[1]) < 1e-8;
+    const sm0 = smoothLean(law0, samples, closed);
     const raw = relaxLean(sm0);
+    if(closed) raw[0] = raw[raw.length-1] = blendAxis(raw[0],raw[raw.length-1],.5);
     const scale = new Float64Array(samples.length).fill(1);
     let leans = null;
     let z = null;
     for (let pass = 0; pass < 4; pass++) {
-      const axes = limitTurn(raw.map((a, i) => eased(a, scale[i])), ds);
+      const axes = limitTurn(raw.map((a, i) => eased(a, scale[i])), samples);
+      if(closed) axes[0] = axes[axes.length-1] = blendAxis(axes[0],axes[axes.length-1],.5);
       leans = axes.map(leaning);
       z = samples.map((p, i) => tipAt(p[0], p[1], leans[i], p[2]));
       let clean = true;
@@ -646,9 +697,74 @@ export function generateFinish5({
       stats.tiltSum += tilt;
       if (tilt > stats.tiltMax) stats.tiltMax = tilt;
       if (scale[i] < 1) stats.eased++;
-      if (bodyHits([out[i].x, out[i].y, out[i].z], out[i].a)) stats.held++;
+      if (bodyHits([out[i].x, out[i].y, out[i].z], out[i].a)) {
+        throw new Error(`5-axis finish: shank or holder collision at X${out[i].x.toFixed(3)} Y${out[i].y.toFixed(3)} Z${out[i].z.toFixed(3)} after orientation adjustment; use a longer tool or restrict the machining region`);
+      }
     }
-    return thin(out, tolerance, 0.5);
+    // The upright probe only selects candidate XY locations. Tilting changes
+    // the final tip height, so apply the machining window again to that pose.
+    // Preserve rejected samples as breaks: filtering them out would join across
+    // a forbidden depth interval.
+    const checked = out.map((p) => {
+      const finalProbe = scope.probeWith(() => p.z);
+      const valid = Number.isFinite(p.z) && p.z >= params.bottomZ - 1e-9
+        && p.z <= params.topZ + 1e-9 && finalProbe(p.x, p.y)[2] !== null;
+      return valid ? p : null;
+    });
+    const refined=[];
+    let inserted=0;
+    const appendSegment=(a,b,depth=0) => {
+      const result=motionCheck(a,b);
+      if(result.ok) {refined.push(b);return;}
+      if(result.reason==='cutter interference' && depth<12 && inserted++<8192
+        && (result.fraction<=1e-6 || result.fraction>=1-1e-6)) {
+        const end=result.fraction<=1e-6 ? a : b;
+        const height=requiredAt(end,true)+tolerance;
+        if(height>end.z && height<=params.topZ+1e-9) {
+          end.z=height;appendSegment(a,b,depth+1);return;
+        }
+      }
+      if(result.reason==='cutter interference' && result.fraction>1e-6
+        && result.fraction<1-1e-6 && depth<12 && inserted++<8192) {
+        const mid={x:(a.x+b.x)/2,y:(a.y+b.y)/2,z:(a.z+b.z)/2,a:blendAxis(a.a,b.a,.5)};
+        mid.z=Math.max(mid.z,requiredAt(mid,true)+tolerance);
+        if(mid.z<=params.topZ+1e-9 && mid.z>=params.bottomZ-1e-9) {
+          appendSegment(a,mid,depth+1);appendSegment(mid,b,depth+1);return;
+        }
+      }
+      if(result.reason==='cutter interference') {
+        stats.omitted++;refined.push(null,b);return;
+      }
+      throw new Error(`5-axis finish: ${result.reason} between cutting samples near X${b.x.toFixed(3)} Y${b.y.toFixed(3)}`);
+    };
+    for(const p of checked) {
+      const previous=refined[refined.length-1];
+      if(p && previous) appendSegment(previous,p);
+      else refined.push(p);
+    }
+    for(let i=1;i<refined.length;i++) {
+      if(!refined[i-1] || !refined[i]) continue;
+      const result=motionCheck(refined[i-1],refined[i]);
+      if(!result.ok) {
+        if(result.reason==='cutter interference') {stats.omitted++;refined.splice(i,0,null);i++;}
+        else throw new Error(`5-axis finish: ${result.reason} after local refinement`);
+      }
+    }
+    // A rejected sample must break the path, but must not disable thinning
+    // for every other valid section of a long spiral.
+    const simplified=[];
+    let section=[];
+    const flushSection=()=>{
+      const reduced=thin(section,tolerance,0.5,(a,b)=>motionCheck(a,b).ok);
+      for(const p of reduced) simplified.push(p);
+      section=[];
+    };
+    for(const p of refined) {
+      if(p) section.push(p);
+      else {flushSection();simplified.push(null);}
+    }
+    flushSection();
+    return simplified;
   };
 
   // Where the turntable will be as this is cut.
@@ -718,8 +834,12 @@ export function generateFinish5({
       const p = probe(x, y);
       if (p[2] === null) return null;
       const lean = leaning(blendAxis(from.a, to.a, t));
-      points.push({ x, y, z: tipAt(x, y, lean, p[2]), a: lean.axis });
+      const z = tipAt(x, y, lean, p[2]);
+      if (!Number.isFinite(z) || z < params.bottomZ - 1e-9 || z > params.topZ + 1e-9) return null;
+      if (bodyHits([x, y, z], lean.axis)) return null;
+      points.push({ x, y, z, a: lean.axis });
     }
+    for(let i=0;i<points.length;i++) if(!motionCheck(i ? points[i-1] : from,points[i]).ok) return null;
     return points;
   };
 
@@ -730,7 +850,9 @@ export function generateFinish5({
   const track = (points, from) => {
     let angles = from;
     for (let i = 0; i < points.length; i++) {
-      angles = chooseAngles(points[i].a, machine, angles).angles;
+      const solution = chooseAngles(points[i].a, machine, angles);
+      if (!solution.reachable) throw new Error(`5-axis finish: unreachable orientation at X${points[i].x.toFixed(3)} Y${points[i].y.toFixed(3)}; ${solution.reason ?? 'check rotary limits'}`);
+      angles = solution.angles;
       if (!roomFor(angles)) return { end: angles, tight: i };
     }
     return { end: angles, tight: -1 };
@@ -738,11 +860,24 @@ export function generateFinish5({
 
   const emitRun = (run) => {
     if (run.length === 0) return;
+    if (run.includes(null)) {
+      let chunk = [];
+      for (const p of run) {
+        if (p) chunk.push(p);
+        else {
+          if (chunk.length) emitRun(chunk);
+          chunk = [];
+          if (state.cutting) retract();
+        }
+      }
+      if (chunk.length) emitRun(chunk);
+      return;
+    }
     const first = run[0];
     let link = state.cutting ? rideLink(state.last, first) : null;
     if (link) {
       // would carrying on from here take the turntable to the end of its travel?
-      const through = track([...link, ...run], state.angles);
+      const through = track(link, state.angles);
       if (through.tight >= 0) link = null;
     }
     let from;
@@ -756,6 +891,7 @@ export function generateFinish5({
     }
     // cut as far as the turntable has room for; the rest is a run of its own, begun from the last point
     const walked = track(run, link ? track(link, from).end : from);
+    if (walked.tight === 0) throw new Error('5-axis finish: no rotary travel margin at the start of a cutting run; adjust the setup or rotary limits');
     const stop = walked.tight > 0 ? walked.tight : run.length;
     if (link) for (const p of link) cutTo(p);
     for (let k = link ? 0 : 1; k < stop; k++) cutTo(run[k]);
@@ -772,6 +908,101 @@ export function generateFinish5({
 
   // --- the raster ----------------------------------------------------------------
 
+  if (params.pattern === 'spiral' || params.pattern === 'radial') {
+    const {cx,cy,radius} = patternCentre();
+    const spiral = params.pattern === 'spiral';
+    let samples = [];
+    let sampled = 0;
+    let radialHeading = [1, 0];
+    const heading = p => {
+      const x = p[0] - cx, y = p[1] - cy;
+      const r = Math.hypot(x, y);
+      if (!spiral) return radialHeading;
+      const a = Math.atan2(y, x), dr = step / (2 * Math.PI);
+      const dx = -dr * Math.cos(a) - r * Math.sin(a);
+      const dy = -dr * Math.sin(a) + r * Math.cos(a);
+      const length = Math.hypot(dx, dy);
+      return length > 0 ? [dx / length, dy / length] : [1, 0];
+    };
+    const flush = () => {
+      if (samples.length) emitRun(solveRun(samples, heading));
+      samples = [];
+    };
+    const sample = (x, y) => {
+      if (++sampled > 500000) throw new Error('5-axis finish exceeds sample budget; increase stepover or tolerance');
+      const p = probe(x, y);
+      if (p[2] === null) { flush(); return; }
+      samples.push(p);
+    };
+    if (spiral) {
+      const end = radius * 2 * Math.PI / step;
+      for (let a = 0; a < end;) {
+        const r = Math.max(0, radius - step * a / (2 * Math.PI));
+        sample(cx + r * Math.cos(a), cy + r * Math.sin(a));
+        a = Math.min(end, a + Math.min(0.15, ds / Math.max(ds, Math.hypot(r, step / (2 * Math.PI)))));
+      }
+      sample(cx, cy); flush();
+    } else {
+      const spokes = Math.max(12, Math.ceil(2 * Math.PI * radius / step));
+      const points = Math.max(1, Math.ceil(radius / ds));
+      if (spokes * (points + 1) > 500000) throw new Error('Radial finish exceeds sample budget; increase stepover or tolerance');
+      // Cover the pole once. Subsequent spokes stop at a small central patch,
+      // alternating direction so neighbouring spokes can share a short link.
+      sample(cx, cy); flush();
+      const core = Math.min(step / 2, radius);
+      for (let spoke = 0; spoke < spokes; spoke++) {
+        const a = 2 * Math.PI * spoke / spokes;
+        const direction = params.radialDirection === 'inward' ? -1
+          : params.radialDirection === 'outward' ? 1 : spoke % 2 === 0 ? 1 : -1;
+        radialHeading = [direction * Math.cos(a), direction * Math.sin(a)];
+        for (let k = 0; k <= points; k++) {
+          const t = direction > 0 ? k / points : 1 - k / points;
+          const r = core + (radius - core) * t;
+          sample(cx + r * Math.cos(a), cy + r * Math.sin(a));
+        }
+        flush();
+        if(['inward','outward'].includes(params.radialDirection) && state.cutting) retract();
+      }
+    }
+    cl.info(spiral ? '5-axis spiral finish: outside to centre' : `5-axis radial finish: ${params.radialDirection ?? 'alternate'} spokes with a shared centre patch`);
+  } else if (params.pattern === 'concentric') {
+    // Concentric passes in setup XY, outside to centre. The normal/drop-cutter,
+    // holder avoidance, region clipping and rotary-unwind planner are shared
+    // with raster finishing. Tangential heading follows each circular pass.
+    const {cx,cy,radius} = patternCentre();
+    const rings = Math.max(1, Math.ceil(radius / step));
+    const radialStep = radius / rings;
+    let sampled = 0;
+    if (rings > 20000) throw new Error('Concentric finishing needs too many passes; increase stepover');
+    for (let ring = rings; ring >= 1; ring--) {
+      const r = ring * radialStep;
+      // Alternate complete laps to avoid winding C another turn on each ring.
+      const direction = params.ringDirection === 'cw' ? -1
+        : params.ringDirection === 'ccw' ? 1 : (rings - ring) % 2 === 0 ? 1 : -1;
+      const count = Math.max(12, Math.ceil(2 * Math.PI * r / ds));
+      sampled += count + 1;
+      if (sampled > 2000000) throw new Error('Concentric finishing needs too many samples; increase tolerance or stepover');
+      let samples = [];
+      const heading = p => {
+        const a = Math.atan2(p[1] - cy, p[0] - cx);
+        return [-direction * Math.sin(a), direction * Math.cos(a)];
+      };
+      const flush = () => {
+        if (samples.length) emitRun(solveRun(samples, heading));
+        samples = [];
+      };
+      for (let k = 0; k <= count; k++) {
+        const a = k === count ? 0 : direction * 2 * Math.PI * k / count;
+        const p = probe(cx + r * Math.cos(a), cy + r * Math.sin(a));
+        if (p[2] === null) { flush(); continue; }
+        samples.push(p);
+      }
+      flush();
+    }
+    const centre = probe(cx, cy);
+    if (centre[2] !== null) emitRun(solveRun([centre], [0, 1]));
+    cl.info('Concentric finishing follows circular passes from outside to centre');
+  } else {
   const cos = Math.cos(angle), sin = Math.sin(angle);
   const toWorld = (u, v) => [u * cos - v * sin, u * sin + v * cos];
   const corners = [
@@ -811,6 +1042,8 @@ export function generateFinish5({
     else if (state.cutting) { retract(); }
   }
 
+  }
+
   if (state.cutting) {
     retract();
     // hand the program over upright, at clearance, as every other operation does
@@ -825,6 +1058,7 @@ export function generateFinish5({
     return cl.finish();
   }
 
+  if(stats.omitted) cl.warn(`5-axis finish is incomplete: ${stats.omitted} cutting intervals could not be verified and were omitted; inspect remaining stock and add a cleanup operation`);
   const mean = stats.points ? stats.tiltSum / stats.points : 0;
   cl.info(`5-axis finishing leans the cutter ${mean.toFixed(1)}° on average, `
     + `${stats.tiltMax.toFixed(1)}° at most (limit ${(maxTilt * DEG).toFixed(0)}°)`);
@@ -848,12 +1082,12 @@ export function generateFinish5({
  * within `tol` of — keeping every point where the tool *leans* differently,
  * because the line between two points says nothing about the axis between them.
  */
-function thin(points, tol, axisTol) {
+function thin(points, tol, axisTol, safe = () => true) {
   if (points.length <= 2) return points;
   const out = [points[0]];
   let anchor = 0;
   for (let i = 1; i < points.length - 1; i++) {
-    if (fits(points, anchor, i + 1, tol, axisTol)) continue;
+    if (fits(points, anchor, i + 1, tol, axisTol) && safe(points[anchor],points[i+1])) continue;
     out.push(points[i]);
     anchor = i;
   }

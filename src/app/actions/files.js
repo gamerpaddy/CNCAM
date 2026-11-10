@@ -54,7 +54,7 @@ export function makeFileActions(ctx, program) {
       // in as a drawing to be placed on the stock and engraved — which is the
       // one thing a solid cannot give you, because a logo or a part number is
       // not a feature of the part.
-      if (file.name.toLowerCase().endsWith('.dxf')) return importDrawing(file);
+      if (file.name.toLowerCase().endsWith('.dxf')) return await importDrawing(file);
       // A model with no triangles is not a model: it has no bounds, so the stock
       // sized round it is NaN, and every operation after that is built on
       // nothing — while the status line said "Imported". Refused, or, from a
@@ -138,7 +138,10 @@ export function makeFileActions(ctx, program) {
    * $INSUNITS is 25 times too big, which is a thing you want to hear about now
    * rather than at the machine.
    */
-  function importDrawing(file) {
+  async function importDrawing(file = null) {
+    try {
+    file ??= await openFile({ description: 'DXF drawing', mime: { 'application/dxf': ['.dxf'] }, extensions: ['.dxf'] });
+    if (!file) return;
     const text = new TextDecoder().decode(file.buffer);
     const { paths, bounds, skipped } = parseDXF(text);
     if (paths.length === 0) {
@@ -160,6 +163,10 @@ export function makeFileActions(ctx, program) {
       `${name}: ${plural(paths.length, 'path')}, ${size}, ${length}m of line${note}`,
       Object.keys(skipped).length > 0);
     return undefined;
+    } catch (err) {
+      ctx.ui.setStatus(`Drawing import failed: ${err.message}`, true);
+      return undefined;
+    }
   }
 
   function describeSkipped(skipped) {

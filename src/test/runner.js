@@ -16,7 +16,7 @@ export const assert = {
     }
   },
   close(actual, expected, eps = 1e-6, msg = '') {
-    if (Math.abs(actual - expected) > eps) {
+    if (!Number.isFinite(actual) || !Number.isFinite(expected) || !Number.isFinite(eps) || eps < 0 || Math.abs(actual - expected) > eps) {
       throw new Error(`${msg} expected ~${expected}, got ${actual}`);
     }
   },

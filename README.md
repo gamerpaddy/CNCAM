@@ -367,3 +367,7 @@ relative path, so swapping those two files needs no rebuild of anything else.
 * [docs/internals.md](docs/internals.md) covers how it works inside, and why
   various parts are built the way they are instead of the obvious way.
 * [PLAN.md](PLAN.md) is the original development plan.
+
+## Before / after improvements
+
+See [the improvement report](docs/IMPROVEMENTS.md) for fixes, new workflow tools, validation, screenshots, and instructions for comparing the preserved original with this copy.

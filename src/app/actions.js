@@ -10,6 +10,7 @@
 // arrive after the layout is built, which is why nothing here touches them at
 // construction time.
 
+import { showSetupSheet } from './workflow-tools.js';
 import { openHelp } from './help.js';
 import { openOptions as dialogOptions } from './options-dialog.js';
 import { openPalette } from './command-palette.js';
@@ -108,6 +109,7 @@ export function makeActions(ctx) {
 
   return {
     ...program,
+    showSetupSheet: () => showSetupSheet(doc, editing.setupStock),
     ...files,
     ...editing,
     ...check,

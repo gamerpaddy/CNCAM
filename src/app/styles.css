@@ -3093,3 +3093,25 @@ input.color-input {
 .palette-group { flex: 0 0 64px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-faint); }
 .palette-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .palette-keys { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; color: var(--fg-dim); }
+
+/* Workflow tools and readable status at laptop sizes. */
+.workflow-dialog { width: min(850px, 94vw); max-height: 90vh; overflow: auto; padding: 24px; background: var(--bg-panel); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 8px; }
+.workflow-dialog h2, .workflow-dialog p, .workflow-dialog section { margin-bottom: 14px; }
+.workflow-dialog button, .workflow-dialog input { margin: 6px; padding: 7px 12px; }
+.workflow-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.preset-row { display: flex; align-items: start; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.preset-row details { flex: 1; }
+.setup-sheet table { width: 100%; border-collapse: collapse; }
+.setup-sheet th, .setup-sheet td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
+.save-state { white-space: nowrap; color: var(--fg-dim); margin: 0 10px; }
+.save-state[data-state="error"] { color: var(--danger-text); }
+:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+@media (max-width: 1000px) { #app { grid-template-columns: min(var(--tree-size), 190px) 5px minmax(120px, 1fr) 5px min(var(--props-size), 280px); } }
+@media print {
+ body > * { display: none !important; }
+ body > .setup-sheet { display: block !important; position: static; width: 100%; max-height: none; overflow: visible; background: white; color: black; border: 0; }
+ .setup-sheet button { display: none; }
+ .setup-sheet table { font-size: 10pt; }
+ .setup-sheet tr { break-inside: avoid; }
+ html, body { overflow: visible; height: auto; }
+}

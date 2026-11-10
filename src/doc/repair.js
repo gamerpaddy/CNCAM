@@ -127,6 +127,11 @@ function repairTool(tool, seen, notes) {
 }
 
 function repairOperation(op, defaults, seen, notes) {
+  const previousPattern = { finish5Concentric: 'concentric', finish5Spiral: 'spiral', finish5Radial: 'radial' }[op.type];
+  if (previousPattern) {
+    op = { ...op, type: 'finish5', params: { ...(isObject(op.params) ? op.params : {}), pattern: previousPattern } };
+    notes.push(`operation ${describe(op.name)}: converted to 5-axis finish with ${previousPattern} pattern`);
+  }
   if (!OP_TYPES.includes(op.type)) {
     notes.push(`operation ${describe(op.name)}: type ${describe(op.type)} is not one this app has, dropped`);
     return null;

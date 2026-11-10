@@ -378,6 +378,7 @@ export function buildLayout(root, actions, project) {
   // of the workflow rather than from the file.
   function exportItems() {
     return [
+      { label: 'Setup and tool sheet…', onclick: actions.showSetupSheet },
       {
         label: 'Export G-code — one file',
         keys: keyFor('export'),
@@ -636,7 +637,7 @@ export function buildLayout(root, actions, project) {
   // replaced by the next one — which made a long report from Generate, the one
   // that names every operation that cut nothing, gone the moment anything else
   // said a word. The last few are kept, a click away.
-  const statusText = el('span', { class: 'status-text' }, ['Ready']);
+  const statusText = el('span', { class: 'status-text', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' }, ['Ready']);
   const busy = el('span', { class: 'busy' });
   // The way out of a job that does not come back — see actions.stopJobs. Beside
   // the status line rather than in it, so it is not a click on the message log.
@@ -667,7 +668,8 @@ export function buildLayout(root, actions, project) {
   // comes after. Kept in the status line because that is where the eye goes
   // when a job has just finished.
   const nextStep = el('button', { type: 'button', class: 'status-next', hidden: true });
-  const status = el('div', { class: 'status' }, [statusMessage, stopButton, nextStep, summary]);
+  const saveState = el('span', { class: 'save-state', role: 'status', title: 'Browser autosave is separate from a project file saved to disk' }, ['']);
+  const status = el('div', { class: 'status' }, [statusMessage, stopButton, nextStep, saveState, summary]);
 
   const timeline = buildTimeline(
     (step, seconds) => actions.seekSimulation(step, seconds),
@@ -864,6 +866,12 @@ export function buildLayout(root, actions, project) {
           }, ['\u00d7']),
         ]),
       );
+    },
+    setSaveState(state) {
+      const labels = { changed: 'Unsaved changes', saving: 'Autosaving…', saved: 'Autosaved', error: 'Autosave failed', off: 'Autosave off' };
+      saveState.textContent = labels[state] ?? '';
+      saveState.dataset.state = state;
+      if (state === 'saved') saveState.title = `Saved in this browser at ${new Date().toLocaleTimeString()}. Save a project file to keep an independent copy.`;
     },
     setStatus(text, isError = false) {
       statusText.textContent = text;

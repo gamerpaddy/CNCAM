@@ -236,7 +236,7 @@ export function buildProgram(dialect, ops, options = {}) {
     // pleases on a good half of the controls this posts for. It is switched off
     // again at the end of the operation: a program that inherits G93 from the
     // pass before reads every later feed as a duration.
-    const fiveWrite = five ? fiveAxisWriter(five, motion, {
+    const fiveWrite = five ? fiveAxisWriter({ ...five, operation: op.name }, motion, {
       tool: () => activeTool,
       tcpOn: dialect.fiveAxis?.tcpOn,
       tcpOff: dialect.fiveAxis?.tcpOff,
@@ -612,6 +612,7 @@ export function buildProgram(dialect, ops, options = {}) {
         const rapid = opcode === OP.RAPID;
         emit(w, modal, {
           rapid,
+          sourceMove: n,
           axis: five ? [d[o + 4], d[o + 5], d[o + 6]] : null,
           x: d[o + 1] + controlPoint[0], y: d[o + 2], z: d[o + 3] + controlPoint[1],
           feed: feedRate(d[o + 7], feeds, descentOf(at, positionOf(n))),

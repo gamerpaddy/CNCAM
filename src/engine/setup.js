@@ -154,6 +154,7 @@ export function resolveSetup(setup, meshes, computeStockFn) {
   if (stock?.cylinder) {
     stock.cylinder = {
       ...rotatedStock.cylinder,
+      baseZ: rotatedStock.cylinder.baseZ + offset[2],
       center: [
         rotatedStock.cylinder.center[0] + offset[0],
         rotatedStock.cylinder.center[1] + offset[1],

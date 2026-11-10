@@ -44,6 +44,7 @@ export function paletteCommands(ctx) {
   add('File', 'Check a G-code file…', 'checkGcode',
     'Draw, simulate and check any .nc file against this setup');
   add('File', 'Export G-code — a file per operation…', 'exportOperationsSeparately');
+  add('File', 'Setup and tool sheet…', 'showSetupSheet');
   add('Job', 'Add a setup', 'addSetup');
   add('Tools', 'Add cutters from the library…', 'addToolsFromLibrary');
   add('Tools', 'Make a new cutter…', 'newTool');

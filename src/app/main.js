@@ -538,8 +538,14 @@ function syncToolpaths() {
 }
 
 /** Keep viewport objects in sync with the document (handles undo/redo/load). */
+let displayedProject = null;
 function syncViewportModels() {
   const { doc, viewport } = ctx;
+  if (displayedProject !== doc.project) {
+    for (const id of [...viewport.modelObjects.keys()]) viewport.removeModel(id);
+    invalidateFaces();
+    displayedProject = doc.project;
+  }
   const ids = new Set(doc.project.models.map((m) => m.id));
   for (const id of [...viewport.modelObjects.keys()]) {
     if (!ids.has(id)) { viewport.removeModel(id); invalidateFaces(id); }
@@ -708,6 +714,7 @@ function applySettings(key = null) {
 let stopAutosave = null;
 let keptDelay = null;
 function keepSession(on) {
+  if (!on) ctx.ui?.setSaveState('off');
   const delay = Number(getSetting('autosaveDelay')) * 1000;
   // a changed delay is a new watcher: the old one has its wait closed over
   if (on && stopAutosave && delay !== keptDelay) {
@@ -718,6 +725,7 @@ function keepSession(on) {
     keptDelay = delay;
     stopAutosave = attachAutosave(ctx.doc, {
       delay,
+      onState: (state) => ctx.ui.setSaveState(state),
       onError: (err) => ctx.ui.setStatus(`Autosave failed (${err.name}) — export to keep your work`, true),
     });
   } else if (!on && stopAutosave) {

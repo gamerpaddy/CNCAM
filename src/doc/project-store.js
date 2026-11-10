@@ -73,8 +73,10 @@ async function writeText(handle, name, text) {
   const writable = await file.createWritable();
   try {
     await writable.write(text);
-  } finally {
     await writable.close();
+  } catch (err) {
+    await writable.abort().catch(() => {});
+    throw err;
   }
 }
 
@@ -143,7 +145,8 @@ async function readMeta(handle, id) {
   } catch {
     stored = null;                     // never written, or written half-way
   }
-  for (const entry of stored?.versions ?? []) {
+  for (const entry of Array.isArray(stored?.versions) ? stored.versions : []) {
+    if (!entry || typeof entry !== 'object') continue;
     const known = found.get(entry.v);
     if (known) Object.assign(known, { note: entry.note ?? '', at: entry.at ?? known.at });
   }
@@ -181,7 +184,20 @@ export async function readLatest(id) {
  *
  * @returns { id, v, dropped } — dropped is how many old versions aged out
  */
-export async function saveVersion({ id = null, name, json, note = '' }) {
+export async function saveVersion(args) {
+  const key = args.id ?? 'new-project';
+  const save = () => saveVersionUnlocked(args);
+  if (globalThis.navigator?.locks?.request) {
+    return navigator.locks.request(`cncam-save-${key}`, save);
+  }
+  const previous = versionWrites.get(key) ?? Promise.resolve();
+  const pending = previous.catch(() => {}).then(save);
+  versionWrites.set(key, pending);
+  try { return await pending; }
+  finally { if (versionWrites.get(key) === pending) versionWrites.delete(key); }
+}
+const versionWrites = new Map();
+async function saveVersionUnlocked({ id = null, name, json, note = '' }) {
   if (!storeAvailable()) throw new Error('this browser has no private file system');
   const projectId = id ?? newId(name);
   const handle = await projectDir(projectId, { create: true });
@@ -220,7 +236,7 @@ export async function saveVersion({ id = null, name, json, note = '' }) {
 function newId(name) {
   const slug = String(name ?? '').toLowerCase()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
-  return `${slug || 'project'}-${Date.now().toString(36)}`;
+  return `${slug || 'project'}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export async function renameProject(id, name) {

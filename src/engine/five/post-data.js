@@ -24,6 +24,7 @@ export function fiveFor(setup, machine, cl) {
   return {
     rotary: machine.rotary.map((a) => ({ ...a, axis: [...a.axis] })),
     tcp: machine.tcp ?? 'kins',
+    tipTolerance: setup.five.tipTolerance ?? 0.01,
     pivot: pivotOf(setup.five),
     machine: machine.name ?? null,
   };

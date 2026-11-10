@@ -421,3 +421,27 @@ test('and a lathe bar is still sized about the axis it turns on', async () => {
   assert.close(stock.cylinder.diameter, 31, 0.01, 'a ⌀30 shaft is in a ⌀31 bar');
   assert.ok(stock.max[2] - stock.min[2] > 60 + 15, 'with a chucking allowance behind it');
 });
+
+
+test('round stock display base follows the setup datum with the part and bounds', () => {
+  for (const mode of ['turn', 'mill']) {
+    for (const kind of ['cylinder', 'tube']) {
+      for (const origin of ['model', 'stock-top-center', 'stock-bottom-center']) {
+        for (const shift of [0, -10, 5]) {
+          const setup = {
+            mode, orientation: { origin, rotationDeg: [0, 0, 0] },
+            stock: { kind, cylinder: { diameter: 50, innerDiameter: 4,
+              height: 30, offset: [0, 0, shift] } },
+          };
+          const out = resolveSetup(setup, [makeBox(10, 10, 10)], computeStock);
+          assert.close(out.stock.cylinder.baseZ, out.stock.min[2]);
+          assert.close(out.stock.cylinder.baseZ + out.stock.cylinder.height, out.stock.max[2]);
+          const before = computeStock([makeBox(10, 10, 10)], setup.stock, mode);
+          const bounds = computeBounds(out.meshes[0].positions);
+          // Moving the datum must preserve the real axial allowance.
+          assert.close(out.stock.max[2] - bounds.max[2], before.max[2] - 10);
+        }
+      }
+    }
+  }
+});

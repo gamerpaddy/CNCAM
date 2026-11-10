@@ -5,6 +5,7 @@
 // what is cutting it; what did it do last time; where on the part does it
 // apply; and only then the numbers.
 
+import { presetButton } from '../workflow-tools.js';
 import { opCollisionRisk } from '../op-status.js';
 import { el } from '../layout.js';
 import { strategyCard, opIcon, describeIntent } from '../op-catalog.js';
@@ -119,7 +120,7 @@ export function opSections(doc, op, app) {
     rows.push(...commandSection(doc, op, app));
     return rows;
   }
-  rows.push(toolSelectRow(doc, op, app));
+  rows.push(toolSelectRow(doc, op, app), presetButton(doc, op, app));
   const danger = collisionBanner(doc, op, app);
   if (danger) rows.push(danger);
 

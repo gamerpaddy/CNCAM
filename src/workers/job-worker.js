@@ -58,18 +58,21 @@ const jobs = {
   }, ctx) {
     const { text, lineMap } = buildGcode(postId, ops, settings);
     let postCheck = null;
+    let checkStatus = check ? 'Skipped: program exceeds preview check size limit' : 'Not requested';
     if (check && text.length <= check.maxLength) {
       try {
         postCheck = checkPost({ ops, text, lineMap, fitTolerance: check.fitTolerance });
+        checkStatus = postCheck.over > 0 || postCheck.axisOver > 0 ? 'Read-back check: differences found' : 'Read-back check: passed';
       } catch (err) {
         // a check that cannot run is no verdict, not a failed post
         console.error(err);
+        checkStatus = `Read-back check could not run: ${err.message}`;
       }
     }
     const packed = packLineMap(lineMap);
     ctx.progress(1);
     return {
-      result: { text, lineMap: packed, postCheck },
+      result: { text, lineMap: packed, postCheck, checkStatus },
       transfer: [packed.op.buffer, packed.move.buffer],
     };
   },

@@ -263,7 +263,7 @@ export const OP_CATALOG = {
   },
   finish5: {
     group: '3D finishing',
-    summary: 'Rasters a curved surface with the cutter leaning to it — simultaneous 5-axis. Beta.',
+    summary: 'Finishes a curved surface with a leaning cutter using raster, concentric, spiral or radial passes. Simultaneous 5-axis beta.',
     when: 'Surfaces a vertical ball nose finishes badly: the flat, where its centre is '
       + 'cutting at no speed, and the steep, where the holder is in the way. Needs a '
       + 'trunnion machine (A/C or B/C), and sees the part from above only.',
@@ -354,7 +354,7 @@ export function strategyCard(type) {
     summary: entry?.summary ?? '',
     when: entry?.when ?? '',
     cutter: entry?.cutter ?? '',
-    icon: ICONS[type] ?? '',
+    icon: ICONS[type] ?? (type.startsWith('finish5') ? ICONS.finish5 : null) ?? '',
   };
 }
 
@@ -538,7 +538,7 @@ export function describeIntent(op, tool) {
     case 'finish5':
       return `Finishes the surface with ${cutter} leaning to it — ${p.tiltMode === 'fixed' ? 'at a fixed lean' : 'following the surface normal'}, `
         + `${p.leadAngle ?? 0}° of lead and at most ${p.maxTilt ?? 35}° from vertical — in `
-        + `${p.angleDeg ?? 0}° passes ${mm((p.stepover ?? 0.1) * (tool?.diameter ?? 6))} apart.`;
+        + `${({concentric:'concentric passes',spiral:'a continuous spiral',radial:'radial spokes'}[p.pattern] ?? `${p.angleDeg ?? 0}° passes`)} ${mm((p.stepover ?? 0.1) * (tool?.diameter ?? 6))} apart.`;
     case 'waterline':
       return `Finishes the walls with ${cutter} in level contours ${mm(p.stepdown ?? 0.25)} apart, `
         + `from Z${p.topZ} down to Z${p.bottomZ}.`;
@@ -615,6 +615,6 @@ export function opIcon(type, size = 24) {
   svg.setAttribute('height', String(size));
   svg.setAttribute('class', `op-icon op-icon-${type}`);
   svg.setAttribute('aria-hidden', 'true');
-  svg.innerHTML = ICONS[type] ?? '<circle cx="12" cy="12" r="6"/>';
+  svg.innerHTML = ICONS[type] ?? (type.startsWith('finish5') ? ICONS.finish5 : null) ?? '<circle cx="12" cy="12" r="6"/>';
   return svg;
 }

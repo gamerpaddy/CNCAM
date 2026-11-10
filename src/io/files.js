@@ -56,8 +56,13 @@ export async function saveFile(suggestedName, content, accept) {
         types: [{ description: accept.description, accept: accept.mime }],
       });
       const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
+      try {
+        await writable.write(blob);
+        await writable.close();
+      } catch (err) {
+        await writable.abort().catch(() => {});
+        throw err;
+      }
       return true;
     } catch (err) {
       if (err.name === 'AbortError') return false;

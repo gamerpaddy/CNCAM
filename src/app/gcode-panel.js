@@ -202,6 +202,7 @@ function gcodeBar(program, lineCount, ctx, container) {
       // the two cannot be mistaken for each other
       ? `${program.imported} — a file being checked, not this project · ${lineCount} lines`
       : `${lineCount} lines · ${plural(program.ops.length, 'operation')}`]),
+    el('span', { class: 'gcode-count', title: program.checkStatus ?? '' }, [program.checkStatus ?? '']),
     el('span', { class: 'spacer' }),
     copy,
     close,

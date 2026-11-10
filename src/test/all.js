@@ -58,4 +58,12 @@ import './five-crash.test.js';
 import './five-assistant.test.js';
 import './collision-visible.test.js';
 
+import './reliability.test.js';
+
 export { run } from './runner.js';
+
+import './five-concentric.test.js';
+
+import './five-operations.test.js';
+
+import './five-motion-check.test.js';

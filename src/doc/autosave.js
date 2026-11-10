@@ -55,7 +55,7 @@ export async function loadSaved() {
       console.warn('unreadable autosave', err);
       // A session written by a newer build is not damaged, only ahead of this
       // one: left where it is, so going back to that build brings it back.
-      if (!/this build reads up to/.test(err.message)) await clearSession();
+      // Keep the unreadable session available for recovery.
       return { unreadable: err.message };
     }
   }
@@ -121,8 +121,10 @@ export function setSessionProjectId(id) {
 
 /** Forget the session — both where it lives now and where it used to. */
 export function clearSaved() {
-  localStorage.removeItem(PROJECT_KEY);
-  localStorage.removeItem(MESH_KEY);
+  try {
+    localStorage.removeItem(PROJECT_KEY);
+    localStorage.removeItem(MESH_KEY);
+  } catch { /* storage may be blocked independently of OPFS */ }
   setSessionProjectId(null);
   return storeAvailable() ? clearSession() : Promise.resolve();
 }
@@ -133,7 +135,7 @@ export function clearSaved() {
  * Failures are reported once and then tolerated — losing the autosave is an
  * annoyance, but it must never break the session that is running.
  */
-export function attachAutosave(doc, { onError, delay = SAVE_DELAY } = {}) {
+export function attachAutosave(doc, { onError, onState, delay = SAVE_DELAY } = {}) {
   // `delay` is how long the document must be quiet before it is written (ms):
   // a preference, because serialising a large model on every pause is a cost a
   // slow disk may want paid less often. A pending save is still made when the
@@ -141,9 +143,14 @@ export function attachAutosave(doc, { onError, delay = SAVE_DELAY } = {}) {
   let timer = null;
   let warned = false;
   let writing = null;
+  let revision = 0;
+  let stopped = false;
 
   const save = async () => {
     timer = null;
+    if (stopped) return;
+    const savingRevision = revision;
+    onState?.('saving');
     try {
       if (storeAvailable()) {
         // One write of one file, exactly what "Save" would have produced. The
@@ -165,12 +172,17 @@ export function attachAutosave(doc, { onError, delay = SAVE_DELAY } = {}) {
         saveLegacyMeshes(doc);
       }
       warned = false;
+      if (!stopped) onState?.(timer || revision !== savingRevision ? 'changed' : 'saved');
     } catch (err) {
+      if (!stopped) onState?.('error');
       if (!warned) { warned = true; onError?.(err); }
     }
   };
 
-  const onChange = () => {
+  const onChange = (event) => {
+    if (['selection', 'toolpaths', 'visibility'].includes(event?.detail?.kind)) return;
+    revision++;
+    onState?.('changed');
     if (timer) clearTimeout(timer);
     timer = setTimeout(save, delay);
   };
@@ -196,6 +208,7 @@ export function attachAutosave(doc, { onError, delay = SAVE_DELAY } = {}) {
 
   doc.addEventListener('change', onChange);
   return () => {
+    stopped = true;
     doc.removeEventListener('change', onChange);
     if (hasWindow) {
       document.removeEventListener('visibilitychange', onVisibility);

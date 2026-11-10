@@ -90,6 +90,7 @@ const cutting = (text) => motions(text).filter((m) => m.mode === 1).map((m) => m
 
 for (const tcp of ['kins', 'g43.4', 'none']) {
   test(`${tcp}: the posted file read back through the machine is the toolpath it came from`, () => {
+    if (tcp === 'none') { assert.throws(() => post(tcp)); return; }
     const { text, lineMap, ops } = post(tcp);
     const check = checkPost({ ops, text, lineMap });
     assert.ok(check, 'there was something to check');
@@ -103,6 +104,7 @@ for (const tcp of ['kins', 'g43.4', 'none']) {
   });
 
   test(`${tcp}: no arcs, no cycles, rotary words on the cutting blocks, and the table ends at zero`, () => {
+    if (tcp === 'none') { assert.throws(() => post(tcp)); return; }
     const { text } = post(tcp);
     assert.ok(!/\bG[23] /.test(text), 'no arcs in a 5-axis operation');
     assert.ok(!/^G8[1-9]/m.test(text), 'no canned cycles');
@@ -137,7 +139,7 @@ test('g43.4 turns tool-centre-point on before the first rotary move, and the len
 });
 
 test('without tool-centre-point it is inverse time, in machine axes, and G94 comes back', () => {
-  const { text } = post('none');
+  const { text } = post('none', { cl: simpleFivePath() });
   const all = lines(text);
   assert.ok(all.includes('G93'), 'inverse time on');
   assert.ok(all.lastIndexOf('G94') > all.indexOf('G93'), 'and off again');
@@ -303,4 +305,36 @@ test('a program that winds the turntable round every pass is unwound between the
   }
   assert.ok(worst < 12, `a cutting block turns C ${worst}°`);
   assert.ok(!/WARNING/.test(r.text), r.text.split('\n').filter((l) => /WARNING/.test(l)).join(' | '));
+});
+
+function simpleFivePath() {
+  const cl = new CLBuilder();
+  cl.event('feeds', { cut: 600, plunge: 200 });
+  cl.rapid(0, 0, 20);
+  cl.setAxis(0, -0.5, Math.sqrt(0.75));
+  cl.rapid(0, 0, 20);
+  cl.cut(0, 0, 5, FEED.CUT);
+  cl.setAxis(0, -Math.sin(0.6), Math.cos(0.6));
+  cl.cut(10, 0, 5, FEED.CUT);
+  cl.rapid(10, 0, 20);
+  cl.setAxis(0, 0, 1); cl.rapid(10, 0, 20);
+  return cl.finish();
+}
+test('unreachable five-axis poses fail with operation and source move', () => {
+  const machine = machineOf('kins', axes => axes.map(a => ({ ...a, min: -1, max: 1 })));
+  try { post('kins', { machine, cl: simpleFivePath() }); throw new Error('export succeeded'); }
+  catch (e) {
+    assert.eq(e.code, 'FIVE_AXIS_UNREACHABLE');
+    assert.eq(e.finding.operation, 'finish');
+    assert.ok(Number.isInteger(e.finding.move));
+  }
+});
+test('non-TCP rejects unresolved interpolation error with numeric evidence', () => {
+  try { post('none'); throw new Error('export succeeded'); }
+  catch(e) { assert.eq(e.code, 'FIVE_AXIS_TOLERANCE'); assert.ok(e.finding.error > e.finding.tolerance); }
+});
+test('valid non-TCP path still round trips through machine coordinates', () => {
+  const {text,lineMap,ops}=post('none', {cl:simpleFivePath()});
+  const result=checkPost({ops,text,lineMap});
+  assert.ok(result.over <= 0, JSON.stringify(result)); assert.ok(result.axisOver <= 0, JSON.stringify(result));
 });
