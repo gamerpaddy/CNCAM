@@ -13,7 +13,7 @@ import { plural, pluralEs } from '../text.js';
 import { concentricRings, coreEntry } from '../rings.js';
 import { mergeTolerance } from '../simplify.js';
 import {
-  offsetLoops, offsetNormalized, enclosedVoids, diffLoops, loopArea, intersectLoops,
+  offsetLoops, enclosedVoids, diffLoops, loopArea, intersectLoops,
   unionWithHoles, unionLoops, bufferOpenPaths,
 } from '../../geom/clipper.js';
 import { SilhouetteStack } from '../../geom/silhouette.js';

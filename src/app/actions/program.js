@@ -25,7 +25,7 @@ import { turningProfile, barFromStock } from '../../engine/lathe.js';
 import { estimateSeconds, generateToolpath, READS_EARLIER } from '../../engine/toolpath.js';
 import { deductedBefore } from '../../engine/rest.js';
 import { orientationFor, indexingWarnings } from '../../engine/indexing.js';
-import { wrapFor, wrapWarnings, wrapExtent, linearExtent } from '../../engine/wrap.js';
+import { wrapFor, wrapWarnings, linearExtent } from '../../engine/wrap.js';
 import { fiveFor } from '../../engine/five/post-data.js';
 import { fiveChecks } from '../../engine/five/checks.js';
 import { trunnionOf } from '../../engine/five/kinematics.js';
@@ -42,7 +42,8 @@ import {
   SimulationPlayback, positionAtStep, positionAtTime, turnPositionAt, opSpindleRpm,
 } from '../../engine/simulate.js';
 import { describeMachine, machineWarnings } from '../../doc/machines.js';
-import { fixtureTop } from '../../engine/fixtures.js';
+import { fixtureTop, resolveFixtures, withoutGeometry } from '../../engine/fixtures.js';
+import { modelPrisms, fixtureCrashes } from '../../engine/five/fixture-hits.js';
 import { MOVE_STRIDE, OP } from '../../engine/cl.js';
 import { effectiveCutting } from '../../engine/cutting.js';
 import { placedPaths } from '../../engine/drawing.js';
@@ -130,6 +131,13 @@ export function makeProgramActions(ctx, space) {
       // picked faces are stored in model space; move them into setup space so
       // they line up with the toolpaths
       const intoSetup = (m) => transformMesh(m, matrix, offset);
+      // The clamps as the strategies read them: where they stand and how high.
+      // An imported vice's geometry stays here — every operation is asked
+      // against it the moment its path comes back (see fixtureCrashes below),
+      // and a lathe's chuck is a Z limit the strategy already stops at.
+      const held = resolveFixtures(setup.fixtures, doc.fixtureMeshes);
+      const lean = withoutGeometry(held);
+      const vices = (setup.mode ?? 'mill') === 'turn' ? [] : modelPrisms(held);
       for (const op of setup.operations) {
         const tool = doc.project.tools.find((t) => t.id === op.toolId);
         if (!op.enabled) { disabled++; continue; }
@@ -242,7 +250,7 @@ export function makeProgramActions(ctx, space) {
             // a chuck does not take away a patch of the table, it takes away
             // everything past a Z. The strategies need the fixtures themselves
             // to work that out. See engine/fixtures.js chuckLimit.
-            fixtures: structuredClone(setup.fixtures ?? []),
+            fixtures: structuredClone(lean),
             // The rotary axes, for the one strategy that has to know where the turntable is
             // going to be as it cuts: see engine/strategies/finish5.js
             five: five5For(doc.machineRecord()),
@@ -260,6 +268,16 @@ export function makeProgramActions(ctx, space) {
             // nothing: it sat in the store for the rest of the session, and
             // bumped the epoch that tells the viewport and the post to redraw.
             if (doc.project !== projectAtStart || doc.findItem('op', op.id) !== op) return;
+            // Into the vice? Asked of the finished path with the whole tool,
+            // here, so the operation that has the crash is the one that says
+            // so — and says it without a simulation having to be run first.
+            const crash = vices.length ? fixtureCrashes(cl, tool, vices) : null;
+            if (crash) {
+              // eslint-disable-next-line no-param-reassign
+              cl.fixtureCrash = crash;
+              // eslint-disable-next-line no-param-reassign
+              (cl.notes ??= []).push({ level: 'warn', text: crashText(crash) });
+            }
             doc.toolpaths.set(op.id, cl);
             doc.fingerprints.set(op.id, fingerprint);
             doc.failures.delete(op.id);
@@ -398,6 +416,9 @@ export function makeProgramActions(ctx, space) {
       // a cut deeper than its tool reaches is a crash, and first among the things to say
       for (const { op } of [...doc.allOperations()]) {
         if (!op.enabled || !doc.toolpaths.has(op.id)) continue;
+        // and so is a path that goes into the vice it was generated round
+        const crash = doc.toolpaths.get(op.id).fixtureCrash;
+        if (crash) limits.unshift({ level: 'error', text: `${op.name}: ${crashText(crash)}` });
         const risk = opCollisionRisk(doc, op);
         if (risk) {
           limits.unshift({
@@ -480,11 +501,19 @@ export function makeProgramActions(ctx, space) {
    * One line per setup rather than per operation: the clamp is the setup's, and
    * a twelve-operation setup would otherwise say the same thing twelve times.
    */
+  /** A path that goes into an imported fixture, said in one sentence. */
+  function crashText(crash) {
+    const [x, y, z] = crash.at.map((v) => v.toFixed(1));
+    return `the tool goes ${crash.depth.toFixed(1)}mm into ${crash.name} `
+      + `(${plural(crash.count, 'move')}, deepest near X${x} Y${y} Z${z}). `
+      + 'Move the fixture, shorten the cut or keep the tool out with a region';
+  }
+
   function clearanceWarnings() {
     const out = [];
     for (const setup of doc.setups()) {
       if ((setup.mode ?? 'mill') === 'turn') continue;
-      const clamp = fixtureTop(setup.fixtures);
+      const clamp = fixtureTop(resolveFixtures(setup.fixtures, doc.fixtureMeshes));
       if (!clamp) continue;
       const low = setup.operations
         .filter((op) => op.enabled && doc.toolpaths.has(op.id)
@@ -714,7 +743,7 @@ export function makeProgramActions(ctx, space) {
             frame: s.frame,
             ops: s.ops.map(({ cl, tool }) => ({ cl, tool })),
             // the clamps, so a leaning tool can be asked whether it is in one
-            fixtures: s.setup.fixtures ?? [],
+            fixtures: resolveFixtures(s.setup.fixtures, doc.fixtureMeshes),
           })),
           active,
           maxCells: SIM_CELLS[getSetting('simQuality')] ?? SIM_CELLS.high,
@@ -897,7 +926,7 @@ export function makeProgramActions(ctx, space) {
     const kinds = [
       ['holder', 'THE HOLDER HITS THE PART', 'The cutter is too short for this depth: the holder is wider than the slot and comes down on the wall.'],
       ['shank', 'THE SHANK HITS THE PART', 'The shank is wider than the slot the cutter cuts and comes down on the wall.'],
-      ['fixture', 'THE TOOL HITS A CLAMP', 'The leaning holder or shank reaches a clamp.'],
+      ['fixture', 'THE TOOL HITS A CLAMP', 'The cutter, its shank or its holder reaches a clamp or the fixture.'],
       ['rapid', 'A RAPID MOVE CUTS METAL', 'A G0 move runs into stock at full traverse.'],
     ];
     const pick = kinds.find(([kind]) => found.some((f) => f.kind === kind));

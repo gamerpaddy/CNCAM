@@ -10,7 +10,7 @@ import {
   constrainHeights, heightRefusal, HEIGHT_ORDER, HEIGHT_LABELS,
 } from '../../engine/heights.js';
 import { REPORTS, cuttingReportRow } from './reports.js';
-import { getSetting, setSetting } from '../settings.js';
+import { getSetting } from '../settings.js';
 import { attachHint } from './hint-bubble.js';
 import { numberInput, parseNumber, formatNumber } from '../number-input.js';
 
@@ -172,11 +172,6 @@ export function hintStyle(app) {
   // one in Options are the same switch rather than two that disagree.
   app.hintStyle = getSetting('hintStyle');
   return app.hintStyle;
-}
-
-/** Kept for callers that only want to know whether anything is explained. */
-export function hintsOn(app) {
-  return hintStyle(app) !== 'off';
 }
 
 /**

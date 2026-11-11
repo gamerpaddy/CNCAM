@@ -156,6 +156,13 @@ export const ACCEPT = {
       'image/vnd.dxf': ['.dxf'],
     },
   },
+  // What holds the work: a vice, a chuck, a fixture plate. Solids only — a DXF
+  // has no height to keep a tool out of.
+  fixture: {
+    description: 'Fixture models',
+    extensions: ['.stl', '.obj', '.step', '.stp', '.iges', '.igs'],
+    mime: { 'application/octet-stream': ['.stl', '.obj', '.step', '.stp', '.iges', '.igs'] },
+  },
   project: {
     description: 'CNCAM project',
     extensions: ['.cncam'],

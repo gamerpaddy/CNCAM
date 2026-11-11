@@ -13,6 +13,7 @@ import {
   defaultParamsFor, retypeParams, retoolParams, depthRangeFor, depthMeaningDiffers,
 } from '../../engine/op-defaults.js';
 import { createFixture } from '../../engine/fixtures.js';
+import { DEFAULT_ENTRY_GAP } from '../../engine/heights.js';
 import { pickToolFor } from '../../engine/tool-match.js';
 import { drillOversize } from '../../engine/lathe.js';
 import { tipLengthOf } from '../../engine/tool-geometry.js';
@@ -144,7 +145,7 @@ export function makeEditActions(ctx, space) {
   function clearOfRoughing(setup, op, type, params) {
     if (!setup || !isFinishingPass(type)) return {};
     const leftover = roughingLeftover(setup, op);
-    if (!(leftover > 0) || (params.entryGap ?? 1) > leftover) return {};
+    if (!(leftover > 0) || (params.entryGap ?? DEFAULT_ENTRY_GAP) > leftover) return {};
     return { entryGap: suggestedEntryGap(leftover) };
   }
 
@@ -313,7 +314,13 @@ export function makeEditActions(ctx, space) {
     // Fresh ids all the way down: sharing one with the original would make the
     // two rows the same row as far as selection, toolpaths and deletion are
     // concerned.
-    copy.fixtures = (copy.fixtures ?? []).map((f) => ({ ...f, id: uid('fixture') }));
+    copy.fixtures = (copy.fixtures ?? []).map((f) => {
+      const id = uid('fixture');
+      // an imported vice keeps its geometry: the copy is the same vice
+      const mesh = doc.fixtureMeshes.get(f.id);
+      if (mesh) doc.fixtureMeshes.set(id, mesh);
+      return { ...f, id };
+    });
     copy.operations = (copy.operations ?? []).map((op) => ({ ...op, id: uid('op') }));
     doc.addSetup(copy);
     doc.select('setup', copy.id);

@@ -12,7 +12,10 @@ import { parseSTL } from '../../io/stl.js';
 import { parseOBJ } from '../../io/obj.js';
 import { parseDXF, totalLength } from '../../io/dxf.js';
 import { importCad, kindFromName } from '../../io/step.js';
-import { meshFromSoup, computeNormals, dropDegenerate } from '../../geom/mesh.js';
+import {
+  meshFromSoup, computeNormals, dropDegenerate, mergeMeshes,
+} from '../../geom/mesh.js';
+import { createFixture, placeFixtureMesh } from '../../engine/fixtures.js';
 import { clearSaved } from '../../doc/autosave.js';
 import { invalidateFaces } from '../regions-ui.js';
 import { openToolPicker } from '../tool-picker.js';
@@ -25,7 +28,7 @@ import { pickPhotoFile, capturePhoto } from '../tool-photo.js';
 import { describeTool } from '../tool-shape.js';
 import { toolNumberClashes } from '../op-status.js';
 
-export function makeFileActions(ctx, program) {
+export function makeFileActions(ctx, program, space = null) {
   const { doc } = ctx;
 
   /**
@@ -196,6 +199,71 @@ export function makeFileActions(ctx, program) {
     }
     throw new Error(`unsupported format: .${ext}`);
   }
+
+  /**
+   * Bring a vice, a chuck or a fixture plate in from a file, as something the
+   * tool must keep out of and every toolpath in the setup is checked against.
+   *
+   * It is not a model of the part and does not go where those go: nothing is
+   * machined from it, no stock is sized round it, and it belongs to the setup
+   * it was added to. A file of several bodies — a vice is a body, two jaws and
+   * a screw — is one fixture.
+   *
+   * It lands under the stock with its top at the stock's bottom: somewhere it
+   * can be seen, touching nothing, in the one place that is right for a plate
+   * and a known distance from right for a vice. Where the jaws really are is
+   * typed or dragged from there — the app cannot know how far into them the
+   * part was pushed.
+   *
+   * @param file an already-read { name, buffer }; nothing, and the dialog asks
+   */
+  async function addFixtureModel(setup, file = null) {
+    if (!setup) return undefined;
+    try {
+      // eslint-disable-next-line no-param-reassign
+      file ??= await openFile(ACCEPT.fixture);
+      if (!file) return undefined;
+      if (file.name.toLowerCase().endsWith('.dxf')) {
+        throw new Error('a drawing has no height — a fixture needs a solid (STL, OBJ, STEP or IGES)');
+      }
+      const parts = (await importModelFile(file)).filter((p) => p.mesh?.indices?.length > 0);
+      if (parts.length === 0) throw new Error(`${file.name} has no triangles in it`);
+      const merged = mergeMeshes(parts.map((p) => p.mesh));
+      // only the shape is kept: it is never picked from, so the faces a STEP
+      // file knows about and the normals are weight in every save
+      const mesh = { positions: merged.positions, indices: merged.indices };
+
+      const fixture = createFixture('model');
+      fixture.sourceName = file.name;
+      const base = file.name.replace(/\.[^.]+$/, '') || 'Fixture';
+      const taken = new Set((setup.fixtures ?? []).map((f) => f.name));
+      fixture.name = base;
+      for (let n = 2; taken.has(fixture.name); n++) fixture.name = `${base} ${n}`;
+
+      const stock = space?.resolveSetupSpace(setup)?.stock ?? null;
+      const size = placeFixtureMesh(mesh, fixture).bounds;
+      const height = size.max[2] - size.min[2];
+      if (stock) {
+        fixture.center = [
+          round3(stock.cylinder?.center?.[0] ?? (stock.min[0] + stock.max[0]) / 2),
+          round3(stock.cylinder?.center?.[1] ?? (stock.min[1] + stock.max[1]) / 2),
+        ];
+        fixture.baseZ = round3(stock.min[2] - height);
+      }
+      doc.addFixture(setup, fixture, mesh);
+      doc.select('fixture', fixture.id);
+      const span = `${(size.max[0] - size.min[0]).toFixed(0)} × ${(size.max[1] - size.min[1]).toFixed(0)}`
+        + ` × ${height.toFixed(0)}mm`;
+      ctx.ui.setStatus(`Added ${fixture.name} (${span}) under the stock — set where it really `
+        + 'stands; every toolpath in this setup is checked against it');
+    } catch (err) {
+      console.error(err);
+      ctx.ui.setStatus(`Fixture import failed: ${err.message}`, true);
+    }
+    return undefined;
+  }
+
+  function round3(v) { return Math.round(v * 1000) / 1000; }
 
   async function saveProject() {
     if (!(await saveFile(`${doc.project.name}.cncam`, doc.toJSON(), ACCEPT.project))) {
@@ -497,6 +565,7 @@ export function makeFileActions(ctx, program) {
 
   return {
     openModel,
+    addFixtureModel,
     importDrawing,
     saveProject,
     openProject,

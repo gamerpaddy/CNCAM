@@ -26,7 +26,7 @@ export function makeActions(ctx) {
   const { doc } = ctx;
   const space = makeSetupSpace(doc);
   const program = makeProgramActions(ctx, space);
-  const files = makeFileActions(ctx, program);
+  const files = makeFileActions(ctx, program, space);
   const editing = makeEditActions(ctx, space);
   const check = makeCheckActions(ctx, space);
 

@@ -33,10 +33,6 @@ export const AXES_OF = {
   turn: ['x', 'z'],
 };
 
-export function machineHasAxis(machine, axis) {
-  return (AXES_OF[machine] ?? AXES_OF.mill).includes(axis);
-}
-
 /**
  * The standard views, as a direction to look *from* and which way is up.
  *

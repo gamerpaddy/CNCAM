@@ -133,9 +133,9 @@ geometry and the app draws the actual insert rather than a generic cone.
 
 ### Tools
 
-A library of cutters organised by family (flat, ball, bull nose, drill, chamfer
-and V bit, face mill, turning insert, boring bar, parting and grooving blade,
-threading tool), each with starting feeds and speeds. New tools come from a
+A library of cutters organised by family (flat, ball, bull nose, drill, spot
+drill, tap, thread mill, chamfer and V bit, face mill, turning insert, boring
+bar, parting and grooving blade, threading tool), each with starting feeds and speeds. New tools come from a
 wizard that asks only the questions that apply to the shape you picked. Every
 cutter is drawn to scale from its own numbers. Your own tools are saved in the
 browser, and the whole library imports and exports as JSON.
@@ -194,6 +194,12 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
   from what the first one left, hole for hole, rather than from a fresh block.
 * Stock as a box, a cylinder or a tube, sized outright or as a margin around
   the model, with fixtures and clamps as keep-out volumes the toolpaths avoid.
+* A vice, chuck or fixture plate imported from an STL, OBJ, STEP or IGES file
+  (Clamp… → from a model file). Operations keep out of what stands beside the
+  work, and every generated toolpath is checked against the whole model with
+  the cutter, shank and holder — a hit is flagged on the operation, in the
+  simulation and before export. The model is read as its top surface on a
+  0.5mm grid, so it finds a tool that is in the fixture, not one that grazes it.
 * Material removal simulation you can scrub through, which shows the cut shape
   and reports the load.
 * **A check on the finished part.** The surface the program leaves is measured
@@ -257,7 +263,8 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
 ## What it does not do
 
 Be clear about this before you start: **the output is 3-axis milling — with
-indexed 3+1 / 3+2 positioning — and 2-axis turning.** Nothing else is built.
+indexed 3+1 / 3+2 positioning — and 2-axis turning.** What goes past that is
+either narrower than its name or not built:
 
 * Simultaneous 5-axis is a **beta** (Options → Experimental) and is narrower
   than the name: one finishing strategy, table-table trunnions only, a part seen
@@ -328,7 +335,7 @@ git config core.hooksPath .githooks
 
 ### Tests
 
-There are around 930 of them, among them a robustness suite that feeds the
+There are over a thousand of them, among them a robustness suite that feeds the
 importers, the project loader, the G-code reader and every strategy input they
 were never meant to receive.
 
@@ -355,7 +362,7 @@ some of it.
 
 CNCAM is released under the [WTFPL](LICENSE). Do whatever you want with it. But dont blame me if something goes wrong.
 
-The second is the vendored libraries. Those are other people's work and keep
+The vendored libraries are a separate matter. Those are other people's work and keep
 their own licences, so those apply if you redistribute them. three.js is MIT and
 Clipper is BSL-1.0, which ask for little beyond leaving the notices alone. The
 OpenCASCADE build behind STEP and IGES import is LGPL-2.1, which asks that people
@@ -370,4 +377,4 @@ relative path, so swapping those two files needs no rebuild of anything else.
 
 ## Before / after improvements
 
-See [the improvement report](docs/IMPROVEMENTS.md) for fixes, new workflow tools, validation, screenshots, and instructions for comparing the preserved original with this copy.
+See [the improvement report](docs/IMPROVEMENTS.md) for the fixes, the new workflow tools and how they were validated.

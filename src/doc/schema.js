@@ -503,7 +503,7 @@ export function createOperation(type = 'contour2d') {
  * @param meshes optional Map of modelId → mesh; given, geometry is embedded so
  *   the file stands on its own without the CAD it was imported from
  */
-export function serializeProject(project, meshes = null) {
+export function serializeProject(project, meshes = null, fixtureMeshes = null) {
   if (!meshes) return JSON.stringify(project, null, 2);
   const withGeometry = {
     ...project,
@@ -511,8 +511,48 @@ export function serializeProject(project, meshes = null) {
       const mesh = meshes.get(model.id);
       return mesh ? { ...model, geometry: encodeMesh(mesh) } : model;
     }),
+    // An imported vice or chuck travels with the job for the same reason the
+    // part does: a project that opens without it opens with nothing to keep the
+    // tool out of, and says nothing is wrong.
+    setups: (project.setups ?? []).map((setup) => (
+      (setup.fixtures ?? []).some((f) => fixtureMeshes?.has(f.id)) ? {
+        ...setup,
+        fixtures: setup.fixtures.map((f) => {
+          const mesh = fixtureMeshes.get(f.id);
+          return mesh ? { ...f, geometry: encodeMesh(mesh) } : f;
+        }),
+      } : setup)),
   };
   return JSON.stringify(withGeometry, null, 2);
+}
+
+/**
+ * Take the geometry of imported fixtures back out of a loaded project, as
+ * `extractMeshes` does for the models.
+ *
+ * @returns Map of fixture id → mesh
+ */
+export function extractFixtureMeshes(project, notes = []) {
+  const meshes = new Map();
+  for (const setup of project.setups ?? []) {
+    for (const fixture of setup.fixtures ?? []) {
+      if (!fixture?.geometry) continue;
+      let mesh = null;
+      try {
+        mesh = decodeMesh(fixture.geometry);
+      } catch (err) {
+        notes.push(`fixture ${fixture.name}: its saved geometry could not be decoded (${err.message}) — re-import it`);
+      }
+      delete fixture.geometry;
+      const problem = mesh && meshProblem(mesh);
+      if (problem) {
+        notes.push(`fixture ${fixture.name}: its saved geometry is damaged (${problem}) — re-import it`);
+        mesh = null;
+      }
+      if (mesh) meshes.set(fixture.id, mesh);
+    }
+  }
+  return meshes;
 }
 
 /**

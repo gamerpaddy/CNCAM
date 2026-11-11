@@ -17,7 +17,9 @@ const NOUNS = {
 
 // A fixture is named for what it is: a vice jaw, a toe clamp or a chuck. They
 // are one kind in the document and three different things on the table.
-const FIXTURE_NOUNS = { box: 'jaw', cylinder: 'clamp', chuck: 'chuck' };
+const FIXTURE_NOUNS = {
+  box: 'jaw', cylinder: 'clamp', chuck: 'chuck', model: 'fixture',
+};
 
 // Models, drawings and tools exist apart from the program — a file you
 // imported, a cutter in the rack — and are only being taken out of this job;

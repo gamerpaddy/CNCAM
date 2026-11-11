@@ -46,7 +46,7 @@ import {
   approach, entryPlane, clearOfRoughing, roughingNote,
 } from '../heights.js';
 import { finishingWindow } from './parallel3d.js';
-import { toolShells, leaningKernels, buildTiltedKernel } from '../five/tilt-kernel.js';
+import { toolShells, leaningKernels } from '../five/tilt-kernel.js';
 import { chooseAngles, recentre, trunnionOf } from '../five/kinematics.js';
 import { bodyTouchTilted, angleBetween, blendAxis } from '../five/tilt-sweep.js';
 

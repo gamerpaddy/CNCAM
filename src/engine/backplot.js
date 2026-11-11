@@ -22,6 +22,7 @@
 import { CLBuilder, FEED, MOVE_STRIDE, OP, eachMove, isTilted } from './cl.js';
 import { parseGcode } from '../post/parse.js';
 import { fixtureLoops, fixtureTop } from './fixtures.js';
+import { modelPrisms, fixtureHit } from './five/fixture-hits.js';
 import { pointInLoops } from '../geom/inside.js';
 import { machineWarnings } from '../doc/machines.js';
 import { plural } from './text.js';
@@ -220,7 +221,7 @@ export function reviewProgram({
       level: 'warn',
       line: over.line,
       text: `${plural(over.count, 'move')} ${over.count === 1 ? 'passes' : 'pass'} over `
-        + `${over.name} below its own height of Z${over.top.toFixed(1)}.`,
+        + `${over.name} below its height there of Z${over.top.toFixed(1)}.`,
     });
   }
 
@@ -236,19 +237,33 @@ export function reviewProgram({
  * clear over the top of it.
  */
 function movesOverClamps(cl, fixtures) {
-  const loops = fixtureLoops((fixtures ?? []).filter((f) => f.kind !== 'chuck'));
-  const top = fixtureTop(fixtures);
-  if (!loops.length || !top) return { count: 0 };
+  // An imported fixture is not a column — the part sits inside a vice — so it is
+  // asked for its own surface under the tool's tip. A file read back from disk
+  // does not say what cutter it was written for, so the tip is all there is to
+  // ask with; the app's own programs are checked with the whole tool.
+  const drawn = (fixtures ?? []).filter((f) => f.kind !== 'chuck' && f.kind !== 'model');
+  const models = modelPrisms(fixtures);
+  const loops = fixtureLoops(drawn);
+  const top = fixtureTop(drawn);
+  if ((!loops.length || !top) && !models.length) return { count: 0 };
+  const tip = [[0, 0]];
   let count = 0;
   let line = -1;
+  let name = top?.name;
+  let height = top?.z;
   eachMove(cl, (opcode, x, y, z, _a, _b, _c, _f, n) => {
-    if (z >= top.z - 1e-6) return;
-    if (!pointInLoops(loops, x, y)) return;
+    const column = loops.length && top && z < top.z - 1e-6 && pointInLoops(loops, x, y);
+    const model = !column && models.length ? fixtureHit(models, tip, [x, y, z], [0, 0, 1]) : null;
+    if (!column && !model) return;
+    if (model && count === 0) {
+      name = model.name;
+      height = z + model.depth;
+    }
     count++;
     if (line < 0) line = n;
   });
   return {
-    count, line, name: top.name, top: top.z,
+    count, line, name, top: height,
   };
 }
 

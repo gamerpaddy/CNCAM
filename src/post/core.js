@@ -20,7 +20,7 @@
 // Options: { programName, arcs (default: whatever the dialect supports),
 //            arcTolerance (mm, default 0.01) }
 
-import { MOVE_STRIDE, OP, FEED, feedRate, descentOf } from '../engine/cl.js';
+import { MOVE_STRIDE, OP, feedRate, descentOf } from '../engine/cl.js';
 import { orientationKey } from '../engine/indexing.js';
 import { wrapPoint, inverseTime } from '../engine/wrap.js';
 import { Modal, LineWriter, num, customBlock } from './format.js';

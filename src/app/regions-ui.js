@@ -10,7 +10,7 @@
 import {
   buildFaces, buildEdges, faceFootprint, edgeFootprint, edgePolylines, edgeAtPoint,
 } from '../geom/faces.js';
-import { fixtureLoops } from '../engine/fixtures.js';
+import { fixtureKeepouts, resolveFixtures } from '../engine/fixtures.js';
 import { clearedStack, deductedBefore } from '../engine/rest.js';
 import { depthLevelsFor } from '../engine/stock.js';
 import { regionReachFor } from '../engine/op-reach.js';
@@ -135,11 +135,6 @@ export function togglePicked(doc, op, mode, hit, kind = 'face') {
   }, added ? `add ${mode} ${kind}` : `remove ${mode} ${kind}`);
 
   return { faceId: ref.faceId, edgeId: ref.edgeId, kind, added };
-}
-
-/** @deprecated the face-only spelling, kept so older callers still work */
-export function togglePickedFace(doc, op, mode, hit) {
-  return togglePicked(doc, op, mode, hit, 'face');
 }
 
 /** All triangle indices for a mode's picked faces, grouped by model. */
@@ -318,7 +313,12 @@ export function resolveRegions(doc, op, transformMeshFn, setup = null, tool = nu
   // every strategy whose cutter takes material off at its full radius, which is
   // all of them but the chamfer.
   const body = Math.max(0, (tool?.diameter ?? 0) / 2);
-  const clamps = fixtureLoops(setup?.fixtures);
+  // An imported vice or chuck keeps the tool out of what stands above the
+  // bottom of the stock — its jaws, not the bed the part is sitting on. See
+  // engine/fixtures.js fixtureKeepouts.
+  const clamps = fixtureKeepouts(
+    resolveFixtures(setup?.fixtures, doc.fixtureMeshes), stock?.min?.[2] ?? -Infinity,
+  );
   if (clamps.length) {
     out.avoid.push(...(body > cutRadius + 1e-9
       ? offsetLoops(clamps, body - cutRadius, tolerance)

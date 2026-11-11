@@ -1,5 +1,9 @@
 # Five-axis pattern audit and implementation checklist
 
+> The `five-*.txt` result files named below were written during the round and
+> are not kept in the repository. The figures quoted from them stand as a record
+> of that round; `node src/test/five-pattern-benchmark.js` reproduces the timings.
+
 Working checklist from the 2026-11-10 round; open items are not yet verified.
 Parent items remain open until every acceptance criterion is met.
 

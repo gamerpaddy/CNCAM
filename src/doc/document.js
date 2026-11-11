@@ -4,7 +4,8 @@
 
 import { UndoStack } from './undo.js';
 import {
-  createProject, serializeProject, deserializeProject, extractMeshes, setupModelIds,
+  createProject, serializeProject, deserializeProject, extractMeshes, extractFixtureMeshes,
+  setupModelIds,
 } from './schema.js';
 import { computeNormals } from '../geom/mesh.js';
 import { activeMachine } from './machines.js';
@@ -48,6 +49,10 @@ export class Document extends EventTarget {
     super();
     this.project = createProject();
     this.meshes = new Map();     // modelId -> { positions, indices, normals, faceRanges? }
+    // The geometry of imported fixtures (a vice, a chuck), by fixture id. Kept
+    // apart from `meshes` because everything that reads that map reads it as
+    // the parts: a vice in it would be machined.
+    this.fixtureMeshes = new Map();
     this.toolpaths = new ToolpathStore();  // opId -> finished CL program (runtime, not persisted)
     // Operations a Generate is computing right now (runtime). The tree marks
     // them, so a long job shows which of its passes are still running rather
@@ -312,10 +317,17 @@ export class Document extends EventTarget {
 
   // --- fixtures (clamps, jaws) ---
 
-  addFixture(setup, fixture) {
+  /** @param mesh the geometry of an imported fixture (kind 'model'), or nothing */
+  addFixture(setup, fixture, mesh = null) {
     this.apply('add clamp',
-      () => setup.fixtures.push(fixture),
-      () => this.removeById(setup.fixtures, fixture.id));
+      () => {
+        setup.fixtures.push(fixture);
+        if (mesh) this.fixtureMeshes.set(fixture.id, mesh);
+      },
+      () => {
+        this.removeById(setup.fixtures, fixture.id);
+        this.fixtureMeshes.delete(fixture.id);
+      });
   }
 
   removeFixture(id) {
@@ -323,9 +335,13 @@ export class Document extends EventTarget {
       const index = (setup.fixtures ?? []).findIndex((f) => f.id === id);
       if (index < 0) continue;
       const fixture = setup.fixtures[index];
+      const mesh = this.fixtureMeshes.get(id);
       this.apply('remove clamp',
-        () => setup.fixtures.splice(index, 1),
-        () => setup.fixtures.splice(index, 0, fixture));
+        () => { setup.fixtures.splice(index, 1); this.fixtureMeshes.delete(id); },
+        () => {
+          setup.fixtures.splice(index, 0, fixture);
+          if (mesh) this.fixtureMeshes.set(id, mesh);
+        });
       return;
     }
   }
@@ -687,17 +703,18 @@ export class Document extends EventTarget {
   // --- persistence ---
 
   /** The whole document as a `.cncam` file: project plus the geometry it needs. */
-  toJSON() { return serializeProject(this.project, this.meshes); }
+  toJSON() { return serializeProject(this.project, this.meshes, this.fixtureMeshes); }
 
   /**
    * Replace everything with a restored project (autosave or file). Not
    * undoable: undoing your way back into a project you just closed would be
    * more confusing than helpful, so the history starts fresh.
    */
-  restore(project, meshes = new Map()) {
+  restore(project, meshes = new Map(), fixtureMeshes = new Map()) {
     this.project = project;
     this.pending.clear();
     this.meshes = new Map(meshes);
+    this.fixtureMeshes = new Map(fixtureMeshes ?? []);
     this.toolpaths.clear();
     this.fingerprints.clear();
     this.failures.clear();
@@ -725,7 +742,7 @@ export class Document extends EventTarget {
     const project = deserializeProject(json, repairs);
     const meshes = extractMeshes(project, repairs);
     for (const [id, mesh] of meshes) meshes.set(id, computeNormals(mesh));
-    this.restore(project, meshes);
+    this.restore(project, meshes, extractFixtureMeshes(project, repairs));
     return { models: project.models.length, restored: meshes.size, repairs };
   }
 }

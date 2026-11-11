@@ -422,7 +422,6 @@ export function defaultParamsFor(type, { stock, modelBounds, tool, boreBottomZ =
     // clearance clears the tallest thing on the table; the feed plane sits just
     // above the material, which is where feeding needs to start and no higher
     patch.clearanceHeight = round(stock.max[2] + 10);
-    patch.retractHeight = round(stock.max[2] + 2);
   }
   return patch;
 }
@@ -513,7 +512,6 @@ export function retypeParams(type, params, { tool, from = null } = {}) {
   delete patch.topZ;
   delete patch.bottomZ;
   delete patch.clearanceHeight;
-  delete patch.retractHeight;
   // A speed the *strategy* chose is not a speed the user chose, so it does not
   // outlive the strategy. Threading writes one on because inheriting a turning
   // speed there is dangerous (see turnThread above); a roughing pass that used

@@ -19,7 +19,9 @@ import {
 } from './tool-geometry.js';
 import { isRoundStock } from './stock.js';
 import { toolShells } from './five/tilt-kernel.js';
-import { fixturePrisms, toolRings, fixtureHit } from './five/fixture-hits.js';
+import {
+  fixturePrisms, modelPrisms, toolRings, fixtureHit,
+} from './five/fixture-hits.js';
 import {
   cutTilted, bodyTouchTilted, stampSpacing, blendAxis, prepareSweep,
 } from './five/tilt-sweep.js';
@@ -439,7 +441,11 @@ export function simulateRemoval({
   // The clamps, as prisms the leaning tool is asked about. Only a program that
   // tilts is asked: a vertical tool is kept out of a clamp by its footprint, in
   // planning, and that is not a question about where the holder is.
-  const prisms = tilting && fixtures ? fixturePrisms(fixtures) : [];
+  //
+  // An imported fixture is the exception, and is asked of every program: the
+  // plan keeps out of what stands beside the work and no more, because the part
+  // sits inside the thing. See engine/five/fixture-hits.js.
+  const prisms = !fixtures ? [] : tilting ? fixturePrisms(fixtures) : modelPrisms(fixtures);
   // Every collision the run found, in order, so the timeline can say where each
   // one is and not only that there was one. Capped: a program that is wrong
   // everywhere is wrong at the first two hundred places too.
@@ -462,7 +468,7 @@ export function simulateRemoval({
     const subStepLength = Math.max(radius * 2, minSubStep);
     const shells = cl.fiveAxis
       ? prepareSweep(toolShells(tool), cellSize, stockTop - stock.min[2] + 5) : null;
-    const rings = shells && prisms.length ? toolRings(tool) : null;
+    const rings = prisms.length ? toolRings(tool) : null;
     const stampGap = shells ? stampSpacing(radius, cellSize) : 0;
     const d = cl.moves;
     let feeds = { cut: 600, plunge: 200 };
@@ -504,6 +510,8 @@ export function simulateRemoval({
         const took = cut(heights, mask, log, step, grid,
           [x, y, retractZ], [x, y, zBottom], cutter, stockTop, columns);
         if (body.length) countBody(bodyCut, bodyTouch(heights, mask, grid, [x, y, zBottom], body, stockTop), step, note);
+        const vice = rings ? fixtureHit(prisms, rings, [x, y, zBottom], UP) : null;
+        if (vice) note('fixture', step, vice.depth, vice.name);
         if (tool?.type === 'tap') countTap(tapCut, took, radius, cellSize, step);
         // a hole is full width by definition and travels no distance across the
         // floor, so there is no radial width to report — only how deep it went
@@ -563,6 +571,8 @@ export function simulateRemoval({
             } else {
               took = cut(heights, mask, watch ?? log, step, grid, a, b, cutter, stockTop, columns);
               if (body.length) countBody(bodyCut, bodyTouch(heights, mask, grid, b, body, stockTop), step, note);
+              const clamp = rings ? fixtureHit(prisms, rings, b, UP) : null;
+              if (clamp) note('fixture', step, clamp.depth, clamp.name);
             }
             const travel = Math.hypot(b[0] - a[0], b[1] - a[1]);
             // A rapid that removes anything is a crash, not a cut, and dividing

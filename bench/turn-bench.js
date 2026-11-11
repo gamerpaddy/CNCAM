@@ -8,7 +8,7 @@
 
 import { simulateTurning } from '../src/engine/simulate.js';
 import { generateToolpath } from '../src/engine/toolpath.js';
-import { CLBuilder, FEED, MOVE_STRIDE, OP } from '../src/engine/cl.js';
+import { MOVE_STRIDE, OP } from '../src/engine/cl.js';
 import { makeShaft } from '../src/test/fixtures.js';
 
 const SAMPLES = 3000;

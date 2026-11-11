@@ -16,7 +16,9 @@
 // Saves are debounced — every keystroke in a number field is a document change,
 // and serialising the project on each one would be silly.
 
-import { serializeProject, deserializeProject, extractMeshes } from './schema.js';
+import {
+  serializeProject, deserializeProject, extractMeshes, extractFixtureMeshes,
+} from './schema.js';
 import { encodeMesh, decodeMesh, meshCost } from './mesh-codec.js';
 import {
   storeAvailable, saveSession, loadSession, clearSession,
@@ -49,7 +51,12 @@ export async function loadSaved() {
       if (json) {
         const repairs = [];
         const project = deserializeProject(json, repairs);
-        return { project, meshes: extractMeshes(project, repairs), repairs };
+        return {
+          project,
+          meshes: extractMeshes(project, repairs),
+          fixtureMeshes: extractFixtureMeshes(project, repairs),
+          repairs,
+        };
       }
     } catch (err) {
       console.warn('unreadable autosave', err);
@@ -165,7 +172,7 @@ export function attachAutosave(doc, { onError, onState, delay = SAVE_DELAY } = {
         // given once. A failed write is reported by the save that made it.
         writing = (writing ?? Promise.resolve())
           .catch(() => {})
-          .then(() => saveSession(serializeProject(doc.project, doc.meshes)));
+          .then(() => saveSession(serializeProject(doc.project, doc.meshes, doc.fixtureMeshes)));
         await writing;
       } else {
         localStorage.setItem(PROJECT_KEY, serializeProject(doc.project));

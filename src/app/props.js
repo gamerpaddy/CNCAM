@@ -19,6 +19,7 @@ import {
 } from '../engine/insert.js';
 import {
   FIXTURE_KINDS, FIXTURE_KIND_LABELS, CHUCK_MODES, CHUCK_MODE_LABELS,
+  UP_AXES, UP_AXIS_LABELS, placeFixtureMesh,
 } from '../engine/fixtures.js';
 import {
   DRAWING_ORIGINS, DRAWING_ORIGIN_LABELS, DRAWING_ORIGIN_HINTS,
@@ -29,7 +30,6 @@ import { computeBounds } from '../geom/mesh.js';
 import {
   toolWarnings, cuttingReadout, defaultsForType, suggestCutting, machineCanHold,
 } from '../doc/tool-library.js';
-import { toolNumberClashes } from './op-status.js';
 import { reportRows } from './props/reports.js';
 import { fieldRow } from './props/fields.js';
 import { setupSections } from './props/setup-panel.js';
@@ -40,7 +40,9 @@ import { opIcon } from './op-catalog.js';
 import { openContextMenu, anchorBelow } from './context-menu.js';
 import { menuForItem } from './tree.js';
 import { withKey } from './shortcuts.js';
-import { opStatus, opBlockedReason, formatTime } from './op-status.js';
+import {
+  opStatus, opBlockedReason, formatTime, toolNumberClashes,
+} from './op-status.js';
 
 // The name of whatever is selected is not a row in these lists: it is the
 // title of the panel, typed into where it is shown — see inspectorHead.
@@ -180,6 +182,19 @@ const FIELDS = {
     {
       path: 'kind', label: 'Holding', type: 'select',
       options: FIXTURE_KINDS, labels: FIXTURE_KIND_LABELS,
+      // an imported fixture is its file: there is no turning it into a jaw
+      when: (f) => !isModel(f),
+    },
+    // --- imported vice, chuck or plate ---
+    {
+      path: 'upAxis', label: 'Up in the file', type: 'select',
+      options: UP_AXES, labels: UP_AXIS_LABELS, when: isModel,
+      hint: 'Which way the file has the fixture standing. On a lathe, "up" is out '
+        + 'of the chuck, toward the tailstock.',
+    },
+    {
+      path: 'scale', label: 'Scale', type: 'number', min: 0.001, when: isModel,
+      hint: '1 for a file in millimetres, 25.4 for one drawn in inches',
     },
     // --- chuck ---
     {
@@ -222,14 +237,21 @@ const FIELDS = {
     },
     {
       path: 'rotationDeg', label: 'Rotation (°)', type: 'number',
-      when: (f) => f.kind === 'box',
+      when: (f) => f.kind === 'box' || isModel(f),
     },
     {
       path: 'diameter', label: 'Diameter (mm)', type: 'number', min: 0.1,
       when: (f) => f.kind === 'cylinder',
     },
-    { path: 'baseZ', label: 'Sits at Z (mm)', type: 'number', when: (f) => !isChuck(f) },
-    { path: 'height', label: 'Height (mm)', type: 'number', min: 0.1, when: (f) => !isChuck(f) },
+    {
+      path: 'baseZ', label: 'Sits at Z (mm)', type: 'number', when: (f) => !isChuck(f),
+      hint: 'Where the lowest point of it is, in setup coordinates',
+    },
+    {
+      path: 'height', label: 'Height (mm)', type: 'number', min: 0.1,
+      // an imported fixture is as high as its file says
+      when: (f) => !isChuck(f) && !isModel(f),
+    },
   ],
   op: [],
 };
@@ -242,6 +264,31 @@ function isPointed(tool) {
 function isInsertTool(tool) { return tool.type === 'turning' || tool.type === 'boring'; }
 
 function isChuck(fixture) { return fixture.kind === 'chuck'; }
+
+function isModel(fixture) { return fixture.kind === 'model'; }
+
+/**
+ * What an imported fixture does, and how big it came in — the size is the first
+ * thing that says a file was in inches or lying on its side.
+ */
+function modelFixtureNote(doc, fixture) {
+  const mesh = doc.fixtureMeshes.get(fixture.id);
+  if (!mesh) {
+    return 'The geometry of this fixture was not saved with the project, so nothing '
+      + 'is kept out of and nothing is checked. Remove it and import the file again.';
+  }
+  const { min, max } = placeFixtureMesh(mesh, fixture).bounds;
+  const size = [0, 1, 2].map((k) => (max[k] - min[k]).toFixed(1)).join(' × ');
+  const turning = (doc.project.setups
+    .find((s) => (s.fixtures ?? []).includes(fixture))?.mode ?? 'mill') === 'turn';
+  return `${fixture.sourceName || 'Imported model'}: ${size}mm, top at Z${max[2].toFixed(1)}. `
+    + (turning
+      ? 'Turning passes stop at the front of it, as they do at a chuck\'s jaws.'
+      : 'Operations keep out of whatever stands above the bottom of the stock (the '
+        + 'jaws, not the bed), and every generated toolpath is checked against the '
+        + 'whole of it with the cutter, shank and holder — a hit is flagged on the '
+        + 'operation, in the simulation and before export.');
+}
 
 /**
  * Typing an ISO designation fills in the geometry it encodes.
@@ -346,7 +393,9 @@ export function renderProps(container, doc, app = {}) {
   if (kind === 'fixture') {
     // A chuck is not an area on the table with a tool radius round it; it is a
     // pair of jaws on the bar that the turning passes stop short of.
-    rows.push(el('div', { class: 'prop-note' }, [isChuck(item)
+    rows.push(el('div', { class: 'prop-note' }, [isModel(item)
+      ? modelFixtureNote(doc, item)
+      : isChuck(item)
       ? 'Every turning pass in this setup stops short of the jaws and the chuck '
         + 'body. Z is along the bar in setup coordinates — the same numbers the '
         + 'G-code uses, so measure from the part zero.'

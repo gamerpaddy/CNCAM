@@ -417,11 +417,6 @@ button.primary:active:not(:disabled) { background: #4176ad; }
 /* an icon in a button with words beside it sits on the words' centre line */
 button > .icon { flex: 0 0 auto; vertical-align: -3px; }
 
-.icon-button {
-  padding: 4px 8px;
-  line-height: 1;
-}
-
 /* A small square button with only a drawing on it, for the corners of panels. */
 .ghost-icon {
   display: inline-flex;
@@ -438,20 +433,6 @@ button > .icon { flex: 0 0 auto; vertical-align: -3px; }
 }
 .ghost-icon:hover:not(:disabled) { background: var(--bg-hover); border-color: transparent; color: var(--fg); }
 .ghost-icon.danger:hover:not(:disabled) { background: var(--danger-soft); color: var(--danger-text); }
-
-/* a button that reads as a link inside a sentence */
-button.link-button {
-  display: inline;
-  padding: 0;
-  background: none;
-  border: none;
-  color: var(--accent-text);
-  font: inherit;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-button.link-button:hover { color: #a9c7e8; background: none; }
 
 /* --- panels --------------------------------------------------------------- */
 

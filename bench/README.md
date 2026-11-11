@@ -17,7 +17,9 @@ running every time are in `src/test/simulate.test.js` instead.
 | `sim-bench.js` | Hand-written cases — ramps, helices, plunges — where the sweep is hardest. Reports error and time per case. |
 | `all-strategies.js` | Every milling strategy × cutter × part, run through the real generators, against the same envelope. Slow (minutes). |
 | `turn-bench.js` | The same for turning: the insert nose rolled along the path in the (radius, Z) plane. |
-| `sim-perf.js` | Timing only, on three real jobs at the three grid sizes the app offers. |
+| `sim-perf.js` | Timing only, on three real jobs at three of the grid sizes the app offers (medium, high, ultra). |
+| `audit/harness.js` | Run in the page, against the real app: reads the CL an operation produced, sweeps its own cutter over its own grid, and compares what is left with the sample part as a formula. Shares no code with the simulator. |
+| `audit/readback.js` | A second G-code interpreter, written without `post/parse.js`, to compare a posted file with the CL it was printed from. |
 
 ## Tangency
 

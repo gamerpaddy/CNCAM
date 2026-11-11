@@ -203,13 +203,6 @@ function reversedFromStart(loop) {
   return out;
 }
 
-/** Emit a lead-in polyline at cutting depth, ending on the loop start. */
-export function emitLeadIn(cl, loop, z, options) {
-  const pts = leadInPoints(loop, options);
-  for (const [x, y] of pts) cl.cut(x, y, z, FEED.LEAD);
-  return pts.length > 0;
-}
-
 /** Emit a lead-out polyline at cutting depth, starting from the loop end. */
 export function emitLeadOut(cl, loop, z, options) {
   const pts = leadOutPoints(loop, options);

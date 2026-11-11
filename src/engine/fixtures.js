@@ -19,6 +19,18 @@
 // little more reachable material in exchange for a class of crash that scraps
 // the part and the cutter together.
 
+//
+// A *model* fixture is the exception to that last paragraph, and for a reason. A
+// vice or a chuck brought in as an STL or a STEP file is not a lump beside the
+// part: the part sits *in* it, between the jaws and over the bed, and the column
+// over the whole of it is the column over the part. So a model keeps the tool
+// out of what stands above the bottom of the stock (the jaws, a stop, a clamp
+// screw) by footprint, exactly as a drawn jaw does — and everything else about
+// it is asked in 3D, of the finished path, with the whole tool: see
+// `fixtureKeepouts` here and engine/five/fixture-hits.js.
+
+import { silhouetteAbove } from '../geom/silhouette.js';
+
 const CIRCLE_SEGMENTS = 48;
 
 export const FIXTURE_KINDS = ['box', 'cylinder', 'chuck'];
@@ -27,6 +39,32 @@ export const FIXTURE_KIND_LABELS = {
   box: 'Rectangular jaw',
   cylinder: 'Round clamp',
   chuck: 'Lathe chuck',
+  model: 'Imported model',
+};
+
+/**
+ * Which way up a fixture's file is. CAD is Z-up as often as it is Y-up, and a
+ * vice lying on its side is a keep-out in a place the vice is not.
+ */
+export const UP_AXES = ['+z', '-z', '+y', '-y', '+x', '-x'];
+
+export const UP_AXIS_LABELS = {
+  '+z': 'Z+ (as drawn)',
+  '-z': 'Z− (upside down)',
+  '+y': 'Y+',
+  '-y': 'Y−',
+  '+x': 'X+',
+  '-x': 'X−',
+};
+
+/** Each "up" as the rotation that brings it to +Z: [x', y', z'] from (x, y, z). */
+const TO_Z_UP = {
+  '+z': (x, y, z) => [x, y, z],
+  '-z': (x, y, z) => [x, -y, -z],
+  '+y': (x, y, z) => [x, -z, y],
+  '-y': (x, y, z) => [x, z, -y],
+  '+x': (x, y, z) => [-z, y, x],
+  '-x': (x, y, z) => [z, y, -x],
 };
 
 /** How a chuck holds the work. The two are opposite keep-outs, not one setting. */
@@ -42,8 +80,8 @@ export const CHUCK_MODE_LABELS = {
 export function createFixture(kind = 'box') {
   return {
     id: `fix_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4).toString(36)}`,
-    name: { chuck: 'Chuck', cylinder: 'Clamp', box: 'Jaw' }[kind] ?? 'Jaw',
-    kind,                       // 'box' | 'cylinder' | 'chuck'
+    name: { chuck: 'Chuck', cylinder: 'Clamp', box: 'Jaw', model: 'Fixture' }[kind] ?? 'Jaw',
+    kind,                       // 'box' | 'cylinder' | 'chuck' | 'model'
     enabled: true,
     center: [0, 0],             // setup-space XY
     size: [40, 20],             // box: width X, depth Y
@@ -64,8 +102,116 @@ export function createFixture(kind = 'box') {
     faceZ: 0,                   // Z of the chuck face; jaws run from here to +Z
     bodyDiameter: 125,
     bodyLength: 60,
+    // --- model ---
+    // An imported vice, chuck or fixture plate. Its geometry is on the document
+    // (doc.fixtureMeshes, by this id), as a model's is; these say where it
+    // stands. `center` is where the middle of its footprint goes and `baseZ`
+    // where its lowest point sits, which is what they mean for a jaw too.
+    upAxis: '+z',
+    scale: 1,                   // 25.4 for a file drawn in inches
+    sourceName: '',
   };
 }
+
+const placedCache = new WeakMap();   // source mesh -> { key, placed }
+
+/**
+ * A fixture's own mesh, stood where the fixture says it is: turned the right way
+ * up, scaled, rotated about Z, its footprint centred on `center` and its lowest
+ * point on `baseZ`.
+ *
+ * @returns { positions, indices, bounds } in setup space
+ */
+export function placeFixtureMesh(mesh, fixture) {
+  const up = TO_Z_UP[fixture.upAxis] ? fixture.upAxis : '+z';
+  const scale = Number.isFinite(fixture.scale) && fixture.scale > 0 ? fixture.scale : 1;
+  const rotation = fixture.rotationDeg ?? 0;
+  const [cx, cy] = fixture.center ?? [0, 0];
+  const baseZ = fixture.baseZ ?? 0;
+  const key = [up, scale, rotation, cx, cy, baseZ].join('|');
+  const held = placedCache.get(mesh);
+  if (held?.key === key) return held.placed;
+
+  const turn = TO_Z_UP[up];
+  const source = mesh.positions;
+  const out = new Float32Array(source.length);
+  const lo = [Infinity, Infinity, Infinity];
+  const hi = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < source.length; i += 3) {
+    const p = turn(source[i] * scale, source[i + 1] * scale, source[i + 2] * scale);
+    for (let k = 0; k < 3; k++) {
+      out[i + k] = p[k];
+      if (p[k] < lo[k]) lo[k] = p[k];
+      if (p[k] > hi[k]) hi[k] = p[k];
+    }
+  }
+  // turned about the middle of its own footprint, so the rotation field spins
+  // the vice where it stands and does not swing it round the origin of its file
+  const px = (lo[0] + hi[0]) / 2;
+  const py = (lo[1] + hi[1]) / 2;
+  const a = (rotation * Math.PI) / 180;
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < out.length; i += 3) {
+    const u = out[i] - px;
+    const v = out[i + 1] - py;
+    out[i] = cx + u * cos - v * sin;
+    out[i + 1] = cy + u * sin + v * cos;
+    out[i + 2] = out[i + 2] - lo[2] + baseZ;
+    for (let k = 0; k < 3; k++) {
+      if (out[i + k] < min[k]) min[k] = out[i + k];
+      if (out[i + k] > max[k]) max[k] = out[i + k];
+    }
+  }
+  const placed = { positions: out, indices: mesh.indices, bounds: { min, max } };
+  placedCache.set(mesh, { key, placed });
+  return placed;
+}
+
+/**
+ * A setup's fixtures with the imported ones given their geometry.
+ *
+ * Everything that asks about fixtures asks these, not `setup.fixtures`: a model
+ * fixture's record says where it stands and nothing about its shape, so on its
+ * own it has no height, no footprint and nothing to hit. Here it gains `mesh`
+ * (placed, in setup space) and the `height` that mesh stands to, and from then
+ * on it answers `fixtureTop`, `chuckLimit` and the rest as any other does.
+ *
+ * One whose geometry is missing (a project saved without it) comes back
+ * disabled and marked `missing`, so it is drawn as nothing and kept out of as
+ * nothing — and the panel says so.
+ *
+ * @param meshes Map of fixture id -> mesh (doc.fixtureMeshes)
+ */
+export function resolveFixtures(fixtures, meshes) {
+  return (fixtures ?? []).map((f) => {
+    if (f?.kind !== 'model') return f;
+    const source = meshes?.get?.(f.id);
+    if (!source) return { ...f, enabled: false, missing: true };
+    const mesh = placeFixtureMesh(source, f);
+    return {
+      ...f, mesh, height: mesh.bounds.max[2] - mesh.bounds.min[2],
+    };
+  });
+}
+
+/**
+ * Resolved fixtures without their geometry, for the jobs that only need to know
+ * how high they stand: a vice of a hundred thousand triangles is not copied to
+ * a worker for every operation so that one number can be read off it.
+ */
+export function withoutGeometry(fixtures) {
+  return (fixtures ?? []).map((f) => {
+    if (!f?.mesh) return f;
+    const { mesh, ...rest } = f;
+    return { ...rest, mesh: null, stands: true };
+  });
+}
+
+/** Does this imported fixture have a shape — its geometry, or the height read off it? */
+function hasShape(fixture) { return !!fixture.mesh || fixture.stands === true; }
 
 /**
  * How far toward the chuck a turning tool may go, in Z.
@@ -85,7 +231,17 @@ export function createFixture(kind = 'box') {
 export function chuckLimit(fixtures) {
   let found = null;
   for (const f of fixtures ?? []) {
-    if (!f || f.kind !== 'chuck' || f.enabled === false) continue;
+    if (!f || f.enabled === false) continue;
+    // An imported chuck is its own drawing of where the jaws end: the front of
+    // the model is as far as a turning tool goes. It cannot say it grips a bore,
+    // so it is read the careful way round.
+    if (f.kind === 'model') {
+      if (!hasShape(f)) continue;
+      const z = (f.baseZ ?? 0) + Math.max(0, f.height ?? 0);
+      if (!found || z > found.z) found = { z, mode: 'outside', name: f.name ?? 'Chuck' };
+      continue;
+    }
+    if (f.kind !== 'chuck') continue;
     const mode = f.chuckMode ?? 'outside';
     const jaws = mode === 'collet' ? 0 : Math.max(0, f.jawLength ?? 0);
     const z = (f.faceZ ?? 0) + jaws;
@@ -116,6 +272,9 @@ export function fixtureTop(fixtures) {
   let top = null;
   for (const f of fixtures ?? []) {
     if (!f || f.enabled === false || f.kind === 'chuck') continue;
+    // an imported fixture stands as high as its geometry, and one that has not
+    // been given it (see resolveFixtures) has no height to report
+    if (f.kind === 'model' && !hasShape(f)) continue;
     const z = (f.baseZ ?? 0) + Math.max(0, f.height ?? 0);
     if (!top || z > top.z) top = { z, name: f.name ?? 'a clamp' };
   }
@@ -124,6 +283,14 @@ export function fixtureTop(fixtures) {
 
 /** The XY footprint of one fixture as a closed loop [x0,y0,x1,y1,…]. */
 export function fixtureLoop(fixture) {
+  if (fixture.kind === 'model') {
+    // The box round it: what is left to say when only one loop will do. The
+    // keep-out a program is planned against is `fixtureKeepouts`, which knows
+    // the jaws from the bed.
+    const b = fixture.mesh?.bounds;
+    if (!b) return [];
+    return [b.min[0], b.min[1], b.max[0], b.min[1], b.max[0], b.max[1], b.min[0], b.max[1]];
+  }
   if (fixture.kind === 'chuck') {
     // On a mill (a chuck on a rotary table) the body is what is in the way.
     return circleLoop(fixture.center ?? [0, 0],
@@ -161,10 +328,48 @@ function circleLoop([cx, cy], r) {
 export function fixtureLoops(fixtures) {
   return (fixtures ?? [])
     .filter((f) => f && f.enabled !== false)
-    .map(fixtureLoop);
+    .map(fixtureLoop)
+    .filter((loop) => loop.length >= 6);
 }
 
-/** Does this setup hold the tool out of anywhere? */
-export function hasFixtures(fixtures) {
-  return fixtureLoops(fixtures).length > 0;
+/**
+ * How far above the bottom of the stock a model has to stand to be in the way.
+ * A vice bed the part sits flat on is *at* that height, to the rounding of two
+ * files, and is not something to keep out of — it is what the part is on.
+ */
+const FLOOR_MARGIN = 0.05;
+
+const footprintCache = new WeakMap();   // placed mesh -> Map(floor -> loops)
+
+/**
+ * Where no operation may cut, for planning: every drawn clamp's footprint, and
+ * of every imported fixture the outline of what stands above `floorZ` — the
+ * bottom of the stock, which is as deep as a program is planned to go.
+ *
+ * That is the vice's jaws and not its bed, a chuck's jaws and not its body: the
+ * part of the thing that is beside the work, where a cutter working the work
+ * could reach it. What is below is under the part, and is not planned round but
+ * checked — a through-cut that goes on into the bed is found by `fixtureCrashes`
+ * (engine/five/fixture-hits.js), on the finished path, with the whole tool.
+ *
+ * @param fixtures from `resolveFixtures`
+ */
+export function fixtureKeepouts(fixtures, floorZ = -Infinity) {
+  const out = [];
+  for (const f of fixtures ?? []) {
+    if (!f || f.enabled === false) continue;
+    if (f.kind !== 'model') { out.push(fixtureLoop(f)); continue; }
+    if (!f.mesh) continue;
+    const floor = Number.isFinite(floorZ) ? floorZ + FLOOR_MARGIN : f.mesh.bounds.min[2];
+    if (floor >= f.mesh.bounds.max[2]) continue;
+    let byFloor = footprintCache.get(f.mesh);
+    if (!byFloor) { byFloor = new Map(); footprintCache.set(f.mesh, byFloor); }
+    let loops = byFloor.get(floor);
+    if (!loops) {
+      loops = silhouetteAbove(f.mesh, floor);
+      byFloor.set(floor, loops);
+    }
+    out.push(...loops);
+  }
+  return out;
 }

@@ -88,6 +88,3 @@ export function icon(name, size = 16) {
   svg.innerHTML = PATHS[name] ?? '';
   return svg;
 }
-
-/** The names there are drawings for — for a test that no button asks for a blank. */
-export const ICON_NAMES = Object.keys(PATHS);

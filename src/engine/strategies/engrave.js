@@ -17,7 +17,7 @@ import { plural } from '../text.js';
 import { offsetLoops } from '../../geom/clipper.js';
 import { SilhouetteStack } from '../../geom/silhouette.js';
 import { depthPasses } from '../stock.js';
-import { cutPerimeter, orderByProximity } from '../linking.js';
+import { orderByProximity } from '../linking.js';
 import { orientLoop } from '../leads.js';
 import { applyRegionsToPaths } from '../regions.js';
 import { approach, entryPlane, holeSurfaceZ } from '../heights.js';
@@ -178,7 +178,7 @@ export function generateEngrave({
   // to follow, and resampling a straight line into two hundred pieces would
   // triple the file to say the same thing.
   const following = params.engraveFollow !== false && !!mesh?.positions?.length;
-  const followStep = following ? Math.max(0.2, Math.min(1, (params.tolerance ?? 0.05) * 8)) : 0;
+  const followStep = following ? Math.max(0.2, Math.min(1, tolerance * 8)) : 0;
   // How long a stretch with no surface under it the mark carries straight on
   // across — the cutter's own width, because nothing narrower than that is a
   // gap the cutter could follow into. See cutAlong.

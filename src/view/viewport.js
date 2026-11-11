@@ -880,6 +880,29 @@ export class Viewport {
         this.fixtureObjects.push(chuck);
         continue;
       }
+      if (fixture.kind === 'model') {
+        // An imported vice or chuck, already stood where it goes (see
+        // engine/fixtures.js resolveFixtures). Solid rather than a ghost: it is
+        // a real thing with a real shape, and the shape is what is being checked.
+        if (!fixture.mesh) continue;
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(fixture.mesh.positions, 3));
+        geometry.setIndex(new THREE.BufferAttribute(fixture.mesh.indices, 1));
+        const flat = geometry.toNonIndexed();
+        geometry.dispose();
+        flat.computeVertexNormals();
+        const model = new THREE.Mesh(flat, new THREE.MeshStandardMaterial({
+          color: 0x8f6a66,
+          transparent: true,
+          opacity: 0.82,
+          roughness: 0.7,
+          metalness: 0.1,
+        }));
+        model.renderOrder = 3;
+        this.scene.add(model);
+        this.fixtureObjects.push(model);
+        continue;
+      }
       const height = Math.max(0.5, fixture.height ?? 20);
       const geometry = fixture.kind === 'cylinder'
         ? new THREE.CylinderGeometry(

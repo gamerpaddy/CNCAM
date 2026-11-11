@@ -9,11 +9,11 @@ import {
 } from '../doc/autosave.js';
 import { computeNormals, mergeMeshes } from '../geom/mesh.js';
 import { sliceMeshZ } from '../geom/slice.js';
-import { transformMesh } from '../engine/setup.js';
 import { Viewport } from '../view/viewport.js';
 import { WorkerPool } from '../workers/pool.js';
 import { computeStock } from '../engine/stock.js';
-import { resolveSetup } from '../engine/setup.js';
+import { resolveSetup, transformMesh } from '../engine/setup.js';
+import { resolveFixtures } from '../engine/fixtures.js';
 import { buildLayout } from './layout.js';
 import { renderTree } from './tree.js';
 import { renderProps } from './props.js';
@@ -410,12 +410,15 @@ function syncFixtureGizmo() {
 
   const [x, y] = fixture.center ?? [0, 0];
   // a chuck is drawn on its face, a clamp on its base
+  // an imported fixture stands as high as its file, which its record does not say
+  const placed = fixture.kind === 'model'
+    ? resolveFixtures([fixture], doc.fixtureMeshes)[0] : fixture;
   const z = fixture.kind === 'chuck'
     ? (fixture.faceZ ?? 0)
-    : (fixture.baseZ ?? 0) + Math.max(0.5, fixture.height ?? 20);
+    : (fixture.baseZ ?? 0) + Math.max(0.5, placed.height ?? 20);
   if (shownFixtureId !== fixture.id) {
     shownFixtureId = fixture.id;
-    gizmo.show(x, y, z, fixtureScale(fixture));
+    gizmo.show(x, y, z, fixtureScale(placed));
     gizmo.onChange = (nx, ny) => {
       fixture.center = [round(nx), round(ny)];
       syncStock();                     // the clamp in the scene follows the handle
@@ -433,6 +436,10 @@ function syncFixtureGizmo() {
 function fixtureScale(fixture) {
   if (fixture.kind === 'chuck') return Math.max(20, (fixture.bodyDiameter ?? 125) * 0.35);
   if (fixture.kind === 'cylinder') return Math.max(12, (fixture.diameter ?? 20) * 1.2);
+  if (fixture.kind === 'model') {
+    const b = fixture.mesh?.bounds;
+    return b ? Math.max(12, Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1]) * 0.45) : 30;
+  }
   return Math.max(12, Math.max(...(fixture.size ?? [40, 20])) * 0.9);
 }
 
@@ -608,7 +615,7 @@ function syncStock() {
   viewport.setSetupTransform(matrix, offset);
   viewport.setStock(stock);
   // clamps are held in setup space, which is the frame the scene is already in
-  viewport.setFixtures(setup.fixtures);
+  viewport.setFixtures(resolveFixtures(setup.fixtures, doc.fixtureMeshes));
 }
 
 /**
@@ -876,7 +883,7 @@ async function restoreSaved() {
   try {
     const meshes = new Map();
     for (const [id, mesh] of saved.meshes) meshes.set(id, computeNormals(mesh));
-    ctx.doc.restore(saved.project, meshes);
+    ctx.doc.restore(saved.project, meshes, saved.fixtureMeshes);
     if (uncaught) throw uncaught;
 
     // Frame what came back. Restoring puts models in the scene without ever

@@ -29,6 +29,7 @@ import { mergeMeshes } from '../../geom/mesh.js';
 import { getSetting, SIM_CELLS } from '../settings.js';
 import { plural } from '../../engine/text.js';
 import { MOVE_STRIDE } from '../../engine/cl.js';
+import { resolveFixtures } from '../../engine/fixtures.js';
 
 /**
  * The cutter to simulate one tool's worth of an imported program with.
@@ -206,7 +207,7 @@ export function makeCheckActions(ctx, space) {
       parsed,
       machine: doc.machineRecord(),
       stock,
-      fixtures: setup?.fixtures,
+      fixtures: resolveFixtures(setup?.fixtures, doc.fixtureMeshes),
       extent,
       speeds,
     });

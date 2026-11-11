@@ -13,7 +13,7 @@ import { concentricRings, coreEntry } from '../rings.js';
 import { cutSpanWithRamp } from '../linking.js';
 import { mergeTolerance } from '../simplify.js';
 import {
-  offsetLoops, diffLoops, offsetNormalized, loopArea, unionWithHoles,
+  offsetLoops, diffLoops, loopArea, unionWithHoles,
 } from '../../geom/clipper.js';
 import { SilhouetteStack, silhouetteAbove } from '../../geom/silhouette.js';
 import { depthLevelsFor, depthRefusal, stockOutline } from '../stock.js';

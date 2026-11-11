@@ -8,14 +8,14 @@
 import { toolpathStats, READS_EARLIER } from '../engine/toolpath.js';
 import { deductedBefore } from '../engine/rest.js';
 import {
-  roughingLeftover as leftoverAfter, suggestedEntryGap, stepsTooTallFor,
+  roughingLeftover as leftoverAfter, suggestedEntryGap, stepsTooTallFor, DEFAULT_ENTRY_GAP,
 } from '../engine/heights.js';
 import { chamferGeometry, maxWidthFor } from '../engine/strategies/chamfer.js';
 import { grooveGeometry } from '../engine/strategies/engrave.js';
 import { reachCheck, latheReachOf, tipAngleOf } from '../engine/tool-geometry.js';
 import { isLatheTool } from '../engine/insert.js';
 import { noSideToCutWith } from '../engine/tool-match.js';
-import { chuckLimit, fixtureTop } from '../engine/fixtures.js';
+import { chuckLimit, fixtureTop, resolveFixtures } from '../engine/fixtures.js';
 import { setupModelIds } from './actions/setup-space.js';
 import { effectiveCutting } from '../engine/cutting.js';
 import { isFiveAxisOp } from '../engine/five/ops.js';
@@ -75,10 +75,10 @@ const REACHES_DOWN = new Set(['contour2d', 'pocket', 'clear2d', 'adaptive', 'bor
  * of these are things a picture of the job would tell you and a panel of fields
  * will not.
  */
-function lathePreflight(op, tool, setup, p) {
+function lathePreflight(op, tool, setup, p, doc = null) {
   if (!op.type.startsWith('turn')) return [];
   const notes = [];
-  const chuck = chuckLimit(setup?.fixtures);
+  const chuck = chuckLimit(resolveFixtures(setup?.fixtures, doc?.fixtureMeshes));
 
   // The commonest way to set up a turning job wrong: aim it past the jaws. The
   // Z numbers all look reasonable, and the chuck is the one thing in the scene
@@ -410,7 +410,7 @@ export function opPreflight(doc, op) {
     notes.push(`Stepdown ${p.stepdown}mm is deeper than the cutter's ${tool.fluteLength}mm `
       + 'flute — it would cut with the shank.');
   }
-  notes.push(...lathePreflight(op, tool, setup, p));
+  notes.push(...lathePreflight(op, tool, setup, p, doc));
   // The other reach limit, and the one nothing used to mention: what is above
   // the flutes has to stay above the work, because the slot is only as wide as
   // the cutter. A V bit on a 4mm collet shank runs out after 8mm however much
@@ -541,7 +541,7 @@ export function opPreflight(doc, op) {
   // this says what it will use, and why, before it is generated.
   if (FINISHING.has(op.type) && setup) {
     const leftover = roughingLeftover(setup, op);
-    const gap = p.entryGap ?? 1;
+    const gap = p.entryGap ?? DEFAULT_ENTRY_GAP;
     if (leftover > 0 && gap <= leftover + 1e-9) {
       notes.push(`The roughing before this leaves steps up to ${round3(leftover)}mm above the `
         + `finished surface, above the ${round3(gap)}mm Entry gap — so this pass enters and `
@@ -569,7 +569,8 @@ export function opPreflight(doc, op) {
     // job. Every cut move already keeps out of its footprint — which is exactly
     // what hides this, because the traverses that do not are the ones drawn as
     // safe. See engine/fixtures.js fixtureTop.
-    const clamp = milling ? fixtureTop(setup.fixtures) : null;
+    const clamp = milling
+      ? fixtureTop(resolveFixtures(setup.fixtures, doc.fixtureMeshes)) : null;
     if (clamp && p.clearanceHeight != null && p.clearanceHeight < clamp.z) {
       notes.push(`Clearance is Z${round3(p.clearanceHeight)} and ${clamp.name} stands to `
         + `Z${round3(clamp.z)} — a rapid at clearance goes through it.`);

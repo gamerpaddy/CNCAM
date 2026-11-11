@@ -168,7 +168,7 @@ function repairOperation(op, defaults, seen, notes) {
 }
 
 function repairFixture(fixture, seen, notes) {
-  const kind = ['box', 'cylinder', 'chuck'].includes(fixture.kind) ? fixture.kind : 'box';
+  const kind = ['box', 'cylinder', 'chuck', 'model'].includes(fixture.kind) ? fixture.kind : 'box';
   const defaults = createFixture(kind);
   const out = { ...defaults, ...fixture, kind };
   uniqueId(out, 'fix', seen, `clamp ${describe(out.name)}`, notes);

@@ -294,12 +294,8 @@ function addRow(setup, app) {
       title: turning
         ? 'How the bar is held, and how far along it the tool can reach'
         : 'Clamps and jaws the tool must keep out of',
-      // On a lathe there is exactly one thing to add, so a menu is a click in
-      // the way of the only answer.
-      onclick: (e) => (turning
-        ? app.actions?.addFixture(setup, 'chuck')
-        : openContextMenu(e, holdingMenu(setup, app, turning))),
-    }, [icon('plus', 13), turning ? 'Chuck' : 'Clamp…']),
+      onclick: (e) => openContextMenu(e, holdingMenu(setup, app, turning)),
+    }, [icon('plus', 13), turning ? 'Chuck…' : 'Clamp…']),
   ]);
 }
 
@@ -355,7 +351,14 @@ function holdingMenu(setup, app, turning) {
   // idea — there is no table to bolt one to and nothing that would hold still
   // if there were — and offering them here was offering a fixture that could
   // only produce a keep-out in a place the tool never goes.
-  return turning ? [chuck] : [jaw, clamp, chuck];
+  // The real thing, from the file it was drawn in. Last, because it is the one
+  // that needs a file to hand; the three above need nothing.
+  const model = {
+    label: turning ? 'Chuck from a model file…' : 'Vice or fixture from a model file…',
+    hint: 'An STL or STEP of the workholding. Every toolpath is checked against it.',
+    onclick: () => app.actions?.addFixtureModel(setup),
+  };
+  return turning ? [chuck, model] : [jaw, clamp, chuck, model];
 }
 
 function sectionHeader(doc, title, options = {}) {
@@ -523,7 +526,11 @@ function fixtureRow(doc, setup, fixture, app) {
     title: chuck
       ? `Grips ⌀${fixture.clampDiameter} at Z${fixture.faceZ}; `
         + `the tool cannot pass Z${(fixture.faceZ ?? 0) + (fixture.jawLength ?? 0)}`
-      : 'A keep-out every operation in this setup respects',
+      : fixture.kind === 'model'
+        ? (doc.fixtureMeshes.has(fixture.id)
+          ? `${fixture.sourceName || 'An imported fixture'} — every toolpath in this setup is checked against it`
+          : 'Its geometry was not saved with the project — remove it and import the file again')
+        : 'A keep-out every operation in this setup respects',
     onclick: () => doc.select('fixture', fixture.id),
   }, [
     toggle,
