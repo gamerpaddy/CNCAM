@@ -30,7 +30,9 @@
 // reachable is linked at depth instead. Those moves are emitted as leads, so
 // what the bite limit does and does not cover stays visible downstream.
 
-import { CLBuilder, FEED } from '../cl.js';
+import { CLBuilder, FEED, OP, MOVE_STRIDE, eachMove } from '../cl.js';
+import { clearedStack } from '../rest.js';
+import { generateClear } from './clear2d.js';
 import { plural } from '../text.js';
 import {
   offsetLoops, offsetNormalized, diffLoops, clipOpenPaths, loopToOpenPath,
@@ -380,8 +382,12 @@ export function generateAdaptive({
     if (level.cut) { cutAnything = true; zEntry = z; }
   }
 
+  const steppedUp = cutAnything
+    ? stepUpPasses(cl, { mesh, tool, params, regions, stock, fixtures }, levels, clearance) : null;
   goHome(cl, clearance);
-  cl.info(summary(report, tool, target, cl.merger));
+  cl.info(summary(report, tool, target, cl.merger)
+    + (steppedUp ? `, then ${steppedUp.levels} intermediate levels ${steppedUp.step}mm apart `
+      + 'to take the steps off the slopes' : ''));
   if (report.leftAbove > 0) {
     cl.warn(`stock up to ${report.leftAbove.toFixed(1)}mm tall was left standing where a `
       + 'level above could not reach it — cutting it lower down would take it deeper than '
@@ -1248,6 +1254,58 @@ function densify(pts, step) {
     }
   }
   return out;
+}
+
+/**
+ * The levels between the levels: what a deep pass leaves on anything that is
+ * not a vertical wall.
+ *
+ * Adaptive takes the whole depth of the flutes at a narrow bite, which is the
+ * right trade on a wall and leaves a staircase on a slope — a step as tall as
+ * the stepdown at every level. On the dome sample, two diameters deep, that was
+ * stock up to 16mm thick (5mm on average) standing where the pass said it left
+ * 0.3, for a finishing cutter to find.
+ *
+ * So the pass goes back for them: the same part, the same allowance, at a
+ * fraction of a diameter apart, cutting only what the deep levels did not —
+ * which is exactly a Z-level rough with rest machining read off this program's
+ * own moves (engine/rest.js). Each slice is as thin as the step, so the bite is
+ * light whatever its width, and on a part with no slopes there is nothing to
+ * find and nothing is added.
+ *
+ * `params.stepUp` is the spacing in diameters; absent or zero leaves it off,
+ * which is what a program saved before this existed asks for.
+ *
+ * @returns { levels, step } or null when nothing was added
+ */
+function stepUpPasses(cl, job, levels, clearance) {
+  const { tool, params, mesh, stock } = job;
+  const step = Math.round(Math.max(0, params.stepUp ?? 0) * tool.diameter * 1000) / 1000;
+  if (!(step > 0.05)) return null;
+  let widest = 0;
+  for (let i = 1; i < levels.length; i++) widest = Math.max(widest, levels[i - 1] - levels[i]);
+  if (!(widest > step * 1.5)) return null;
+  cl.merger?.flush();
+  const sofar = { moves: cl.data.subarray(0, cl.count * MOVE_STRIDE), count: cl.count };
+  const fine = { ...params, stepdown: step, restMachining: true, finishPasses: 0 };
+  const tolerance = params.tolerance ?? 0.01;
+  const cleared = clearedStack([{ cl: sofar, tool }], depthLevelsFor(fine, mesh, tool), { tolerance, stock });
+  if (cleared.length === 0) return null;
+  const extra = generateClear({
+    ...job, params: fine, regions: { include: [], avoid: [], ...(job.regions ?? {}), cleared },
+  });
+  const heights = new Set();
+  let started = false;
+  eachMove(extra, (op, x, y, z, i, j, k, feed) => {
+    if (op === OP.RAPID) {
+      if (!started) { goHome(cl, clearance); started = true; }
+      cl.rapid(x, y, z);
+    } else if (op === OP.LINE && started) {
+      cl.cut(x, y, z, feed);
+      if (feed === FEED.CUT) heights.add(Math.round(z * 1000));
+    }
+  });
+  return heights.size ? { levels: heights.size, step } : null;
 }
 
 /** The most turns a helical entry takes before it is steepened instead. */

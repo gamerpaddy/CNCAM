@@ -409,6 +409,11 @@ export const OP_PARAM_GROUPS = [
         hint: 'Width of cut the pass holds to — small bites buy full-depth passes at high feed (0.1–0.3 is usual)',
       },
       {
+        key: 'stepUp', label: 'Intermediate levels (×D)', step: 0.05, min: 0, max: 2, ops: ['adaptive'],
+        hint: 'After the deep passes, go back between them at this spacing and take the steps '
+          + 'they leave on sloped faces. 0 leaves the steps for a later operation.',
+      },
+      {
         key: 'stockToLeave', label: 'Stock to leave (mm)', min: 0, max: 100,
         // turnGroove reads it — for the floor and, where the groove is wider
         // than the blade, for both shoulders — and was the one operation in

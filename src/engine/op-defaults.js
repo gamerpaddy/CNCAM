@@ -74,6 +74,10 @@ export const STRATEGY_DEFAULTS = {
     // the trade the strategy exists to make: a narrow radial bite, taken deep
     stepdownD: 2,
     engagement: 0.15,
+    // …and then back up the slopes a quarter of a diameter at a time, so a deep
+    // pass does not leave a staircase for the finishing cutter — see
+    // strategies/adaptive.js stepUpPasses
+    stepUp: 0.25,
     stockToLeave: 0.3,
     rampAngle: 2,
     depth: 'stock',
