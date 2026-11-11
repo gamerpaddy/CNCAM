@@ -586,11 +586,45 @@ function carryAcross(run, pending, far) {
  * to their reordered loops afterwards.
  */
 function orderEntries(entries, cl) {
-  if (entries.length < 3) return entries;
-  const from = cl.count > 0 ? lastXY(cl) : null;
-  const ordered = orderByProximity(entries.map((e) => e.loop), from);
-  const byLoop = new Map(entries.map((e) => [e.loop, e]));
-  return ordered.map((loop) => byLoop.get(loop)).filter(Boolean);
+  if (entries.length < 2) return entries;
+  // Nearest first, and an open stroke from whichever end is nearer. A stroke
+  // has two ends and no reason to be cut in the direction it was drawn: taken
+  // always from its first point, a row of hatching was cut left to right every
+  // time with a rapid back between each line, and the next stroke was chosen by
+  // its nearest *vertex* and then entered from wherever its first one was.
+  const remaining = [...entries];
+  const out = [];
+  let at = cl.count > 0 ? lastXY(cl) : null;
+  const d2 = (x, y) => (at ? (x - at[0]) ** 2 + (y - at[1]) ** 2 : 0);
+  while (remaining.length > 0) {
+    let best = 0;
+    let bestD = Infinity;
+    let flip = false;
+    for (let i = 0; i < remaining.length && at; i++) {
+      const { loop, isOpen } = remaining[i];
+      const n = loop.length;
+      if (isOpen) {
+        const head = d2(loop[0], loop[1]);
+        const tail = d2(loop[n - 2], loop[n - 1]);
+        if (Math.min(head, tail) < bestD) { bestD = Math.min(head, tail); best = i; flip = tail < head; }
+      } else {
+        for (let k = 0; k < n; k += 2) {
+          const d = d2(loop[k], loop[k + 1]);
+          if (d < bestD) { bestD = d; best = i; flip = false; }
+        }
+      }
+    }
+    let [entry] = remaining.splice(best, 1);
+    if (flip) {
+      const reversed = [];
+      for (let k = entry.loop.length - 2; k >= 0; k -= 2) reversed.push(entry.loop[k], entry.loop[k + 1]);
+      entry = { ...entry, loop: reversed };
+    }
+    out.push(entry);
+    const n = entry.loop.length;
+    at = entry.isOpen ? [entry.loop[n - 2], entry.loop[n - 1]] : [entry.loop[0], entry.loop[1]];
+  }
+  return out;
 }
 
 /**

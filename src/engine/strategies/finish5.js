@@ -66,6 +66,9 @@ const STANDARD_TRUNNION = {
   ],
 };
 
+/** The step in tilt, in degrees, of the lattice an axis is read on for the cutter check. */
+const CHECK_TILT = 0.25;
+
 export function generateFinish5({
   mesh, tool, params: given, stock, regions, earlier = null, five = null,
 }) {
@@ -637,18 +640,31 @@ export function generateFinish5({
   const exactKernels=new Map();
   const requiredAt = (p,exact=false) => {
     if(!exact) return tipAt(p.x,p.y,leaning(p.a),-Infinity);
-    const key=p.a.join(',');
+    // The axis is read on a lattice a quarter of a degree of tilt across, four
+    // times finer than the one the path itself is planned on, and its kernel
+    // comes from the same tables the plan uses. A kernel was being built from
+    // the cutter's conics for every axis exactly as it stood, and an
+    // interpolated axis is never the same twice — so every point the coarse
+    // test doubted built its own, which was half of a 276 second plan. An
+    // eighth of a degree moves the ball 0.007mm and the top of a 20mm flute
+    // 0.04mm, both inside the cell the map is already cautious by.
+    const tilt=Math.acos(Math.min(1,Math.max(-1,p.a[2]))) * DEG;
+    const tiltQ=Math.round(tilt/CHECK_TILT)*CHECK_TILT;
+    const azStep=tiltQ>0 ? Math.min(30,Math.max(CHECK_TILT,(2*CHECK_TILT)/Math.sin(tiltQ*RAD))) : 360;
+    const azQ=Math.round((Math.atan2(p.a[1],p.a[0])*DEG)/azStep)*azStep;
+    const key=tiltQ*1000+azQ/1000;
     let kernel=exactKernels.get(key);
     if(!kernel) {
-      const tilt=Math.acos(Math.min(1,Math.max(-1,p.a[2]))) * DEG;
-      kernel=tilt<1e-7 ? upright : buildTiltedKernel(shells.cutting,p.a,map.cellSize,rise);
+      kernel=tiltQ<1e-7 ? upright : kernels.kernel(tiltQ,azQ);
       exactKernels.set(key,kernel);
-      if(exactKernels.size>256) exactKernels.delete(exactKernels.keys().next().value);
+      if(exactKernels.size>4096) exactKernels.delete(exactKernels.keys().next().value);
     }
     return tipAt(p.x,p.y,{kernel},-Infinity);
   };
   const motionCheck = (a, b) => checkMotion(a, b, {
-    spacing: Math.max(0.01, Math.min(map.cellSize / 2, ds / 2)),
+    // a cell apart: the map answers no finer than that, so asking it twice a cell
+    // asked the same question twice
+    spacing: Math.max(0.01, Math.min(map.cellSize, ds)),
     check: (p) => {
       if (scope.probeWith(() => p.z)(p.x,p.y)[2] === null) return 'outside machining window';
       if (bodyHits([p.x,p.y,p.z],p.a)) return 'shank or holder collision';

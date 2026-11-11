@@ -171,7 +171,11 @@ export function generateParallel3d({
 
   // grid fine enough that stepover and tolerance are both resolved, and the
   // heightmap is padded by the tool radius so the kernel never runs off the edge
-  const cellSize = Math.max(tolerance, Math.min(step / 4, r / 4, 0.3));
+  // The map errs high by about a cell on a slope (it is dilated by one so that it
+  // can never err low), so the cell is what a finishing pass leaves on a ramp:
+  // at a quarter of the stepover that was 0.054mm on a 27 degree face, five times
+  // the cusp the stepover was chosen for. An eighth halves it for half a second.
+  const cellSize = Math.max(tolerance, Math.min(step / 8, r / 8, 0.3));
   const meshBox = boundsOf(mesh.positions);
   const map = buildHeightmap(mesh, {
     cellSize,

@@ -860,7 +860,21 @@ export function generateTurnFinish({
   }
   const withAllowance = grownBy(raw, allowance);
   const body = insertReach(tool);
-  const whole = offsetProfile(withAllowance, nose, undefined, body);
+  // A recess nothing ahead of this pass has opened is crossed level with its
+  // shoulder. Planning for the insert's body keeps the *body* out of it, and
+  // that is not the same as keeping the pass out: a 55 degree insert has room
+  // to lean its nose 2mm down into a groove 3mm deep, and did — a 2.3mm bite
+  // with a finishing insert into metal no roughing pass had touched, under a
+  // warning that said the recess was being left as it was. Now it is.
+  const recesses = enclosedRecesses(raw).filter((r) => r.depth > Math.max(nose, allowance) + 0.1);
+  const unopened = recesses.filter((r) => !groovedAhead(earlier, r, allowance));
+  const whole = offsetProfile(withAllowance, nose, undefined, body).map(([z, x]) => {
+    let out = x;
+    for (const r of unopened) {
+      if (z >= r.from - nose && z <= r.to + nose) out = Math.max(out, r.shoulder + allowance + nose);
+    }
+    return out === x ? [z, x] : [z, out];
+  });
   // The nose centre stops a radius in front of the jaws, as the roughing pass's
   // does, so that none of the nose is behind them — and the retract that
   // follows goes out along the jaw face rather than through it.
@@ -925,9 +939,7 @@ export function generateTurnFinish({
   // crosses a recess the insert's body cannot get into, and says that it did.
   // A groove ahead of this pass that reaches the floor has opened it already,
   // and then there is nothing to say.
-  const recesses = enclosedRecesses(raw).filter((r) => r.depth > Math.max(nose, allowance) + 0.1);
-  for (const recess of recesses) {
-    if (groovedAhead(earlier, recess, allowance)) continue;
+  for (const recess of unopened) {
     cl.warn(`⌀${dia(recess.radius)} at Z${recess.z.toFixed(2)} is ${recess.depth.toFixed(2)}mm `
       + `below the ⌀${dia(recess.shoulder)} either side of it — no turning pass can reach in `
       + 'there, so this pass crosses it and leaves it as it is; open it with a grooving tool first');

@@ -27,7 +27,7 @@
 // a thing you draw, not a thing the solid has an outline of — and from the
 // part's own boundaries where there is not.
 
-import { CLBuilder, FEED, lastXY } from '../cl.js';
+import { CLBuilder, FEED, lastXY, lastZ } from '../cl.js';
 import { plural, pluralEs } from '../text.js';
 import { offsetLoops, clipOpenPaths, loopToOpenPath } from '../../geom/clipper.js';
 import { segmentInLoops } from '../../geom/inside.js';
@@ -145,7 +145,6 @@ export function generateSlot({
   // differently at different depths — a picked face, a clamp — and a span that
   // appears when a keep-out ends is untouched ground like any other.
   // See engine/heights.js EntrySurface.
-  const surface = new EntrySurface(params.topZ, r);
 
   // Where the cutter centre can touch the billet at all (stockReach). A lane
   // outside it removes nothing, and with a slot wider than the cutter that is
@@ -154,12 +153,21 @@ export function generateSlot({
   // air on either side. The lines are the same at every depth, so each lane is
   // made and clipped once.
   const billet = stock ? stockReach(stock, r, tolerance) : null;
+  // One line at a time, all the way down, and then the next. It used to be one
+  // *level* at a time across every line in the drawing: fifteen marks and
+  // sixteen depths was 240 separate descents from the crossing plane, and 11m
+  // of rapid to cut 13.6m of slot. A slot is finished by going down it, and the
+  // only thing between one depth and the next is the stepdown — so the tool
+  // stays in the slot it is cutting (see cutOne) and crosses the plate once per
+  // line rather than once per line per depth.
+  const orderedCentres = orderByProximity(centres.map((c) => c.points), null)
+    .map((points) => centres.find((c) => c.points === points));
+  for (const centre of orderedCentres) {
+  const surface = new EntrySurface(params.topZ, r);
   const lanePaths = lanes.map((lane) => {
     const paths = [];
-    for (const { points, closed } of centres) {
-      for (const shifted of shiftPath(points, closed, lane, tolerance)) {
-        paths.push(...withinBillet(shifted, closed, billet, tolerance));
-      }
+    for (const shifted of shiftPath(centre.points, centre.closed, lane, tolerance)) {
+      paths.push(...withinBillet(shifted, centre.closed, billet, tolerance));
     }
     return paths;
   });
@@ -224,6 +232,7 @@ export function generateSlot({
       }
     }
     surface.endLevel(z);
+  }
   }
 
   if (!cutAnything) {
@@ -342,21 +351,37 @@ function cutOne(cl, path, closed,
   const n = path.length / 2;
   const home = crossAt != null && crossAt > z + 1e-9
     ? Math.min(crossAt, clearanceZ) : clearanceZ;
+  // Is the tool already standing in this slot, at the depth the pass above it
+  // left, over the point this one starts from? Then there is nothing to lift
+  // out for: the next pass begins where the last one ended. Every pass used to
+  // end with a climb to the crossing plane and begin with the same descent.
+  const standingAt = (x, y) => {
+    if (!(cl.count > 0)) return false;
+    const [lx, ly] = lastXY(cl);
+    const lz = lastZ(cl);
+    return Math.hypot(lx - x, ly - y) < 1e-6 && lz <= zEntry + 1e-6 && lz >= z - 1e-6;
+  };
+  const travelTo = (x, y) => {
+    if (cl.count > 0 && lastZ(cl) < home - 1e-9) cl.rapid(...lastXY(cl), home);
+    cl.rapid(x, y, home);
+  };
   if (closed) {
     if (n < 3) return false;
     const loop = orientLoop(path, direction, false);
-    cl.rapid(loop[0], loop[1], home);
+    if (!standingAt(loop[0], loop[1])) travelTo(loop[0], loop[1]);
     cutLoopWithRamp(cl, loop, zEntry, z, rampAngle, { feedPlane });
-    cl.rapid(...lastXY(cl), home);
     return true;
   }
   if (n < 2) return false;
-  const pts = [];
+  let pts = [];
   for (let i = 0; i < n; i++) pts.push([path[i * 2], path[i * 2 + 1]]);
-  cl.rapid(pts[0][0], pts[0][1], home);
-  if (feedPlane != null && feedPlane > z + 1e-9) cl.rapid(pts[0][0], pts[0][1], feedPlane);
+  // an open line is cut from whichever end the tool is at
+  if (standingAt(pts[n - 1][0], pts[n - 1][1])) pts = pts.reverse();
+  if (!standingAt(pts[0][0], pts[0][1])) {
+    travelTo(pts[0][0], pts[0][1]);
+    if (feedPlane != null && feedPlane > z + 1e-9) cl.rapid(pts[0][0], pts[0][1], feedPlane);
+  }
   cutSpanWithRamp((x, y, zz, feed = FEED.CUT) => cl.cut(x, y, zz, feed),
     pts, zEntry, z, rampAngle);
-  cl.rapid(...lastXY(cl), home);
   return true;
 }

@@ -104,13 +104,20 @@ test('an arc drawn on a flipped plane lands where it was drawn', () => {
     '210', '0', '220', '0', '230', '-1',
     '0', 'LINE', '10', '-15', '20', '-20', '11', '-15', '21', '0',
   ]));
-  const arc = paths[0].points;
-  assert.close(arc[0], -15, 1e-6, 'starts where the line ends, at world (−15, 0)');
-  assert.close(arc[1], 0, 1e-6);
-  assert.close(arc[arc.length - 2], -5, 1e-6, 'ends on top of its centre');
-  assert.close(arc[arc.length - 1], 10, 1e-6);
-  const line = paths[1].points;
-  assert.close(line[2], arc[0], 1e-9, 'and the line meets it');
+  // They meet end to end, so they come in as the one path they were drawn as
+  // (see joinPaths): up the line to world (-15, 0), then round the arc.
+  assert.eq(paths.length, 1, 'the line and the arc that continues it are one path');
+  const joined = paths[0].points;
+  const ends = [[joined[0], joined[1]], [joined[joined.length - 2], joined[joined.length - 1]]];
+  const lineEnd = ends.find(([x, y]) => Math.abs(x + 15) < 1e-6 && Math.abs(y + 20) < 1e-6);
+  const arcEnd = ends.find(([x, y]) => Math.abs(x + 5) < 1e-6 && Math.abs(y - 10) < 1e-6);
+  assert.ok(lineEnd, 'one end is the foot of the line');
+  assert.ok(arcEnd, 'the other is the end of the arc, on top of its centre');
+  let meets = false;
+  for (let i = 0; i < joined.length; i += 2) {
+    if (Math.abs(joined[i] + 15) < 1e-6 && Math.abs(joined[i + 1]) < 1e-6) meets = true;
+  }
+  assert.ok(meets, 'and it passes through world (-15, 0), where the two meet');
 
   // a circle and a polyline on that plane are mirrored the same way
   const flipped = parseDXF(dxf([
@@ -330,4 +337,23 @@ test('an arc or ellipse whose start angle is enormous does not hang the import',
   const w = boundsOf(wrap.paths);
   assert.close(w.max[0], 5, 1e-6, '270 to 90 goes through 0 degrees, the right-hand half');
   assert.ok(w.min[0] > -1e-6, 'and not the left');
+});
+
+// A rectangle drawn as four LINEs is a rectangle. Read one entity to one path it
+// was four open strokes: not a boundary, so it could not be pocketed or profiled,
+// and engraving it was four descents.
+test('lines that meet end to end come in as the shape they were drawn as', () => {
+  const line = (a, b, c, d) => ['0', 'LINE', '10', `${a}`, '20', `${b}`, '11', `${c}`, '21', `${d}`];
+  const box = parseDXF(dxf([
+    ...line(0, 0, 10, 0), ...line(10, 5, 0, 5), ...line(10, 0, 10, 5), ...line(0, 5, 0, 0),
+  ])).paths;
+  assert.eq(box.length, 1, 'four lines, one path');
+  assert.ok(box[0].closed, 'and it is closed');
+  assert.eq(box[0].points.length, 8, 'with four corners, none of them twice');
+
+  // three lines into one point is a junction: nobody can say which two are the path
+  const tee = parseDXF(dxf([
+    ...line(0, 0, 10, 0), ...line(10, 0, 10, 5), ...line(10, 0, 20, 0),
+  ])).paths;
+  assert.eq(tee.length, 3, 'a junction joins nothing');
 });

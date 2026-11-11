@@ -119,7 +119,115 @@ export function parseDXF(text, { tolerance = 0.005 } = {}) {
       for (let k = 0; k < path.points.length; k++) path.points[k] *= scale;
     }
   }
-  return { paths, bounds: boundsOf(paths), units: scale, skipped };
+  const joined = joinPaths(paths, Math.max(JOIN_GAP, tolerance * 2));
+  return { paths: joined, bounds: boundsOf(joined), units: scale, skipped };
+}
+
+/** How far apart two ends may be and still be the same corner, in mm. */
+const JOIN_GAP = 0.01;
+
+/**
+ * Chain open paths that meet end to end into the shapes they were drawn as.
+ *
+ * A great many drawings never contain a polyline: a rectangle is four LINEs, a
+ * slot two lines and two arcs, each its own entity. Read one entity to one
+ * path, that rectangle was four open strokes — so it was not a boundary, and
+ * could not be pocketed or profiled at all; engraving it was four descents and
+ * four retracts; and nothing said why.
+ *
+ * Only where exactly two ends meet, and only on one layer. Three lines into
+ * one point is a junction, and which two of them are "the" path is a guess the
+ * drawing does not answer, so a junction ends every stroke that reaches it as
+ * it did before. A chain whose two ends meet is closed.
+ */
+function joinPaths(paths, gap) {
+  const key = (x, y) => `${Math.round(x / gap)},${Math.round(y / gap)}`;
+  const open = [];
+  const out = [];
+  for (const path of paths) {
+    const n = path.points.length;
+    if (path.closed || n < 4) { out.push(path); continue; }
+    // a stroke that already ends where it starts is a loop that was not flagged
+    if (n >= 6 && Math.hypot(path.points[0] - path.points[n - 2], path.points[1] - path.points[n - 1]) <= gap) {
+      out.push({ ...path, points: path.points.slice(0, n - 2), closed: true });
+      continue;
+    }
+    open.push(path);
+  }
+  // each end, by the cell it rounds into and the neighbours of that cell
+  const ends = new Map();
+  const endsAt = (x, y, layer) => {
+    const found = [];
+    const cx = Math.round(x / gap); const cy = Math.round(y / gap);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (const end of ends.get(`${layer}|${cx + dx},${cy + dy}`) ?? []) {
+          if (Math.hypot(end.x - x, end.y - y) <= gap) found.push(end);
+        }
+      }
+    }
+    return found;
+  };
+  open.forEach((path, index) => {
+    const n = path.points.length;
+    for (const tail of [false, true]) {
+      const x = path.points[tail ? n - 2 : 0]; const y = path.points[tail ? n - 1 : 1];
+      const k = `${path.layer}|${key(x, y)}`;
+      if (!ends.has(k)) ends.set(k, []);
+      ends.get(k).push({ index, tail, x, y });
+    }
+  });
+  /** The one other end at this end, or null at a free end or a junction. */
+  const partner = (index, tail) => {
+    const path = open[index];
+    const n = path.points.length;
+    const x = path.points[tail ? n - 2 : 0]; const y = path.points[tail ? n - 1 : 1];
+    const here = endsAt(x, y, path.layer);
+    if (here.length !== 2) return null;
+    const other = here.find((e) => !(e.index === index && e.tail === tail));
+    return other && other.index !== index ? other : null;
+  };
+  const used = new Array(open.length).fill(false);
+  const oriented = (index, reversed) => {
+    const pts = open[index].points;
+    if (!reversed) return pts;
+    const flipped = [];
+    for (let k = pts.length - 2; k >= 0; k -= 2) flipped.push(pts[k], pts[k + 1]);
+    return flipped;
+  };
+  for (let start = 0; start < open.length; start++) {
+    if (used[start]) continue;
+    // walk back from the head to find where this chain begins; a ring comes
+    // back round to where it started, and then anywhere is the beginning
+    let first = { index: start, reversed: false };
+    const seen = new Set([start]);
+    for (let guard = open.length; guard > 0; guard--) {
+      const before = partner(first.index, first.reversed);   // the end the chain enters by
+      if (!before || used[before.index]) break;
+      if (seen.has(before.index)) { first = { index: start, reversed: false }; break; }
+      seen.add(before.index);
+      first = { index: before.index, reversed: !before.tail };
+    }
+    used[first.index] = true;
+    const points = [...oriented(first.index, first.reversed)];
+    let at = first;
+    let closed = false;
+    for (let guard = open.length; guard > 0; guard--) {
+      const after = partner(at.index, !at.reversed);          // the end the chain leaves by
+      if (!after) break;
+      if (after.index === first.index) { closed = points.length >= 6; break; }
+      if (used[after.index]) break;
+      used[after.index] = true;
+      at = { index: after.index, reversed: after.tail };
+      points.push(...oriented(at.index, at.reversed).slice(2));
+    }
+    if (closed) {
+      const n = points.length;
+      if (Math.hypot(points[0] - points[n - 2], points[1] - points[n - 1]) <= gap) points.length = n - 2;
+    }
+    out.push({ ...open[first.index], points, closed });
+  }
+  return out;
 }
 
 /** $INSUNITS, as millimetres per drawing unit. */

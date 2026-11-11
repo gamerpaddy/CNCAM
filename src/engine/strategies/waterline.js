@@ -143,7 +143,7 @@ function fieldKeepout(mesh, tool, tolerance) {
   const r = tool.diameter / 2;
   const box = computeBounds(mesh.positions);
   const area = (box.max[0] - box.min[0] + 2 * r) * (box.max[1] - box.min[1] + 2 * r);
-  const cellSize = Math.max(tolerance, 0.04, ((area * Math.PI * r * r) / FIELD_BUDGET) ** 0.25);
+  const cellSize = Math.max(tolerance, ((area * Math.PI * r * r) / FIELD_BUDGET) ** 0.25);
   const pad = r + 3 * cellSize;
   const map = buildHeightmap(mesh, {
     cellSize,
