@@ -19,6 +19,7 @@ import { machineCanHold } from '../../doc/tool-library.js';
 import { paramRow, propRow } from './fields.js';
 import { resultSection, problemNote } from './reports.js';
 import { snippetsFor, saveSnippet, deleteSnippet } from '../../doc/gcode-snippets.js';
+import { PROBE_KINDS, PROBE_DEFAULTS, probeMacro } from '../../doc/probe-macros.js';
 
 /**
  * The strategy, shown as what it is rather than as an entry in a dropdown.
@@ -356,7 +357,55 @@ function commandSection(doc, op, app) {
     + 'where it was saved.',
   ]));
 
+  rows.push(...probingBlock(doc, op, box, app));
+
   return rows;
+}
+
+/**
+ * Probing blocks: pick one, fill in the distances, and its G-code is put in the
+ * box above for reading and editing like any other text. Nothing is run — this
+ * program writes a file and the operator runs it. See doc/probe-macros.js.
+ */
+function probingBlock(doc, op, box, app) {
+  const kind = el('select', { 'aria-label': 'Probing block' }, PROBE_KINDS.map((k) => el('option', { value: k.id }, [k.label])));
+  const num = (key, label, title) => {
+    const input = el('input', { type: 'number', step: 'any', value: String(PROBE_DEFAULTS[key]), 'aria-label': label, title });
+    return { key, input, row: el('label', { class: 'probe-field' }, [label, input]) };
+  };
+  const fields = [
+    num('feed', 'Probe feed (mm/min)', 'Slow: the probe is a delicate part'),
+    num('travel', 'Search distance (mm)', 'How far to look before giving up and alarming'),
+    num('retract', 'Back-off (mm)', 'How far to back away after a touch'),
+    num('radius', 'Probe tip radius (mm)', 'Half the diameter of the ball on the end of the probe'),
+    num('thickness', 'Plate height (mm)', 'Z only: the height of a touch plate or tool setter above the work'),
+  ];
+  const wcs = el('select', { 'aria-label': 'Work offset to set' },
+    ['G54', 'G55', 'G56', 'G57', 'G58', 'G59'].map((w) => el('option', { value: w }, [w])));
+  const axis = el('select', { 'aria-label': 'Edge axis' }, [el('option', { value: 'X' }, ['X edge']), el('option', { value: 'Y' }, ['Y edge'])]);
+  const dir = el('select', { 'aria-label': 'Direction' }, [el('option', { value: '1' }, ['moving positive']), el('option', { value: '-1' }, ['moving negative'])]);
+  const pause = el('input', { type: 'checkbox', checked: true });
+  const insert = el('button', {
+    title: 'Write this block into the box above (nothing is run)',
+    onclick: () => {
+      const spec = { kind: kind.value, post: doc.postId(), wcs: wcs.value, axis: axis.value, direction: Number(dir.value), pause: pause.checked };
+      for (const f of fields) spec[f.key] = Number(f.input.value);
+      const m = probeMacro(spec);
+      if (m.error) return app.ui?.setStatus?.(m.error, true);
+      if (box.value.trim() && !confirm(`Replace the G-code in ${op.name} with the probing block?`)) return undefined;
+      doc.updateItem(op, { params: { ...op.params, gcode: m.gcode } }, `probing block ${m.name}`);
+      return app.ui?.setStatus?.(`${m.name} written into ${op.name} - read it, and prove it in the air first`);
+    },
+  }, ['Write block']);
+  return [
+    el('div', { class: 'gcode-preset-block probe-block' }, [
+      el('label', {}, ['Probing block']), kind, wcs, axis, dir, ...fields.map((f) => f.row),
+      el('label', { class: 'toggle' }, [pause, 'Pause so the probe can be fitted']), insert]),
+    el('div', { class: 'prop-hint' }, [
+      'Writes G-code for you to run from the machine’s own screen: this program never connects to a machine. '
+      + 'The spindle is stopped first and absolute mode is restored at the end. Prove it in the air, with the probe clear of everything.',
+    ]),
+  ];
 }
 
 const PICK_LABELS = {

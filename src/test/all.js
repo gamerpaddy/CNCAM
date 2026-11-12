@@ -71,3 +71,4 @@ import './five-operations.test.js';
 import './five-motion-check.test.js';
 
 import './job-report.test.js';
+import './probe-macros.test.js';

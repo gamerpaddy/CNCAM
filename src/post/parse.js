@@ -113,6 +113,25 @@ const MODAL_G = new Set([
   98, 99,              // cycle retract
 ]);
 
+/**
+ * G codes whose X, Y and Z are not a destination in the part's own coordinates.
+ *
+ * - G38.2–G38.5 probe: the tool moves *toward* the Z and stops wherever the
+ *   workpiece is, so the word is a limit, not a place. It was read as a feed
+ *   move to that Z, and a touch-off macro in a Command block made the read-back
+ *   say the file was ten millimetres off its own toolpath.
+ * - G28 / G30 go to a stored machine position through the point named; with G91
+ *   the word is `Z0`, an increment of nothing.
+ * - G10 and G92 *define* coordinates (L20 sets a work offset from where the tool
+ *   is) and move nothing at all.
+ * - G53 is machine coordinates for one block, a different space from the one
+ *   every other point here is in, so a park move is not a point on the part.
+ *
+ * None of them is drawn. Where the tool is afterwards is not known to this
+ * reader, and the next absolute move says where it is.
+ */
+const NO_PATH = new Set([10, 28, 28.1, 30, 30.1, 38.2, 38.3, 38.4, 38.5, 53, 92, 92.1, 92.2, 92.3]);
+
 /** M codes that mean something here. Everything else is reported. */
 const KNOWN_M = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30]);
 
@@ -246,9 +265,17 @@ export function parseGcode(text, { arcTolerance = 0.005, kinematics = null } = {
     // write it at the bottom of every long-hand hole with a dwell, and the check
     // then said the file had a code it could not read.
     let dwell = false;
+    // A block whose axis words are not a place to go to. See NO_PATH.
+    let noPath = false;
     for (const [letter, n] of words) {
       if (letter === 'G') {
         if (n === 4) dwell = true;
+        else if (NO_PATH.has(n)) {
+          // Said as an event so a reader can show it; never drawn as a move.
+          noPath = true;
+          if (n >= 38.2 && n <= 38.5) events.push({ type: 'probe', code: `G${n}`, line });
+          else if (n === 28 || n === 30 || n === 28.1 || n === 30.1) events.push({ type: 'reference', code: `G${n}`, line });
+        }
         else if (n === 0 || n === 1 || n === 2 || n === 3) { move = n; cycle = null; }
         // Spindle-synchronised motion. G33 is a feed move whose rate comes from
         // the spindle rather than from F — read as a cut, which is what it is —
@@ -337,7 +364,7 @@ export function parseGcode(text, { arcTolerance = 0.005, kinematics = null } = {
         }
       }
     }
-    if (endsCycle || dwell) return;
+    if (endsCycle || dwell || noPath) return;
 
     // Coordinates, in millimetres and absolute, whatever the program said —
     // and in radii, whatever the lathe said. `per` is 1 on every axis but X,

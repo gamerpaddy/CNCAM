@@ -2698,6 +2698,8 @@ kbd {
    which left the preset list showing three characters of a name. */
 .gcode-preset-block { display: flex; flex-direction: column; gap: 3px; margin: 8px 0; }
 .gcode-preset-block > label { font-size: 11.5px; color: var(--fg-dim); }
+.probe-block .probe-field { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.probe-block .probe-field input { width: 80px; }
 .gcode-preset-row { display: flex; gap: 4px; align-items: center; min-width: 0; }
 .gcode-preset-row > select,
 .gcode-preset-row > input {
