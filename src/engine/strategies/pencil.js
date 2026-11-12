@@ -61,7 +61,7 @@ export function generatePencil({
   const minResidual = params.pencilMinResidual > 0
     ? params.pencilMinResidual : Math.max(0.02, tolerance * 2);
 
-  const kernelRef = buildToolKernel({ type: 'ball', diameter: refDiameter }, map.cellSize);
+  const kernelRef = buildToolKernel({ type: 'ball', diameter: refDiameter }, map.cellSize, { segment: 17 });
 
   // --- the residue, on a grid fine enough to see it and coarse enough to afford ---
   const g = Math.max(map.cellSize, R / 8);

@@ -199,7 +199,7 @@ export function prepareFinish({
     },
     floor: -Infinity,
   });
-  const kernel = buildToolKernel(tool, map.cellSize);
+  const kernel = buildToolKernel(tool, map.cellSize, { segment: 17 });
 
   // machining area: the stock footprint, narrowed by any picked regions, and the
   // part's own boundary — shared with the 5-axis finish, see finishingWindow

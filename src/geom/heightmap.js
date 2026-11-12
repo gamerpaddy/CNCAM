@@ -293,9 +293,12 @@ export { clearanceProfile, cuttingRadiusOf };
  * Precompute the grid offsets the tool covers, with each one's clearance.
  * Reused across every sample point, which is what keeps finishing tractable.
  */
-export function buildToolKernel(tool, cellSize) {
+export function buildToolKernel(tool, cellSize, { segment: wanted = 0 } = {}) {
   const r = cuttingRadiusOf(tool);
   const profile = clearanceProfile(tool);
+  // Runs only help where the clearance varies along a row: a flat cutter's rows
+  // have one floor each already, and splitting them would only add reads.
+  const segment = Math.abs(profile(r) - profile(0)) > 1e-9 ? wanted : 0;
   const reach = Math.ceil(r / cellSize);
   const offsets = [];
   // Rows, kept alongside, because the disc is a stack of contiguous runs and a
@@ -303,7 +306,7 @@ export function buildToolKernel(tool, cellSize) {
   // the middle outward: the centre row is where the tool is lowest and so where
   // the highest tip usually comes from, and the sooner a high one is found the
   // more of the rest can be skipped.
-  const rows = [];
+  const segments = [];
   for (let n = 0; n <= reach; n++) {
     for (const dj of n === 0 ? [0] : [n, -n]) {
       const start = offsets.length / 3;
@@ -326,9 +329,36 @@ export function buildToolKernel(tool, cellSize) {
       // Flat, not an array of objects: this is read a few hundred million times
       // in a finishing pass, and walking objects to get at six numbers costs
       // more than the arithmetic they are for.
-      rows.push(dj, start, end, minC, offsets[start * 3], offsets[(end - 1) * 3]);
+      //
+      // A long row can be cut into runs of `segment` cells, each with the lowest
+      // clearance *of its own*. A ball's rim is far above its tip, so the outer
+      // runs of a row have a much higher floor than the row as a whole, and the
+      // bound that rules a run out — highest cell less lowest clearance — is
+      // that much tighter. The answer is the same: the maximum is taken over the
+      // same cells, in a different order.
+      if (segment > 0 && end - start > 2 * segment) {
+        const pieces = Math.ceil((end - start) / segment);
+        const size = Math.ceil((end - start) / pieces);
+        for (let a = start; a < end; a += size) {
+          const b = Math.min(end, a + size);
+          let low = Infinity;
+          for (let q = a; q < b; q++) if (offsets[q * 3 + 2] < low) low = offsets[q * 3 + 2];
+          segments.push({ dj, a, b, low, di0: offsets[a * 3], di1: offsets[(b - 1) * 3] });
+        }
+        continue;
+      }
+      segments.push({ dj, a: start, b: end, low: minC, di0: offsets[start * 3], di1: offsets[(end - 1) * 3] });
     }
   }
+  // Nearest the middle first: the sooner a high tip is found, the more of the
+  // rest can be ruled out. Rows already come in that order; the runs of a long
+  // row are put in order by how far their middle is from the tool's axis.
+  if (segment > 0) {
+    segments.sort((p, q) => (Math.abs(p.dj) - Math.abs(q.dj))
+      || (Math.abs((p.di0 + p.di1) / 2) - Math.abs((q.di0 + q.di1) / 2)));
+  }
+  const rows = [];
+  for (const g of segments) rows.push(g.dj, g.a, g.b, g.low, g.di0, g.di1);
   const packed = new Float32Array(offsets);
   // The clearances on their own, in the same order. A row of the disc is a run
   // of neighbouring cells — `di` counts up by one from the row's first to its
@@ -336,6 +366,13 @@ export function buildToolKernel(tool, cellSize) {
   // needs nothing else from the offsets.
   const clearance = new Float32Array(packed.length / 3);
   for (let n = 0; n < clearance.length; n++) clearance[n] = packed[n * 3 + 2];
+  // The same clearances by offset, for asking what one given cell costs
+  // without finding its row: Infinity outside the disc.
+  const side = 2 * reach + 1;
+  const lookup = new Float32Array(side * side).fill(Infinity);
+  for (let n = 0; n < offsets.length; n += 3) {
+    lookup[(offsets[n + 1] + reach) * side + offsets[n] + reach] = Math.fround(offsets[n + 2]);
+  }
   return {
     offsets: packed,
     clearance,
@@ -343,6 +380,8 @@ export function buildToolKernel(tool, cellSize) {
     radius: r,
     rows: new Float64Array(rows),
     rowCount: rows.length / ROW_STRIDE,
+    lookup,
+    reach,
   };
 }
 
@@ -450,13 +489,136 @@ export function dropCutter(map, kernel, x, y) {
 export function toolLocationField(map, kernel) {
   const { width, height, cellSize } = map;
   const field = new Float32Array(width * height);
+  // The cell each node's answer came from. The next node's answer very often
+  // comes from the same cell, and that cell is a lower bound on it before a
+  // single row has been read — which is what lets nearly every row be ruled out.
+  const from = new Int32Array(width * height).fill(-1);
   for (let j = 0; j < height; j++) {
     const y = map.min[1] + j * cellSize;
     for (let i = 0; i < width; i++) {
-      field[j * width + i] = dropCutter(map, kernel, map.min[0] + i * cellSize, y);
+      const at = j * width + i;
+      field[at] = dropCutterSeeded(map, kernel, map.min[0] + i * cellSize, y,
+        i > 0 ? from[at - 1] : -1, j > 0 ? from[at - width] : -1, from, at);
     }
   }
   return field;
+}
+
+/**
+ * `dropCutter`, started from what the neighbouring nodes found.
+ *
+ * Each seed is a cell that was the highest contact for a neighbour; if it is
+ * under this node's cutter too, it is a candidate for this one with a known
+ * clearance, and the best of them is a valid lower bound to start from. Rows
+ * are then skipped by the same exact test `dropCutter` uses, against a bound
+ * that is already nearly the answer. The result is the same maximum over the
+ * same cells.
+ */
+function dropCutterSeeded(map, kernel, x, y, seedA, seedB, from, out) {
+  const { data, width, height, cellSize, floor } = map;
+  const ci = Math.round((x - map.min[0]) / cellSize);
+  const cj = Math.round((y - map.min[1]) / cellSize);
+  const clearance = kernel.clearance;
+  const { lookup, reach } = kernel;
+  const side = 2 * reach + 1;
+  const win = map.window;
+  const winData = win ? win.data : null;
+  const rows = kernel.rows;
+  const half = win ? win.half : 0;
+  const span = half * 2 + 1;
+
+  let best = -Infinity;
+  let bestCell = -1;
+  for (const seed of [seedA, seedB]) {
+    if (seed < 0) continue;
+    const sj = (seed / width) | 0;
+    const si = seed - sj * width;
+    const di = si - ci;
+    const dj = sj - cj;
+    if (di < -reach || di > reach || dj < -reach || dj > reach) continue;
+    const c = lookup[(dj + reach) * side + di + reach];
+    if (c === Infinity) continue;
+    const h = data[seed];
+    if (h === floor) continue;
+    if (h - c > best) { best = h - c; bestCell = seed; }
+  }
+
+  for (let m = 0; m < kernel.rowCount; m++) {
+    const at = m * ROW_STRIDE;
+    const j = cj + rows[at];
+    if (j < 0 || j >= height) continue;
+    const base = j * width;
+    const rowStart = rows[at + 1];
+    const rowEnd = rows[at + 2];
+    const minC = rows[at + 3];
+    const first = ci + rows[at + 4];
+
+    if (winData && best > -Infinity) {
+      const lo = first;
+      const hi = ci + rows[at + 5];
+      let top = -Infinity;
+      for (let c = lo + half; ; c += span) {
+        const k = c < 0 ? 0 : c > width - 1 ? width - 1 : c;
+        const v = winData[base + k];
+        if (v > top) top = v;
+        if (c >= hi - half) break;
+      }
+      if (top - minC <= best) continue;
+    }
+
+    let n0 = rowStart;
+    let n1 = rowEnd;
+    if (first < 0) n0 -= first;
+    const last = first + (rowEnd - rowStart) - 1;
+    if (last > width - 1) n1 -= last - (width - 1);
+    let cell = base + first + (n0 - rowStart);
+    for (let n = n0; n < n1; n++, cell++) {
+      const h = data[cell];
+      if (h === floor) continue;
+      const candidate = h - clearance[n];
+      if (candidate > best) { best = candidate; bestCell = cell; }
+    }
+  }
+  from[out] = bestCell;
+  return best === -Infinity ? floor : best;
+}
+
+const BLOCK = 8;
+const blockCache = new WeakMap();
+
+/**
+ * The lowest and highest node of every BLOCK x BLOCK stretch of cells (BLOCK + 1
+ * nodes each way, since a cell reaches one node past its corner), computed once
+ * per field — a waterline asks the same field at a hundred levels.
+ */
+function blockRangesOf(field, W, H) {
+  let ranges = blockCache.get(field);
+  if (ranges) return ranges;
+  const across = Math.ceil((W - 1) / BLOCK);
+  const down = Math.ceil((H - 1) / BLOCK);
+  const min = new Float32Array(across * down).fill(Infinity);
+  const max = new Float32Array(across * down).fill(-Infinity);
+  for (let j = 0; j < H; j++) {
+    const rows = [(j / BLOCK) | 0];
+    if (j % BLOCK === 0 && j > 0) rows.push(j / BLOCK - 1);
+    for (let i = 0; i < W; i++) {
+      const v = field[j * W + i];
+      const cols = [(i / BLOCK) | 0];
+      if (i % BLOCK === 0 && i > 0) cols.push(i / BLOCK - 1);
+      for (const r of rows) {
+        if (r >= down) continue;
+        for (const c of cols) {
+          if (c >= across) continue;
+          const at = r * across + c;
+          if (v < min[at]) min[at] = v;
+          if (v > max[at]) max[at] = v;
+        }
+      }
+    }
+  }
+  ranges = { across, min, max };
+  blockCache.set(field, ranges);
+  return ranges;
 }
 
 /**
@@ -482,8 +644,24 @@ export function regionAbove(field, map, level) {
   // edge ids: 2k is the edge from node k to the node on its right, 2k+1 the one above it
   const next = new Map();
   const link = (a, b) => next.set(a, b);
+  const blocks = blockRangesOf(field, W, H);
   for (let j = 0; j < H - 1; j++) {
+    const brow = (j / BLOCK) | 0;
     for (let i = 0; i < W - 1; i++) {
+      // A block whose nodes are all low, or all high and clear of the map's edge
+      // (which reads as low), holds no crossing of this level: skipped whole.
+      // Rows stay the outer loop and columns ascend, so the cells that do cross
+      // are met in exactly the order they were, and the loops come out unchanged.
+      if ((i % BLOCK) === 0) {
+        const bi = (i / BLOCK) | 0;
+        const at = brow * blocks.across + bi;
+        if (blocks.max[at] <= level
+          || (blocks.min[at] > level && bi > 0 && brow > 0
+            && (bi + 1) * BLOCK < W - 1 && (brow + 1) * BLOCK < H - 1)) {
+          i += BLOCK - 1;
+          continue;
+        }
+      }
       const k = j * W + i;
       const code = (high(i, j) ? 1 : 0) | (high(i + 1, j) ? 2 : 0)
         | (high(i + 1, j + 1) ? 4 : 0) | (high(i, j + 1) ? 8 : 0);

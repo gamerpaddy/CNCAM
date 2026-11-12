@@ -37,6 +37,8 @@ const args = process.argv.slice(2);
 const wantParts = args.find((a) => a.startsWith('--part='))?.slice(7).split(',') ?? PARTS;
 const wantOps = args.filter((a) => !a.startsWith('--'));
 const EXTRA = {};
+const ROUGH = {};
+for (const a of args.filter((x) => x.startsWith('--rough='))) { const [k, v] = a.slice(8).split('='); ROUGH[k] = isNaN(+v) ? v : +v; }
 for (const a of args.filter((x) => x.startsWith('--set='))) { const [k, v] = a.slice(6).split('='); EXTRA[k] = isNaN(+v) ? v : +v; }
 
 function report(label, gen, cl, r) {
@@ -67,7 +69,7 @@ for (const partName of wantParts) {
   let roughGen = 0;
   const needRough = () => {
     if (rough) return rough;
-    const g = generate('adaptive', ROUGH_TOOL, part);
+    const g = generate('adaptive', ROUGH_TOOL, part, ROUGH);
     roughGen = g.gen;
     const m = new Material(stock, Math.max(0.15, cuttingRadiusOf(TOOLS.pencil) / 10));
     measure(g.cl, ROUGH_TOOL, stock, m);
@@ -83,7 +85,7 @@ for (const partName of wantParts) {
       try {
         // as the app does: a finishing pass is told what the rough ahead of it was
         const earlier = FINISHERS.has(type)
-          ? [{ type: 'adaptive', tool: ROUGH_TOOL, params: defaultParamsFor('adaptive', { stock, modelBounds: part.bounds, tool: ROUGH_TOOL }) }]
+          ? [{ type: 'adaptive', tool: ROUGH_TOOL, params: { ...defaultParamsFor('adaptive', { stock, modelBounds: part.bounds, tool: ROUGH_TOOL }), ...ROUGH } }]
           : undefined;
         g = generate(type, tool, part, EXTRA, earlier);
       } catch (err) {

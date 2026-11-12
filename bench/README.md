@@ -25,6 +25,9 @@ running every time are in `src/test/simulate.test.js` instead.
 | `audit/retract.mjs` | What an operation's rapids are made of: how many retract-cross-plunge sequences, how high each lifts above its own ends. |
 | `audit/profile.mjs` | One generation, timed; run it under `node --cpu-prof` to see where the time goes. |
 | `audit/rest-check.mjs` | A rough then a rest pass with a smaller cutter on one billet: what the pair removes (volume and a surface hash) and how long the rest pass is. Compare before and after a change to rest machining — equal hash, shorter program. `DRAW=out.png ZW=lo,hi` draws it, `BYZ=1` lists air by level. |
+| `audit/hash.mjs` | Generation time and a hash of the program. Run before and after a speed-up: an equal hash is the proof it changed nothing. |
+| `audit/field-check.mjs` | The waterline's drop-cutter field with and without run bounds: values must match to the last bit. |
+| `audit/levels.mjs` | Cutting length by Z level — what a pass such as adaptive's step-ups really adds. |
 
 ## Tangency
 

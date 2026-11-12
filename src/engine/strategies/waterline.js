@@ -153,7 +153,7 @@ function fieldKeepout(mesh, tool, tolerance) {
       max: [box.max[0] + pad, box.max[1] + pad, box.max[2]],
     },
   });
-  return { map, field: toolLocationField(map, buildToolKernel(tool, map.cellSize)) };
+  return { map, field: toolLocationField(map, buildToolKernel(tool, map.cellSize, { segment: 17 })) };
 }
 
 export function generateWaterline({
