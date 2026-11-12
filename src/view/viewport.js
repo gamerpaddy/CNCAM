@@ -1297,14 +1297,98 @@ export class Viewport {
   /** Draw a frame now, for a caller that is already inside one (a glide). */
   renderNow() {
     const camera = this.activeCamera();
+    // The machine's view of a leaning cut, for this frame only — see machineView.
+    const view = this.machineView();
+    let held = null;
+    if (view) {
+      held = { position: camera.position.clone(), quaternion: camera.quaternion.clone() };
+      camera.position.sub(view.pivot).applyQuaternion(view.turn).add(view.pivot);
+      camera.quaternion.premultiply(view.turn);
+      camera.updateMatrixWorld(true);
+    }
     this.aimHeadlight?.(camera);
     this.renderer.clear();
     this.renderer.render(this.scene, camera);
     // over the top, in its own corner: the one thing on screen that always
     // says which way you are looking
     this.triad.render(camera);
+    if (held) {
+      camera.position.copy(held.position);
+      camera.quaternion.copy(held.quaternion);
+      camera.updateMatrixWorld(true);
+    }
+  }
+
+  /**
+   * Which of the two moves when the tool leans: the cutter, the part, or both.
+   *
+   * @param mode 'tool' | 'part' | 'both'
+   * @param pivot where the rotary axes cross, in setup space
+   * @param tiltAxis 'x' for a machine that tilts about X (A), 'y' about Y (B)
+   */
+  setTiltDisplay({ mode, pivot, tiltAxis } = {}) {
+    this.tiltDisplay ??= { mode: 'tool', pivot: new THREE.Vector3(), tiltAxis: 'x', azimuth: null };
+    if (mode) this.tiltDisplay.mode = mode;
+    if (pivot) this.tiltDisplay.pivot.set(pivot[0] ?? 0, pivot[1] ?? 0, pivot[2] ?? 0);
+    if (tiltAxis) this.tiltDisplay.tiltAxis = tiltAxis === 'y' ? 'y' : 'x';
+    this.tiltDisplay.azimuth = null;
+    this.requestRender();
+  }
+
+  /**
+   * How the camera sits for a leaning cut drawn as the machine makes it.
+   *
+   * Everything in the scene is held in the part's own frame, and in that frame
+   * a 5-axis cut is the cutter leaning over a part that does not move — which
+   * is a head-head machine. On a trunnion the spindle never leans: the part
+   * tilts and turns under it. That is the same picture seen by a camera bolted
+   * to the machine rather than to the part, so nothing in the scene is moved to
+   * draw it. The camera is, for the length of one frame: turned about the
+   * point the rotary axes cross by the opposite of what the table does. The
+   * cutter, still leaning in the part's frame, comes out upright on screen and
+   * the part comes out tilted, and the orbit controls, the picking and every
+   * object's own position are left exactly as they were.
+   *
+   * 'part' undoes the whole lean: the table turns the lean round to face the
+   * tilt axis and then tilts it upright, which is what an A/C or B/C trunnion
+   * does. 'both' undoes only the turn: the part goes round on its turntable
+   * and the cutter is left leaning, always the same way, as a tilting head
+   * over a rotary table does.
+   *
+   * Where the tool is upright its lean has no direction, so the turntable is
+   * left where it last was — as it is on the machine.
+   *
+   * @returns null when nothing is to be done, else { turn, pivot }
+   */
+  machineView() {
+    const display = this.tiltDisplay;
+    if (!display || display.mode === 'tool') return null;
+    const sim = this.simulation;
+    const axis = sim?.group?.visible && sim.cutter?.visible ? sim.cutterState?.axis : null;
+    if (!axis) { display.azimuth = null; return null; }
+    const byY = display.tiltAxis === 'y';
+    // the turntable's position with the tool upright: the one that needs no turn
+    const rest = byY ? 0 : Math.PI / 2;
+    const horizontal = Math.hypot(axis[0], axis[1]);
+    if (horizontal > 0.0087) display.azimuth = Math.atan2(axis[1], axis[0]);   // half a degree
+    const azimuth = display.azimuth ?? rest;
+    const tilt = Math.atan2(horizontal, axis[2]);
+    if (horizontal <= 1e-9 && Math.abs(azimuth - rest) < 1e-9) return null;
+
+    const turn = MACHINE_TURN.setFromAxisAngle(AXIS_Z, azimuth - rest);
+    if (display.mode === 'part') {
+      MACHINE_TILT.setFromAxisAngle(byY ? AXIS_Y : AXIS_X, byY ? tilt : -tilt);
+      turn.multiply(MACHINE_TILT);
+    }
+    return { turn, pivot: display.pivot };
   }
 }
+
+const AXIS_X = new THREE.Vector3(1, 0, 0);
+const AXIS_Y = new THREE.Vector3(0, 1, 0);
+const AXIS_Z = new THREE.Vector3(0, 0, 1);
+const MACHINE_TURN = new THREE.Quaternion();
+const MACHINE_TILT = new THREE.Quaternion();
 
 /**
  * A chuck, drawn as one: a body on the spindle axis with jaws standing out of

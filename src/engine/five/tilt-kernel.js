@@ -326,7 +326,7 @@ export function buildTiltedKernel(shell, axis, cellSize, rise = Infinity) {
  *   from making a table the size of the room
  */
 export function leaningSampler(shell, cellSize, rise = Infinity) {
-  const tables = new Map();
+  const tables = tablesFor(shell, cellSize, rise);
 
   const tableFor = (tiltDeg) => {
     let hit = tables.get(tiltDeg);
@@ -345,9 +345,28 @@ export function leaningSampler(shell, cellSize, rise = Infinity) {
       ) / cellSize) + 2;
       const size = reach * 2 + 1;
       const h = new Float32Array(size * size);
-      for (let j = 0; j < size; j++) {
-        for (let i = 0; i < size; i++) {
-          h[j * size + i] = lowestAbove(shell, ax, 0, az, (i - reach) * cellSize, (j - reach) * cellSize);
+      // The axis lies in the XZ plane, so the cutter is the same either side of
+      // it: the height at (x, −y) is the height at (x, y). Half the table is
+      // solved and the other half is that half again — the solve is all a table
+      // costs, and the tables were a third of a plan.
+      //
+      // And only where the cutter is. The grid is a square big enough to turn
+      // the footprint round in, and the footprint itself — leaning along X — is
+      // a strip down the middle of it: as wide as the cutter and as long as the
+      // lean throws it. Outside the box round that strip nothing of the cutter
+      // comes down to `rise`, which is all the table is asked about, so those
+      // cells are empty without being solved. On a long flute they are most of
+      // the square.
+      h.fill(Infinity);
+      const iLo = Math.max(0, Math.floor(box.x0 / cellSize) - 1 + reach);
+      const iHi = Math.min(size - 1, Math.ceil(box.x1 / cellSize) + 1 + reach);
+      const jHi = Math.min(size - 1, Math.ceil(box.y1 / cellSize) + 1 + reach);
+      for (let j = reach; j <= jHi; j++) {
+        const mirror = (2 * reach - j) * size;
+        for (let i = iLo; i <= iHi; i++) {
+          const z = lowestAbove(shell, ax, 0, az, (i - reach) * cellSize, (j - reach) * cellSize);
+          h[j * size + i] = z;
+          h[mirror + i] = z;
         }
       }
       hit = { h, reach, size, empty: false };
@@ -392,6 +411,32 @@ export function leaningSampler(shell, cellSize, rise = Infinity) {
       };
     },
   };
+}
+
+/**
+ * The tables already solved for a cutter, kept between plans.
+ *
+ * A table is a fact about the cutter, the grid and how high it is asked about —
+ * nothing in it is the part. So generating the same operation again, or the next
+ * one with the same tool, finds them made: the worker that planned the last one
+ * keeps them. A handful of cutters' worth, the most recently used.
+ */
+const KEPT_SAMPLERS = 4;
+const keptTables = new Map();   // signature -> Map(tilt -> table)
+
+function tablesFor(shell, cellSize, rise) {
+  const key = `${cellSize}|${rise}|${shell.n}|${Array.from(shell.form).join(',')}|`
+    + [shell.p, shell.q, shell.rlo, shell.rhi, shell.slo, shell.shi]
+      .map((a) => (a ? Array.from(a).join(',') : '')).join('|');
+  let tables = keptTables.get(key);
+  if (tables) {
+    keptTables.delete(key);
+  } else {
+    tables = new Map();
+  }
+  keptTables.set(key, tables);
+  if (keptTables.size > KEPT_SAMPLERS) keptTables.delete(keptTables.keys().next().value);
+  return tables;
 }
 
 /** Kernels for every way a cutter can lean — the sampler's heights, laid out for `dropCutter`. */

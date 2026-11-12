@@ -26,6 +26,9 @@
 import { el } from './layout.js';
 import { icon } from './icons.js';
 import { PlaybackClock } from '../engine/simulate.js';
+import {
+  getSetting, setSetting, TILT_DISPLAYS, TILT_DISPLAY_LABELS,
+} from './settings.js';
 
 const SPEEDS = [0.25, 0.5, 1, 2, 4, 10, 50];
 
@@ -48,6 +51,22 @@ export function buildTimeline(onSeek, onClose) {
   const speedSelect = el('select', { title: 'Playback speed' },
     SPEEDS.map((s) => el('option', { value: String(s) }, [`${s}×`])));
   speedSelect.value = String(speed);
+  // Which of the two moves when the tool leans. Here as well as in Options,
+  // because it is while a program is playing that it is seen to be the wrong
+  // one for the machine. Only there for a program that tilts.
+  const tiltSelect = el('select', {
+    class: 'sim-tilt',
+    title: 'What moves on screen when the tool leans: the cutter (head-head), the part '
+      + '(table-table), or both (head-table). The cut and the program are the same.',
+    hidden: true,
+  }, TILT_DISPLAYS.map((m) => el('option', { value: m }, [
+    { tool: 'Cutter tilts', part: 'Part tilts', both: 'Both move' }[m] ?? TILT_DISPLAY_LABELS[m]])));
+  tiltSelect.addEventListener('change', () => {
+    setSetting('tiltDisplay', tiltSelect.value);
+    // the app's own fan-out of a changed setting — see main.js applySettings
+    window.cncam?.applySettings?.('tiltDisplay');
+    window.cncam?.ui?.setStatus?.(`Simulation: ${TILT_DISPLAY_LABELS[tiltSelect.value]}`);
+  });
 
   /** Put the slider where the clock is. Milliseconds, so the range is integral. */
   const syncSlider = () => {
@@ -415,6 +434,7 @@ export function buildTimeline(onSeek, onClose) {
       }, [icon('skip-forward')]),
     ]),
     speedSelect,
+    tiltSelect,
     el('div', { class: 'sim-track' }, [slider, ticks, bandStrip]),
     currentLabel,
     loadLabel,
@@ -438,6 +458,8 @@ export function buildTimeline(onSeek, onClose) {
       drawLoad(sim, ops);
       drawVerify(sim, ops);
       drawFive(sim);
+      tiltSelect.hidden = !sim.axis;
+      tiltSelect.value = getSetting('tiltDisplay') ?? 'tool';
       root.classList.remove('collapsed');
       seekSeconds(0);
     },

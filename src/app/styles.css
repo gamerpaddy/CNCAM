@@ -1192,6 +1192,83 @@ button.pick-active {
 /* the height is already there: say so rather than offering it again */
 .prop-snap.at { color: var(--accent-text); border-color: var(--accent); }
 
+/* --- problems, and what to do about them ------------------------------------ */
+
+/* A message about an operation with its fixes under it — see op-fixes.js. */
+.prop-note.problem { display: flex; flex-direction: column; gap: 5px; }
+.problem-text { overflow-wrap: anywhere; }
+.problem-fixes, .problem-where { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.problem-where-label { font-size: 11px; color: var(--fg-dim); margin-right: 2px; }
+.problem-fix {
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1a1b1e;
+  background: var(--warn);
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.problem-fix:hover { filter: brightness(1.12); }
+.problem-jump {
+  padding: 1px 8px;
+  font-size: 11.5px;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.problem-jump:hover { background: var(--bg-hover); border-color: var(--accent); }
+/* the one above the tabs: an operation that did not generate */
+.prop-note.problem.fail {
+  color: #ffd9d9;
+  background: var(--danger-soft);
+  border-left: 3px solid var(--danger-text);
+  padding: 8px 10px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin: 8px 0;
+}
+.prop-note.problem.fail .problem-text { font-weight: 600; }
+.prop-note.problem.fail .problem-fix { background: #fff; color: #8f0e14; }
+
+/* the field a "change it in" button pointed at */
+.asked-for {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+  animation: asked-for 2.4s ease-out 1;
+}
+@keyframes asked-for {
+  0%, 40% { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+  100% { background: transparent; }
+}
+
+/* what an edit of a height did, said under the height */
+.prop-field-notice {
+  margin: 0 0 4px 126px;
+  padding: 3px 7px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #d9b56a;
+  background: var(--warn-soft);
+  border-left: 2px solid var(--warn);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.prop-field-notice.error {
+  color: #ffd9d9;
+  background: var(--danger-soft);
+  border-left-color: var(--danger-text);
+}
+/* a snap that the other heights do not allow: there, and not pressable */
+.prop-snap.refused, .prop-snap.refused:hover {
+  color: var(--fg-faint);
+  background: transparent;
+  text-decoration: line-through;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
 /* --- tool shapes --- */
 
 .tool-icon { display: block; flex: 0 0 auto; }

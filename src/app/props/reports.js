@@ -19,6 +19,7 @@ import { threadFormDepth, grooveBites } from '../../engine/strategies/turning.js
 import {
   opStatus, opBlockedReason, opPreflight, formatLength,
 } from '../op-status.js';
+import { adviceFor, applyFix, showPlace } from '../op-fixes.js';
 
 /** A two-column read-out. Every report row in this panel is one of these. */
 export function reportRows(lines) {
@@ -205,30 +206,69 @@ export function cuttingReportRow(doc, op) {
  * that never got below Top Z is aimed at the wrong depth. The strategy's own
  * warnings sit alongside them, so the "why" arrives with the "what".
  */
-export function resultSection(doc, op) {
+/**
+ * One thing an operation has to say, with where to change it and what to press.
+ *
+ * The sentence alone was the whole of it: "shank or holder collision after
+ * orientation adjustment" on a tab nobody had open, about a field called
+ * something else on another tab. Under the sentence now are the fields it is
+ * about — each a button that opens its tab and marks it — and, where there is a
+ * change that answers it, that change as a button. See op-fixes.js.
+ *
+ * @param text the message
+ * @param tone 'warn' | 'fail' | '' — how it is drawn
+ */
+export function problemNote(doc, op, app, text, tone = 'warn', lead = '') {
+  const { where, fixes } = app ? adviceFor(doc, op, text, app) : { where: [], fixes: [] };
+  const parts = [el('div', { class: 'problem-text' }, [lead ? `${lead}${text}` : text])];
+  if (fixes.length) {
+    parts.push(el('div', { class: 'problem-fixes' }, fixes.map((fix) => el('button', {
+      type: 'button',
+      class: 'problem-fix',
+      title: fix.title ?? fix.label,
+      onclick: () => applyFix(app, doc, op, fix),
+    }, [fix.label]))));
+  }
+  if (where.length) {
+    parts.push(el('div', { class: 'problem-where' }, [
+      el('span', { class: 'problem-where-label' }, [fixes.length ? 'or change it in' : 'change it in']),
+      ...where.map((place) => el('button', {
+        type: 'button',
+        class: 'problem-jump',
+        title: place.run ? `Open ${place.label}` : `Show ${place.label}`,
+        onclick: () => showPlace(app, op, place),
+      }, [place.label])),
+    ]));
+  }
+  return el('div', {
+    class: `prop-note problem${tone ? ` ${tone}` : ''}`,
+    role: tone === 'fail' ? 'alert' : null,
+  }, parts);
+}
+
+export function resultSection(doc, op, app = null) {
   // No heading: this is the body of the Result tab now, and a tab whose first
   // line repeats the name of the tab is a line that says nothing.
   const rows = [];
   const blocked = opBlockedReason(doc, op);
   if (blocked) {
-    rows.push(el('div', { class: `prop-note${blocked === 'disabled' ? '' : ' warn'}` }, [
-      blocked === 'disabled'
-        ? 'Disabled — it is skipped when generating, posting and simulating.'
-        : `Cannot generate: ${blocked}.`,
-    ]));
+    rows.push(blocked === 'disabled'
+      ? el('div', { class: 'prop-note' }, [
+        'Disabled — it is skipped when generating, posting and simulating.'])
+      : problemNote(doc, op, app, `${blocked}.`, 'warn', 'Cannot generate: '));
     return rows;
   }
 
   // problems visible from the settings alone, shown whether or not it has run
   for (const problem of opPreflight(doc, op)) {
-    rows.push(el('div', { class: 'prop-note warn' }, [problem]));
+    rows.push(problemNote(doc, op, app, problem));
   }
 
   const status = opStatus(doc, op);
   if (!status) {
     const failure = doc.failures?.get(op.id);
     rows.push(failure
-      ? el('div', { class: 'prop-note warn' }, [`Generating this failed: ${failure}`])
+      ? problemNote(doc, op, app, failure, 'warn', 'Generating this failed: ')
       : el('div', { class: 'prop-note' }, ['Not generated yet — press Generate (Ctrl+G).']));
     return rows;
   }
@@ -257,7 +297,9 @@ export function resultSection(doc, op) {
     ]));
   }
   for (const note of status.notes) {
-    rows.push(el('div', { class: `prop-note${note.level === 'warn' ? ' warn' : ''}` }, [note.text]));
+    rows.push(note.level === 'warn'
+      ? problemNote(doc, op, app, note.text)
+      : el('div', { class: 'prop-note' }, [note.text]));
   }
   return rows;
 }

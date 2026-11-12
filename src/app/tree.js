@@ -294,8 +294,17 @@ function addRow(setup, app) {
       title: turning
         ? 'How the bar is held, and how far along it the tool can reach'
         : 'Clamps and jaws the tool must keep out of',
-      onclick: (e) => openContextMenu(e, holdingMenu(setup, app, turning)),
-    }, [icon('plus', 13), turning ? 'Chuck…' : 'Clamp…']),
+      // a lathe has one way to hold the bar, so it is one press; a mill chooses
+      onclick: turning
+        ? () => app.actions?.addFixture(setup, 'chuck')
+        : (e) => openContextMenu(e, holdingMenu(setup, app, turning)),
+    }, [icon('plus', 13), turning ? 'Chuck' : 'Clamp…']),
+    ...(turning ? [el('button', {
+      type: 'button',
+      class: 'tree-add-op',
+      title: 'The real chuck, from an STL or STEP file. Every toolpath is checked against it.',
+      onclick: () => app.actions?.addFixtureModel(setup),
+    }, [icon('plus', 13), 'From file…'])] : []),
   ]);
 }
 

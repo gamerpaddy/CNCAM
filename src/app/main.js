@@ -659,6 +659,7 @@ function applySettings(key = null) {
   }
   if (touches('simSmooth')) viewport.simulation.setSmooth(getSetting('simSmooth'));
   if (touches('showHolder')) viewport.simulation.setShowHolder(getSetting('showHolder'));
+  if (touches('tiltDisplay')) viewport.setTiltDisplay({ mode: getSetting('tiltDisplay') });
   if (touches('ghostTool')) viewport.simulation.setGhostTool(getSetting('ghostTool'));
   if (touches('showCutMarker')) viewport.simulation.setShowCutMarker(getSetting('showCutMarker'));
   // how the simulation and the room it sits in look

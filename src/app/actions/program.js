@@ -28,7 +28,7 @@ import { orientationFor, indexingWarnings } from '../../engine/indexing.js';
 import { wrapFor, wrapWarnings, linearExtent } from '../../engine/wrap.js';
 import { fiveFor } from '../../engine/five/post-data.js';
 import { fiveChecks } from '../../engine/five/checks.js';
-import { trunnionOf } from '../../engine/five/kinematics.js';
+import { trunnionOf, pivotOf } from '../../engine/five/kinematics.js';
 import {
   buildGcode, postsFor, defaultPostFor, PackedLineMap,
 } from '../../post/index.js';
@@ -760,6 +760,13 @@ export function makeProgramActions(ctx, space) {
         });
       ctx.simulation = { sim, ops, playback: new SimulationPlayback(sim) };
       ctx.viewport.simulation.setSimulation(sim);
+      // which of the cutter and the part is drawn moving when the tool leans,
+      // and the point the table's axes cross — see view/viewport.js machineView
+      ctx.viewport.setTiltDisplay({
+        mode: getSetting('tiltDisplay'),
+        pivot: pivotOf(setup.five),
+        tiltAxis: (doc.machineRecord()?.rotary?.[0]?.axis?.[1] ?? 0) !== 0 ? 'y' : 'x',
+      });
       // The stock is coloured by its distance from the model rather than by
       // what has been cut — see SimulationView.setDeviation. Set before the
       // first seek, so the opening frame is already the right picture.

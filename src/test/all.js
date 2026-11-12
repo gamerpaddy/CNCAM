@@ -56,6 +56,7 @@ import './five-finish.test.js';
 import './five-post.test.js';
 import './five-crash.test.js';
 import './fixture-model.test.js';
+import './op-fixes.test.js';
 import './five-assistant.test.js';
 import './collision-visible.test.js';
 

@@ -24,6 +24,14 @@ const KEY = 'cncam.settings';
  */
 // Library last: it is the only group whose rows *do* something rather than
 // being a preference that is read back later.
+/** What moves on screen when the tool leans — see view/viewport.js machineView. */
+export const TILT_DISPLAYS = ['tool', 'part', 'both'];
+export const TILT_DISPLAY_LABELS = {
+  tool: 'The cutter — the part stays put (head-head)',
+  part: 'The part — the cutter stays upright (table-table)',
+  both: 'Both — the cutter leans, the part turns (head-table)',
+};
+
 export const SETTING_GROUPS = ['Appearance', 'Viewport', 'Simulation', 'Editing', 'Experimental', 'Library'];
 
 export const SETTINGS = [
@@ -574,6 +582,23 @@ export const SETTINGS = [
       + 'simulation\'s own cell size and every sloped face reports as rough, '
       + 'because a grid draws a slope in steps — the detail setting is the '
       + 'floor on what this can honestly resolve.',
+  },
+  {
+    key: 'tiltDisplay',
+    label: 'Show a tilted cut by moving',
+    group: 'Simulation',
+    type: 'select',
+    options: TILT_DISPLAYS,
+    labels: TILT_DISPLAY_LABELS,
+    default: 'tool',
+    hint: 'A 5-axis cut is one relative motion and three kinds of machine make '
+      + 'it. A head-head machine leans the spindle over a part that stays put; a '
+      + 'table-table trunnion keeps the spindle upright and tilts and turns the '
+      + 'part under it; a head-table machine leans the spindle one way and turns '
+      + 'the part the other. The cut is the same in all three, and so is the '
+      + 'program — this only chooses which one the simulation draws, so that '
+      + 'what is on screen moves the way the machine in front of you will. It '
+      + 'can be changed from the simulation bar while a program plays.',
   },
   {
     key: 'showHolder',

@@ -48,7 +48,9 @@ import {
 import { finishingWindow } from './parallel3d.js';
 import { toolShells, leaningKernels } from '../five/tilt-kernel.js';
 import { chooseAngles, recentre, trunnionOf } from '../five/kinematics.js';
-import { bodyTouchTilted, angleBetween, blendAxis } from '../five/tilt-sweep.js';
+import {
+  bodyTouchTilted, angleBetween, blendAxis, blockTops,
+} from '../five/tilt-sweep.js';
 
 const RAD = Math.PI / 180;
 const DEG = 180 / Math.PI;
@@ -149,14 +151,21 @@ export function generateFinish5({
    * asks for a couple of thousand kernels rather than one per point — each of
    * which is a table read through a rotation (five/tilt-kernel.js leaningKernels).
    */
+  const lastLean = { tilt: NaN, az: NaN, hit: null };
   const leaning = (axis) => {
     const tilt = Math.acos(Math.min(1, Math.max(-1, axis[2]))) * DEG;
     if (tilt < 0.5) return { axis: UP, kernel: upright };
     const tiltQ = Math.round(tilt);
     const azStep = Math.min(30, Math.max(2, 2 / Math.sin(tiltQ * RAD)));
     const az = Math.round((Math.atan2(axis[1], axis[0]) * DEG) / azStep) * azStep;
+    // the same leaning as the last one asked for, which along a pass it nearly
+    // always is: answered without the key or the map
+    if (tiltQ === lastLean.tilt && az === lastLean.az) return lastLean.hit;
     const key = `${tiltQ}|${az}`;
     let hit = cache.get(key);
+    lastLean.tilt = tiltQ;
+    lastLean.az = az;
+    lastLean.hit = hit;
     if (hit) {
       cache.delete(key);
       cache.set(key, hit);
@@ -168,6 +177,7 @@ export function generateFinish5({
       Math.cos(tiltQ * RAD),
     ];
     hit = { axis: a, kernel: kernels.kernel(tiltQ, az) };
+    lastLean.hit = hit;
     cache.set(key, hit);
     if (cache.size > KERNELS) cache.delete(cache.keys().next().value);
     return hit;
@@ -198,7 +208,21 @@ export function generateFinish5({
     const j0 = Math.floor(fy);
     const u = fx - i0;
     const v = fy - j0;
-    const at = (i, j) => dropCutter(map, lean.kernel, map.min[0] + i * cs, map.min[1] + j * cs);
+    // Asked at the grid's own nodes, so the answer for a node and a leaning is
+    // one answer however many points of the pass and of its checks fall in the
+    // cells round it — and they fall there in fours, each sharing two nodes with
+    // the last. Remembered on the kernel, which is the leaning.
+    const kernel = lean.kernel;
+    const seen = kernel.dropped ?? (kernel.dropped = new Map());
+    const at = (i, j) => {
+      const key = j * map.width + i;
+      let z = seen.get(key);
+      if (z === undefined) {
+        z = dropCutter(map, kernel, map.min[0] + i * cs, map.min[1] + j * cs);
+        seen.set(key, z);
+      }
+      return z;
+    };
     const z00 = at(i0, j0);
     const z10 = at(i0 + 1, j0);
     const z01 = at(i0, j0 + 1);
@@ -222,14 +246,20 @@ export function generateFinish5({
   // how far a cell may stand off the fitted plane and still count as the same surface
   const tau = Math.max(0.1, 0.06 * R, 3 * map.cellSize);
   const cells = [];
+  // A plane has three numbers in it, and a patch twelve cells in radius has four
+  // hundred and fifty heights to find them from. On a fine grid — a small cutter
+  // makes one — the patch is read every third cell each way: fifty heights, spread
+  // over the same patch, fitting the same plane. This fit was half of a plan.
+  const stride = Math.max(1, Math.floor(patch / 4));
   /** The surface's unit normal at (x, y), or null where the map has no surface to read. */
   const normalAt = (x, y) => {
     const ci = Math.round((x - map.min[0]) / map.cellSize);
     const cj = Math.round((y - map.min[1]) / map.cellSize);
     cells.length = 0;
     let total = 0;
-    for (let dj = -patch; dj <= patch; dj++) {
-      for (let di = -patch; di <= patch; di++) {
+    const span = patch - (patch % stride);
+    for (let dj = -span; dj <= span; dj += stride) {
+      for (let di = -span; di <= span; di += stride) {
         if (di * di + dj * dj > patch * patch) continue;
         total++;
         const i = ci + di;
@@ -626,6 +656,9 @@ export function generateFinish5({
     mask: new Uint8Array(map.width * map.height).fill(1),
     grid: { width: map.width, height: map.height, cellSize: map.cellSize, origin: map.min },
     columns: null,
+    // the part does not change while it is being planned round, so the highest
+    // it stands in each block of cells is worked out once — see blockTops
+    blocks: blockTops(map.data, map.width, map.height),
   };
   const bodyEps = Math.max(0.02, tolerance * 2);
   const bodyHits = (tip, axis) => bodyTouchTilted(world, tip, axis, shells, top + 1, bodyEps);
@@ -1101,13 +1134,33 @@ export function generateFinish5({
 function thin(points, tol, axisTol, safe = () => true) {
   if (points.length <= 2) return points;
   const out = [points[0]];
+  const last = points.length - 1;
+  const spans = (a, b) => fits(points, a, b, tol, axisTol) && safe(points[a], points[b]);
   let anchor = 0;
-  for (let i = 1; i < points.length - 1; i++) {
-    if (fits(points, anchor, i + 1, tol, axisTol) && safe(points[anchor],points[i+1])) continue;
-    out.push(points[i]);
-    anchor = i;
+  while (anchor < last) {
+    // The furthest point one straight move from the anchor reaches. Found by
+    // doubling the reach and then halving the gap, not by trying every point in
+    // turn: each try walks the whole of the move it proposes, so a row that is
+    // one straight line was walked from its start once for every point in it —
+    // on a plain ramp that was a third of the plan, to arrive at two points.
+    // Every move kept has been tried whole, so nothing is taken on trust; where
+    // a longer move would have been fine and a shorter one is not, the shorter
+    // one's end is simply kept.
+    let good = anchor + 1;
+    let reach = 2;
+    let bad = -1;
+    while (good < last) {
+      const far = Math.min(last, anchor + reach);
+      if (far <= good) break;
+      if (spans(anchor, far)) { good = far; reach *= 2; } else { bad = far; break; }
+    }
+    while (bad - good > 1) {
+      const mid = (good + bad) >> 1;
+      if (spans(anchor, mid)) good = mid; else bad = mid;
+    }
+    out.push(points[good]);
+    anchor = good;
   }
-  out.push(points[points.length - 1]);
   return out;
 }
 

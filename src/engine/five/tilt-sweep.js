@@ -204,25 +204,68 @@ export function bodyTouchTilted(world, tip, axis, shells, stockTop, eps) {
   let worst = 0;
   let kind = null;
   let where = null;
-  for (let j = j0; j <= j1; j++) {
-    const ey = origin[1] + j * cellSize - tip[1];
-    const row = j * width;
-    for (let i = i0; i <= i1; i++) {
-      const cell = row + i;
-      if (mask[cell] === 0) continue;
-      const stands = heights[cell];
-      if (stands <= tip[2] + box.floor + worst) continue;
-      const z = reach(origin[0] + i * cellSize - tip[0], ey);
-      if (z === Infinity) continue;
-      const over = stands - (tip[2] + z);
-      if (over > worst) {
-        worst = over;
-        kind = body.kind[last.index] ?? 'holder';
-        where = [origin[0] + i * cellSize, origin[1] + j * cellSize, stands];
+  const scan = (ja, jb, ia, ib) => {
+    for (let j = ja; j <= jb; j++) {
+      const ey = origin[1] + j * cellSize - tip[1];
+      const row = j * width;
+      for (let i = ia; i <= ib; i++) {
+        const cell = row + i;
+        if (mask[cell] === 0) continue;
+        const stands = heights[cell];
+        if (stands <= tip[2] + box.floor + worst) continue;
+        const z = reach(origin[0] + i * cellSize - tip[0], ey);
+        if (z === Infinity) continue;
+        const over = stands - (tip[2] + z);
+        if (over > worst) {
+          worst = over;
+          kind = body.kind[last.index] ?? 'holder';
+          where = [origin[0] + i * cellSize, origin[1] + j * cellSize, stands];
+        }
+      }
+    }
+  };
+  // A holder is wide, and on a fine grid the box round it is a hundred thousand
+  // cells, nearly all of them far below it. Where the caller knows the surface
+  // will not change (a plan, not a simulation) it hands over the highest each
+  // block of cells stands, and a block that does not come up to the body is
+  // passed over whole. The answer is the one the cells would have given.
+  const blocks = world.blocks;
+  if (!blocks) {
+    scan(j0, j1, i0, i1);
+  } else {
+    const { size, cols, tops } = blocks;
+    for (let bj = Math.floor(j0 / size); bj <= Math.floor(j1 / size); bj++) {
+      for (let bi = Math.floor(i0 / size); bi <= Math.floor(i1 / size); bi++) {
+        if (tops[bj * cols + bi] <= tip[2] + box.floor + worst) continue;
+        scan(Math.max(j0, bj * size), Math.min(j1, bj * size + size - 1),
+          Math.max(i0, bi * size), Math.min(i1, bi * size + size - 1));
       }
     }
   }
   return worst > eps ? { depth: worst, kind, at: where } : null;
+}
+
+/** How many cells a side a block of `blockTops` is. */
+const BLOCK = 16;
+
+/**
+ * The highest a height grid stands in each block of cells, for `bodyTouchTilted`
+ * to rule whole blocks out with. Only for a grid that will not change.
+ */
+export function blockTops(heights, width, height) {
+  const cols = Math.ceil(width / BLOCK);
+  const rows = Math.ceil(height / BLOCK);
+  const tops = new Float32Array(cols * rows).fill(-Infinity);
+  for (let j = 0; j < height; j++) {
+    const base = Math.floor(j / BLOCK) * cols;
+    const row = j * width;
+    for (let i = 0; i < width; i++) {
+      const h = heights[row + i];
+      const b = base + Math.floor(i / BLOCK);
+      if (h > tops[b]) tops[b] = h;
+    }
+  }
+  return { size: BLOCK, cols, rows, tops };
 }
 
 function clampIndex(v, n) { return v < 0 ? 0 : v > n - 1 ? n - 1 : v; }

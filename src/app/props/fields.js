@@ -245,6 +245,8 @@ export function paramRow(doc, op, field, app) {
   }
 
   const raw = op.params[field.key];
+  // where a refused height, or one that moved its neighbours, is said
+  const notice = el('div', { class: 'prop-field-notice', role: 'status', hidden: true });
   const input = numberInput(field, {
     value: formatNumber(raw),
     // An empty nullable field means "work it out", and *what* gets worked out
@@ -273,14 +275,20 @@ export function paramRow(doc, op, field, app) {
       const { patch, adjusted, rejected } = constrainHeights(op.params, field.key, next);
       if (rejected) {
         input.value = formatNumber(raw);        // put the working value back
-        app?.ui?.setStatus?.(`Kept ${label} at ${raw} — ${heightRefusal(field.key)}`, true);
+        const text = `Kept ${label} at ${raw} — ${heightRefusal(field.key)}`;
+        app?.ui?.setStatus?.(text, true);
+        // and said at the field, where the eye is: the status line is at the
+        // bottom of the window and this was typed at the top of a panel
+        sayAtField(notice, text, true);
         return;
       }
-      doc.updateItem(op.params, patch, `edit ${label}`);
       if (adjusted.length) {
-        app?.ui?.setStatus?.(`${adjusted.map((k) => HEIGHT_LABELS[k]).join(' and ')} moved up to `
-          + 'stay clear of the cut');
+        const text = `${adjusted.map((k) => HEIGHT_LABELS[k]).join(' and ')} moved up to `
+          + `Z${adjusted.map((k) => patch[k]).join(', Z')} to stay clear of the cut`;
+        heightNotice = { opId: op.id, key: field.key, text, time: Date.now() };
+        app?.ui?.setStatus?.(text);
       }
+      doc.updateItem(op.params, patch, `edit ${label}`);
       return;
     }
 
@@ -292,7 +300,12 @@ export function paramRow(doc, op, field, app) {
   if (field.max != null) input.max = String(field.max);
   const row = propRow(label, input);
   if (field.key === 'topZ' || field.key === 'bottomZ' || field.key === 'clearanceHeight') {
-    return withHint(el('div', {}, [row, snapRow(doc, op, field.key, label, app)]),
+    // what the last edit of this height did to its neighbours, said here
+    if (heightNotice && heightNotice.opId === op.id && heightNotice.key === field.key
+      && Date.now() - heightNotice.time < NOTICE_MS) {
+      sayAtField(notice, heightNotice.text, false);
+    }
+    return withHint(el('div', {}, [row, snapRow(doc, op, field.key, label, app, notice), notice]),
       field, op, app);
   }
   return withHint(row, field, op, app);
@@ -307,29 +320,95 @@ export function paramRow(doc, op, field, app) {
  * They are also exactly the values the drag handles are hardest to hit, being
  * the ones where the tool is level with a surface rather than near it.
  */
-function snapRow(doc, op, key, label, app) {
-  const targets = app?.snapTargetsFor?.(op) ?? [];
+function snapRow(doc, op, key, label, app, notice = null) {
+  const targets = snapsFor(key, app?.snapTargetsFor?.(op) ?? []);
   if (targets.length === 0) return el('span', {});
   const current = op.params[key];
   return el('div', { class: 'prop-snaps' }, [
     el('span', { class: 'prop-snaps-label' }, ['snap to']),
     ...targets.map((target) => {
+      const z = roundMicron(target.z);
       const here = Math.abs(current - target.z) < 0.0005;
+      // Asked before it is offered. A snap that cannot be honoured used to be a
+      // button like the others, and pressing it put a sentence on the status
+      // line and changed nothing — "clearance must stay above Top Z", at the
+      // other end of the window from the button. One that will be refused is
+      // now drawn as one that cannot be pressed, and says why where it is.
+      const { patch, adjusted, rejected } = constrainHeights(op.params, key, z);
+      if (rejected && !here) {
+        return el('button', {
+          type: 'button',
+          class: 'prop-snap refused',
+          disabled: true,
+          title: `${target.label} is Z${z} — ${heightRefusal(key)} `
+            + `(${refusalDetail(op.params, key)})`,
+        }, [target.label]);
+      }
+      const also = adjusted.map((k) => `${HEIGHT_LABELS[k]} moves up to Z${patch[k]}`).join(', ');
       return el('button', {
+        type: 'button',
         class: `prop-snap${here ? ' at' : ''}`,
-        title: `${target.hint} — Z${roundMicron(target.z)}`,
+        title: `${target.hint} — Z${z}${also ? `. ${also} to stay clear` : ''}`,
         onclick: () => {
-          const { patch, rejected } = constrainHeights(op.params, key, roundMicron(target.z));
-          if (rejected) {
-            return app?.ui?.setStatus?.(
-              `${label} cannot go to ${target.label} — ${heightRefusal(key)}`, true);
+          if (here) return;
+          if (also) {
+            heightNotice = {
+              opId: op.id, key, text: `${label} set to ${target.label}; ${also}`, time: Date.now(),
+            };
           }
           doc.updateItem(op.params, patch, `snap ${label}`);
-          app?.ui?.setStatus?.(`${label} set to ${target.label}, Z${roundMicron(target.z)}`);
+          app?.ui?.setStatus?.(`${label} set to ${target.label}, Z${z}${also ? ` — ${also}` : ''}`);
         },
       }, [target.label]);
     }),
   ]);
+}
+
+/** How long a note under a height stays, in ms: long enough to read, not to live there. */
+const NOTICE_MS = 8000;
+
+/** What the last height edit did to the other heights: { opId, key, text, time }. */
+let heightNotice = null;
+
+function sayAtField(notice, text, isError) {
+  if (!notice) return;
+  // eslint-disable-next-line no-param-reassign
+  notice.textContent = text;
+  // eslint-disable-next-line no-param-reassign
+  notice.className = `prop-field-notice${isError ? ' error' : ''}`;
+  // eslint-disable-next-line no-param-reassign
+  notice.hidden = false;
+}
+
+/** The other height a refused one ran into, with its value. */
+function refusalDetail(params, key) {
+  if (key === 'bottomZ') return `Top Z is ${params.topZ}`;
+  if (key === 'topZ') return `Bottom Z is ${params.bottomZ}`;
+  return `Top Z is ${params.topZ}`;
+}
+
+/** How far over a surface a clearance snap stands, in mm. */
+const CLEARANCE_OVER = 10;
+
+/**
+ * The snaps worth offering for one height.
+ *
+ * Top and bottom snap *to* a surface. Clearance cannot: it is the plane the
+ * tool crosses the job at, and level with the top of the stock is level with
+ * the cut — every clearance snap was a button that could only be refused. So
+ * clearance is offered the tops with room over them, and not the bottoms, which
+ * are never where a tool travels.
+ */
+function snapsFor(key, targets) {
+  if (key !== 'clearanceHeight') return targets;
+  return targets
+    .filter((t) => t.key === 'model-top' || t.key === 'stock-top')
+    .map((t) => ({
+      ...t,
+      z: t.z + CLEARANCE_OVER,
+      label: `${t.label} +${CLEARANCE_OVER}`,
+      hint: `${CLEARANCE_OVER}mm over ${t.hint.charAt(0).toLowerCase()}${t.hint.slice(1)}`,
+    }));
 }
 
 

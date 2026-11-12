@@ -29,6 +29,9 @@ export const HEIGHT_ORDER = ['clearanceHeight', 'topZ', 'bottomZ'];
 
 const EPS = 0.001;   // mm; heights are held to 3 decimals everywhere else
 
+/** How far over the top of the cut clearance goes when it has to be put somewhere, mm. */
+const DEFAULT_CLEARANCE_ROOM = 10;
+
 export const HEIGHT_LABELS = {
   clearanceHeight: 'Clearance Z',
   topZ: 'Top Z',
@@ -80,8 +83,14 @@ export function constrainHeights(params, key, value) {
   } else if (key === 'topZ') {
     if (!(value > next.bottomZ + EPS)) return refuse();
     next.topZ = value;
-    // clearance gets out of the way; raising it is always safe
-    if (next.clearanceHeight <= value) move('clearanceHeight', value + EPS);
+    // Clearance gets out of the way; raising it is always safe. It keeps the
+    // room it had over the old top, because that room was the setting: moved
+    // to a micron over the new top it was "above Top Z" and a rapid across the
+    // job was a rapid along its surface — in order, and no clearance at all.
+    if (next.clearanceHeight <= value) {
+      const room = params.clearanceHeight - params.topZ;
+      move('clearanceHeight', value + (room > EPS ? room : DEFAULT_CLEARANCE_ROOM));
+    }
   } else if (key === 'clearanceHeight') {
     if (!(value > next.topZ)) return refuse();
     next.clearanceHeight = value;

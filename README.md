@@ -179,7 +179,12 @@ TCP; the simulation sweeps the leaning cutter, finds the holder or the shank in
 the metal or a clamp, and reports how far out on the cutter the work is done (a
 ball nose cutting on its tip is cutting at no speed); and the setup panel has a
 checklist — machine, rotary centre, which way A and C turn, undercuts, the
-holder, the clamps — with a fix button where there is one. **The limits are real:**
+holder, the clamps — with a fix button where there is one. The simulation can
+draw a leaning cut three ways — the cutter tilting over a still part (head-head),
+the part tilting under an upright cutter (table-table), or the cutter leaning
+while the part turns (head-table) — chosen in Options or from the simulation bar;
+it is the same cut and the same program, drawn the way your machine moves.
+**The limits are real:**
 the simulation sees the part from above only, so an undercut is not machined and
 not shown; the post has not met your machine, and a mirrored A or C does not
 alarm, it cuts the mirror image; and nothing here has been run on a real control.
@@ -202,6 +207,12 @@ Posts included: LinuxCNC, GRBL, and a lathe post.
   0.5mm grid, so it finds a tool that is in the fixture, not one that grazes it.
 * Material removal simulation you can scrub through, which shows the cut shape
   and reports the load.
+* When an operation fails or warns, the message comes with where to change it —
+  each field it is about as a button that opens its tab and marks it — and,
+  where a safe change answers it, that change as one press (lean less, sample
+  more coarsely, lift clearance over the clamp), which then generates again.
+  The snap-to buttons under the heights are greyed out with the reason when the
+  other heights do not allow them, instead of failing on the status line.
 * **A check on the finished part.** The surface the program leaves is measured
   against the model it was made from, and the stock is coloured by the
   difference: green is the part, blue is metal still standing on it, red is

@@ -6,7 +6,7 @@
 // apply; and only then the numbers.
 
 import { presetButton } from '../workflow-tools.js';
-import { opCollisionRisk } from '../op-status.js';
+import { opCollisionRisk, opBlockedReason } from '../op-status.js';
 import { el } from '../layout.js';
 import { strategyCard, opIcon, describeIntent } from '../op-catalog.js';
 import { openStrategyPicker } from '../strategy-picker.js';
@@ -17,7 +17,7 @@ import {
 import { toolIcon, describeTool } from '../tool-shape.js';
 import { machineCanHold } from '../../doc/tool-library.js';
 import { paramRow, propRow } from './fields.js';
-import { resultSection } from './reports.js';
+import { resultSection, problemNote } from './reports.js';
 import { snippetsFor, saveSnippet, deleteSnippet } from '../../doc/gcode-snippets.js';
 
 /**
@@ -120,9 +120,16 @@ export function opSections(doc, op, app) {
     rows.push(...commandSection(doc, op, app));
     return rows;
   }
-  rows.push(toolSelectRow(doc, op, app), presetButton(doc, op, app));
+  const toolRow = toolSelectRow(doc, op, app);
+  if (toolRow?.dataset) toolRow.dataset.param = '__tool';
+  rows.push(toolRow, presetButton(doc, op, app));
   const danger = collisionBanner(doc, op, app);
   if (danger) rows.push(danger);
+  // A pass that failed, or cannot run, says so here — above the tabs, whichever
+  // of them is open — with where to change it and what would fix it. It used to
+  // be a line on the Result tab and a "!" in the tree.
+  const failed = failureBanner(doc, op, app);
+  if (failed) rows.push(failed);
 
   // Regions are faces picked off the model, which is a milling idea: a turned
   // part is a profile — a radius for every Z — and there are no faces on it to
@@ -168,7 +175,7 @@ export function opSections(doc, op, app) {
       },
     }, [t.label, ...badge(t.key)]))));
 
-  if (current === 'result') { rows.push(...resultSection(doc, op)); return rows; }
+  if (current === 'result') { rows.push(...resultSection(doc, op, app)); return rows; }
   if (current === 'regions') { rows.push(...regionSection(doc, op, app)); return rows; }
 
   const activeGroups = OP_PARAM_GROUPS.filter((g) => g.tab === current);
@@ -176,9 +183,49 @@ export function opSections(doc, op, app) {
     const fields = group.fields.filter((f) => paramApplies(f, op));
     if (fields.length === 0) continue;
     rows.push(el('h2', {}, [group.titleFor?.(op) || group.title]));
-    for (const f of fields) rows.push(paramRow(doc, op, f, app));
+    for (const f of fields) {
+      const row = paramRow(doc, op, f, app);
+      if (row?.dataset) row.dataset.param = f.key;
+      rows.push(row);
+    }
   }
+  markAskedFor(rows, app);
   return rows;
+}
+
+/**
+ * The failure of the last Generate, or the reason there cannot be one, as a
+ * banner with its fixes. Nothing when the operation is fine, disabled, or has a
+ * path (whose own warnings are on the Result tab, beside the numbers).
+ */
+function failureBanner(doc, op, app) {
+  const blocked = opBlockedReason(doc, op);
+  if (blocked === 'disabled') return null;
+  const failure = blocked ? null : doc.failures?.get(op.id);
+  if (!blocked && !failure) return null;
+  const note = blocked
+    ? problemNote(doc, op, app, `${blocked}.`, 'fail', 'Cannot generate: ')
+    : problemNote(doc, op, app, failure, 'fail', 'Generating this failed: ');
+  note.classList.add('problem-banner');
+  return note;
+}
+
+/**
+ * Mark the field a "change it in" button asked for, once, and bring it into
+ * view. `app.flashParam` is set by op-fixes.js showPlace and spent here.
+ */
+function markAskedFor(rows, app) {
+  const key = app?.flashParam;
+  if (!key) return;
+  // eslint-disable-next-line no-param-reassign
+  app.flashParam = null;
+  const row = rows.find((r) => r?.dataset?.param === key);
+  if (!row) return;
+  row.classList.add('asked-for');
+  requestAnimationFrame(() => {
+    row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    row.querySelector('input, select, textarea')?.focus({ preventScroll: true });
+  });
 }
 
 /**
