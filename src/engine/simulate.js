@@ -638,9 +638,10 @@ export function simulateRemoval({
 
   return {
     opEnds,
-    // per operation, per CL move: how wide and how deep the cut was — or null
-    // when it was not asked for. See the `moveLoad` argument.
-    moveLoad: moveLoadOut,
+    // per operation, per CL move: how wide and how deep the cut was. Present
+    // only when asked for — a record that grows a field nobody read is a record
+    // whose frozen hashes move for nothing. See the `moveLoad` argument.
+    ...(moveLoadOut ? { moveLoad: moveLoadOut } : {}),
     // the voids the earlier setups left under this one's surface, so a
     // breakthrough is drawn as one — see engine/workpiece.js
     inherited: columns ? columns.voids > 0 : false,

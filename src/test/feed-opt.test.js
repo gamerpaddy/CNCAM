@@ -147,7 +147,7 @@ test('asking for the load changes nothing else about the simulation', () => {
   const { cl } = pocketProgram();
   const a = simulate(cl, false);
   const b = simulate(cl, true);
-  assert.eq(a.moveLoad, null, 'not recorded unless asked for');
+  assert.ok(!('moveLoad' in a), 'not recorded, and not even a key, unless asked for');
   assert.eq(a.stepCount, b.stepCount);
   assert.eq(a.final.length, b.final.length);
   let same = true;
