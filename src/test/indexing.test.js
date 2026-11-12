@@ -393,8 +393,8 @@ const SWEEP_STOCK = { kind: 'box', min: [-3, -3, 0], max: [43, 43, 20] };   // p
  *  with a matching drilled/bored hole for the two ops that need one. */
 function sweepInputs(type) {
   const tool = type === 'drill' ? SWEEP_TOOLS.drill
-    : (type === 'chamfer' || type === 'engrave' || type === 'spot') ? SWEEP_TOOLS.vee
-      : (type === 'parallel3d' || type === 'waterline') ? SWEEP_TOOLS.ball
+    : (type === 'chamfer' || type === 'engrave' || type === 'vcarve' || type === 'spot') ? SWEEP_TOOLS.vee
+      : (type === 'parallel3d' || type === 'waterline' || type === 'pencil' || type === 'scallop') ? SWEEP_TOOLS.ball
         : type === 'tap' ? SWEEP_TOOLS.tap
           : type === 'threadMill' ? SWEEP_TOOLS.threadMill
             : SWEEP_TOOLS.flat;
@@ -408,6 +408,11 @@ function sweepInputs(type) {
   };
   if (type === 'drill' || type === 'bore') params.bottomZ = 0;
   return { tool, mesh, params };
+}
+
+/** The one strategy that works from a drawing is given a closed shape to fill. */
+function sweepDrawing(type) {
+  return type === 'vcarve' ? [{ points: [5, 5, 35, 5, 35, 35, 5, 35], closed: true }] : undefined;
 }
 
 /** The feed moves (G1/G2/G3) of a posted program — the toolpath itself. */
@@ -426,7 +431,7 @@ test('indexing leaves every milling toolpath byte-for-byte unchanged', () => {
     // (five-post.test.js). The tilted frame is not what it is moved about in.
     if (isFiveAxisOp(type)) continue;
     const { tool, mesh, params } = sweepInputs(type);
-    const cl = generateToolpath({ type, name: type, tool, mesh, stock: SWEEP_STOCK, params, fixtures: [] });
+    const cl = generateToolpath({ type, name: type, tool, mesh, stock: SWEEP_STOCK, params, fixtures: [], drawing: sweepDrawing(type) });
     assert.ok(cl.count > 0, `${type} must cut something on the sweep fixture`);
     const plain = feedMoves(buildGcode('linuxcnc', [{ name: type, cl, wcs: 'G54' }]).text);
     for (const rot of orientations) {
@@ -448,7 +453,7 @@ test('every strategy, tilted, still produces a finite in-frame toolpath', () => 
   // into a NaN would surface here rather than at the machine.
   for (const type of MILLING_OPS) {
     const { tool, mesh, params } = sweepInputs(type);
-    const cl = generateToolpath({ type, name: type, tool, mesh, stock: SWEEP_STOCK, params, fixtures: [] });
+    const cl = generateToolpath({ type, name: type, tool, mesh, stock: SWEEP_STOCK, params, fixtures: [], drawing: sweepDrawing(type) });
     let bad = 0;
     eachMove(cl, (op, x, y, z) => {
       if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) bad++;

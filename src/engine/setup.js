@@ -13,6 +13,8 @@
 // Everything downstream (stock, silhouette, strategies, posts) works on the
 // already-transformed mesh, so no other module has to know about orientation.
 
+import { expandInstances, pivotOf } from './instances.js';
+
 export const ORIGIN_MODES = [
   'stock-top-center',
   'stock-top-min',
@@ -137,7 +139,12 @@ function originOffset(mode, bounds) {
 export function resolveSetup(setup, meshes, computeStockFn) {
   const orientation = setup.orientation ?? {};
   const matrix = rotationMatrix(orientation.rotationDeg ?? [0, 0, 0]);
-  const rotated = meshes.map((m) => transformMesh(m, matrix));
+  const turned = meshes.map((m) => transformMesh(m, matrix));
+  // Copies of the part, placed on the table after it has been fixtured: the
+  // strategies read one merged mesh, so a copy that is in it is a copy that is
+  // machined — see engine/instances.js. Not on a lathe, which holds one bar.
+  const pivot = pivotOf(turned);
+  const rotated = (setup.mode ?? 'mill') === 'turn' ? turned : expandInstances(turned, setup.instances, pivot);
   // the mode goes with the stock because a lathe billet is not registered the
   // same way a milling one is — see engine/stock.js computeStock
   const rotatedStock = computeStockFn(rotated, setup.stock, setup.mode ?? 'mill');
@@ -161,7 +168,7 @@ export function resolveSetup(setup, meshes, computeStockFn) {
       ],
     };
   }
-  return { matrix, offset, meshes: placed, stock };
+  return { matrix, offset, meshes: placed, stock, pivot };
 }
 
 const IDENTITY = [1, 0, 0, 0, 1, 0, 0, 0, 1];

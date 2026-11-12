@@ -3196,6 +3196,9 @@ input.color-input {
 .feature-row { padding: 6px 0; border-bottom: 1px solid var(--border); }
 .feature-row label { display: flex; gap: 8px; align-items: center; }
 .order-plan ol { margin: 0 0 12px 20px; }
+.array-field { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 6px 0; }
+.array-field input[type=number] { width: 110px; }
+.array-status.warn { color: var(--danger-text); }
 .setup-sheet table { width: 100%; border-collapse: collapse; }
 .setup-sheet th, .setup-sheet td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
 .save-state { white-space: nowrap; color: var(--fg-dim); margin: 0 10px; }

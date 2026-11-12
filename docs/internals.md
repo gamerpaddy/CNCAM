@@ -115,7 +115,7 @@ middle and there is nothing behind it to chuck. Measured about the origin, a
 40mm block authored in the corner of the model space came out in a ⌀114 bar and
 the clamp sample in one of ⌀1165 — a disc of air for every operation to rough.
 
-**Operations** — nineteen strategies, grouped by the stage of the job they
+**Operations** — twenty-two strategies, grouped by the stage of the job they
 belong to. Milling: facing; **Z-level** and **adaptive** roughing; 2D **contour** and
 **pocketing**; **drilling** with automatic circular-hole recognition and
 **helical boring**; **chamfering** and **engraving**; **3D parallel finishing**
@@ -1064,6 +1064,54 @@ is seen from above and an undercut is neither machined nor shown (the assistant
 warns when more than 3% of the surface faces down above the base); the post's
 sign convention has not met a real machine, which is why the assistant makes
 "jog A and C and look" an item with its own button.
+
+### The 2026-11 round: nine additions
+
+Each of these is checked against something written down in its own test, not
+against its own idea of the answer.
+
+- **Setup sheet** (`app/job-report.js`). A pure builder over the document; the
+  renderer is `showSetupSheet`. It prints `effectiveCutting`, never the tool's
+  own numbers.
+- **Probing** (`doc/probe-macros.js`). Text only. `post/parse.js` knows G38.x,
+  G28/G30, G10, G92 and G53 as *no-path* codes: before, a probe's Z was read as
+  a feed move and `checkPost` called the file ten millimetres off its own
+  toolpath. The spindle is stopped before an `M0` (GRBL's `M0` leaves it on) and
+  `G90` is restored.
+- **Materials** (`doc/materials.js`, `engine/cut-check.js`). `setup.material`,
+  not in `setup.stock` (the fingerprint hashes the whole stock). `suggestCutting`
+  takes a material and a radial engagement (chip thinning). Spindle power is a
+  machine field; 0 means not stated and the check stays quiet. The visual
+  `stockLook` setting defaults to "match the setup".
+- **Feed from the cut** (`engine/feed-opt.js`). `simulateRemoval({ moveLoad:
+  true })` records width and depth per CL move; the key is **absent** otherwise,
+  because the frozen simulation hashes hash every key. The optimiser returns a
+  *new* CL sharing the same moves with feed events. Ceilings are floored, never
+  rounded across. `fastestFeedOf` makes the machine checks read the events.
+- **Running order** (`engine/order.js`). Two operations may swap only if neither
+  reads earlier, they are not in the spot→drill→tap chain, neither is a
+  through cut-out, and their cut footprints (a grid, tool radius grown) do not
+  touch. It is accepted only if the clock says it is faster.
+- **Recognition** (`engine/features.js`, `doc/feature-tools.js`). From the
+  triangles, by slicing — the same way the strategies find holes, so a
+  proposal is never a feature the generator cannot see. It sets no picks: an
+  empty include list means "machine everything", which is what is wanted.
+- **Pencil and scallop** (`strategies/pencil.js`, `scallop.js`, on
+  `prepareFinish` in `parallel3d.js`). The residue a ball leaves is the *lowest*
+  its underside reaches over every position that covers a cell (a minimum, not a
+  maximum: a first version took the envelope and traced the outside of the
+  part). Scallop's distance field is over the *part's* surface, not the tool's
+  path, 16-neighbour Dijkstra, contours by marching squares for every level in one sweep.
+- **V-carve** (`strategies/vcarve.js`). At depth d the centreline is the shape
+  inset by `tip/2 + d·tan(a)`; the groove wall is the flank of the V whatever is
+  on the tip. A sharp V cannot make a flat floor: the clearing passes keep the
+  ridge under 0.04 mm. The plug of an inlay is the shape pulled in by
+  `cap·tan(a) + gap`, so that turned over it sits in the recess with `gap` all round.
+- **Copies** (`engine/instances.js`). `setup.instances` is the list of *copies*
+  (the original is not in it), in the machine's X and Y after the setup's
+  orientation. `resolveSetup` expands them, so everything that reads the setup's
+  meshes sees them; `resolveRegions` takes `transformMeshFn` returning one mesh
+  or several, so a picked face is on every copy.
 
 ### Reachability
 

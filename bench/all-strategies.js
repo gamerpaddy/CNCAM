@@ -38,6 +38,8 @@ const FOR = {
   chamfer: ['chamfer', 'vbit'],
   engrave: ['vbit'],
   parallel3d: ['ball', 'bull', 'flat'],
+  pencil: ['ball', 'bull'],
+  scallop: ['ball', 'bull'],
   waterline: ['ball', 'bull'],
 };
 

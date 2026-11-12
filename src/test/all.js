@@ -76,3 +76,6 @@ import './materials.test.js';
 import './feed-opt.test.js';
 import './order.test.js';
 import './features.test.js';
+import './finishing-extra.test.js';
+import './vcarve.test.js';
+import './instances.test.js';

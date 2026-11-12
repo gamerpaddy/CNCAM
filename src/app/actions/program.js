@@ -21,6 +21,7 @@ import {
  */
 const MAX_CHECKED_PROGRAM = 2_000_000;
 import { transformMesh } from '../../engine/setup.js';
+import { copyPlacements } from '../../engine/instances.js';
 import { turningProfile, barFromStock } from '../../engine/lathe.js';
 import { estimateSeconds, generateToolpath, READS_EARLIER } from '../../engine/toolpath.js';
 import { deductedBefore } from '../../engine/rest.js';
@@ -127,12 +128,19 @@ export function makeProgramActions(ctx, space) {
     // posted. Each failure is now the failing operation's own.
     const failed = [];
     for (const setup of doc.setups()) {
-      const { meshes, stock, matrix, offset } = resolveSetupSpace(setup);
+      const { meshes, stock, matrix, offset, pivot } = resolveSetupSpace(setup);
       let mesh = null;
       let meshPrepared = false;
       // picked faces are stored in model space; move them into setup space so
-      // they line up with the toolpaths
-      const intoSetup = (m) => transformMesh(m, matrix, offset);
+      // they line up with the toolpaths — and onto every copy of the part, which
+      // is machined as one with the original (engine/instances.js)
+      const copies = (setup.mode ?? 'mill') === 'turn' ? [] : (setup.instances ?? []);
+      const intoSetup = (m) => {
+        const original = transformMesh(m, matrix, offset);
+        if (!copies.length) return original;
+        const moved = [pivot[0] + offset[0], pivot[1] + offset[1]];
+        return [original, ...copyPlacements(copies, moved).map((c) => transformMesh(original, c.matrix, c.offset))];
+      };
       // The clamps as the strategies read them: where they stand and how high.
       // An imported vice's geometry stays here — every operation is asked
       // against it the moment its path comes back (see fixtureCrashes below),

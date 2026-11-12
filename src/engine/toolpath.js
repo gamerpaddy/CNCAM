@@ -14,12 +14,15 @@ import { generateClear } from './strategies/clear2d.js';
 import { generateAdaptive } from './strategies/adaptive.js';
 import { generateDrill } from './strategies/drill.js';
 import { generateParallel3d } from './strategies/parallel3d.js';
+import { generatePencil } from './strategies/pencil.js';
+import { generateScallop } from './strategies/scallop.js';
 import { generateFinish5 } from './strategies/finish5.js';
 import { generateWaterline } from './strategies/waterline.js';
 import { generatePocket } from './strategies/pocket.js';
 import { generateChamfer } from './strategies/chamfer.js';
 import { generateBore } from './strategies/bore.js';
 import { generateEngrave } from './strategies/engrave.js';
+import { generateVcarve } from './strategies/vcarve.js';
 import { generateSlot } from './strategies/slot.js';
 import { generateSpot, generateTap, generateThreadMill } from './strategies/holes.js';
 import {
@@ -46,7 +49,12 @@ const strategies = {
   slot: generateSlot,
   chamfer: generateChamfer,
   engrave: generateEngrave,
+  vcarve: generateVcarve,
   parallel3d: generateParallel3d,
+  // finishing the other two ways: the creases a bigger cutter left, and passes
+  // spaced along the surface so the cusp is one height everywhere
+  pencil: generatePencil,
+  scallop: generateScallop,
   // the 5-axis beta; hidden unless the Experimental switch is on (engine/five/ops.js)
   finish5: generateFinish5,
   waterline: generateWaterline,
@@ -118,7 +126,10 @@ export const OP_LABELS = {
   bore: 'Helical bore',
   chamfer: 'Chamfer',
   engrave: 'Engrave',
+  vcarve: 'V-carve',
   parallel3d: 'Parallel finish',
+  pencil: 'Pencil finish',
+  scallop: 'Constant-scallop finish',
   finish5: '5-axis finish (beta)',
   waterline: 'Waterline finish',
   turnFace: 'Face the end',
@@ -188,7 +199,7 @@ function standingAboveTopZ(args) {
  *   waterline, parallel3d, finish5   enter and link clear of the steps a roughing
  *              pass ahead of them leaves (see heights.js clearOfRoughing)
  */
-export const READS_EARLIER = new Set(['turnBore', 'turnFinish', 'waterline', 'parallel3d', 'finish5']);
+export const READS_EARLIER = new Set(['turnBore', 'turnFinish', 'waterline', 'parallel3d', 'finish5', 'pencil', 'scallop']);
 
 /**
  * The strategies whose Top Z is simply "where the cut starts" — as opposed to a
@@ -205,9 +216,9 @@ const CUT_FROM_TOP = new Set(['face', 'contour2d', 'pocket', 'clear2d', 'adaptiv
  */
 const NEEDS_A_PART = new Set([
   'contour2d', 'pocket', 'clear2d', 'adaptive', 'spot', 'tap', 'threadMill', 'bore',
-  'chamfer', 'parallel3d', 'waterline', 'finish5',
+  'chamfer', 'parallel3d', 'waterline', 'finish5', 'pencil', 'scallop',
 ]);
-const NEEDS_A_PART_OR_DRAWING = new Set(['slot', 'engrave']);
+const NEEDS_A_PART_OR_DRAWING = new Set(['slot', 'engrave', 'vcarve']);
 
 /**
  * Start the cut at the top of the billet, not above it.

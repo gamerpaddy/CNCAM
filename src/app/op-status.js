@@ -23,7 +23,7 @@ import { fiveAxisEnabled } from './settings.js';
 
 /** Strategies whose depth does not come from a stepdown. */
 const NO_STEPDOWN = new Set([
-  'drill', 'parallel3d', 'finish5', 'chamfer',
+  'drill', 'parallel3d', 'pencil', 'scallop', 'finish5', 'chamfer',
   // On a lathe a groove is a width, a thread is a pitch, a hole is a peck,
   // parting is one plunge and finishing is one pass down the profile. None of
   // them steps down, and warning that they have not is a warning about a field
@@ -32,7 +32,7 @@ const NO_STEPDOWN = new Set([
 ]);
 
 /** Passes that take the part's surface as all there is — see `roughingLeftover`. */
-const FINISHING = new Set(['parallel3d', 'waterline', 'finish5']);
+const FINISHING = new Set(['parallel3d', 'pencil', 'scallop', 'waterline', 'finish5']);
 
 /**
  * How far above the finished surface the passes before this one in its setup
@@ -64,7 +64,7 @@ const NO_TOP_Z = new Set(['turnPart']);
  * anything above the flutes has to clear the wall. A facing pass or a 3D
  * finishing pass is in open air, and drilling makes its own clearance.
  */
-const REACHES_DOWN = new Set(['contour2d', 'pocket', 'clear2d', 'adaptive', 'bore', 'engrave']);
+const REACHES_DOWN = new Set(['contour2d', 'pocket', 'clear2d', 'adaptive', 'bore', 'engrave', 'vcarve']);
 
 /**
  * The turning mistakes that are visible from the settings alone.
@@ -188,7 +188,7 @@ export function opFingerprint(doc, op, setup = null) {
     // removing a model moves the stock and every path in the setup with it, and
     // that has to read as out of date. See actions/setup-space.js.
     setup && [setup.stock, setup.orientation, setup.fixtures,
-      setupModelIds(setup, doc.project)],
+      setupModelIds(setup, doc.project), setup.instances],
     // A simultaneous 5-axis pass is shaped by the machine it runs on — how far
     // each rotary may swing is a limit on how it may tilt — and by where the
     // table's axes cross. Neither is on the operation, so neither would move
@@ -527,7 +527,7 @@ export function opPreflight(doc, op) {
       notes.push('The cutter is offset from the line, so the mark will not land on it.');
     }
   }
-  if ((op.type === 'parallel3d' || op.type === 'waterline' || isFiveAxisOp(op.type)) && tool?.type === 'flat') {
+  if ((op.type === 'parallel3d' || op.type === 'pencil' || op.type === 'scallop' || op.type === 'waterline' || isFiveAxisOp(op.type)) && tool?.type === 'flat') {
     notes.push('A flat cutter leaves steps on curved surfaces — a ball or bull nose '
       + 'follows the form.');
   }

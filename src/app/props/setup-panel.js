@@ -280,6 +280,7 @@ export function setupSections(doc, setup, app) {
       : 'Mill setup. The part is held still and the cutter moves in X, Y and Z.',
   ])];
   rows.push(...partRows(doc, setup));
+  if (milling(setup)) rows.push(...arrayRows(doc, setup, app));
   rows.push(...jobSummarySection(doc, setup), el('h2', {}, ['Orientation']));
   rows.push(orientationPresetRow(doc, setup));
   for (const f of ORIENTATION_FIELDS) rows.push(fieldRow(doc, setup, f, null, null, app));
@@ -298,6 +299,25 @@ export function setupSections(doc, setup, app) {
     if (f.path === 'stock.cylinder.innerDiameter') rows.push(snapBoreRow(doc, setup));
   }
   rows.push(stockSummaryRow(doc, setup));
+  return rows;
+}
+
+/**
+ * The copies of the part on the table: how many there are, and the buttons that
+ * make and remove them — see engine/instances.js.
+ */
+function arrayRows(doc, setup, app) {
+  if (!doc.project.models.length) return [];
+  const n = setup.instances?.length ?? 0;
+  const rows = [el('h2', {}, ['Copies'])];
+  rows.push(el('div', { class: 'prop-note' }, [n
+    ? `${n + 1} parts on the table: the original and ${n} cop${n === 1 ? 'y' : 'ies'}, one work offset, one program. `
+      + 'The stock is sized round all of them.'
+    : 'One part. Make copies to cut several from one billet with one tool change per tool.']));
+  rows.push(el('button', {
+    title: 'A grid or a circle of the same part on this billet',
+    onclick: () => app?.actions?.arrayParts(setup),
+  }, [n ? 'Change the array…' : 'Array…']));
   return rows;
 }
 

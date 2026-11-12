@@ -153,7 +153,7 @@ export function engraveReportRow(doc, op) {
   const mode = p.engraveMode ?? 'depth';
   const depth = mode === 'width'
     ? groove.depthFor(Math.max(0, p.grooveWidth ?? 0))
-    : Math.max(0, p.topZ - p.bottomZ);
+    : Math.max(0, p.engraveDepth ?? 0.3);
   return reportRows([
     ['Cuts at', `${groove.included}° included`],
     ['Depth', `${depth.toFixed(3)} mm`],

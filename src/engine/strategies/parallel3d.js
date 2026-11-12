@@ -148,20 +148,34 @@ export function finishingWindow({
   return { area, boundary, limit, limited, box, insideArea, probeWith };
 }
 
-export function generateParallel3d({
+/**
+ * Everything a heightmap finishing pass needs before it chooses its paths: the
+ * surface, the cutter's kernel over it, the window it may cut in, and how a
+ * link between two paths is judged.
+ *
+ * Shared by the parallel, pencil and scallop passes. They differ in *where the
+ * tool goes* and agree about *what is under it*, and a second copy of that is
+ * how two finishers come to disagree about a surface. See the note in
+ * geom/heightmap.js.
+ *
+ * @param stepOf (tool, params) => the spacing the pass will use, mm — it sizes
+ *   the grid, so it is asked before the surface is built
+ * @returns the working set, or `{ cl, empty: true }` when the region filter
+ *   leaves nothing to machine
+ */
+export function prepareFinish({
   mesh, tool, params: given, stock, regions, earlier = null,
+  stepOf = (t, p) => Math.max(0.05, (p.stepover ?? 0.25) * t.diameter),
+  label = 'parallel finishing',
 }) {
   // clear of the steps the roughing ahead of this leaves — see heights.js
   const clear = clearOfRoughing(given, earlier);
   const { params } = clear;
   const r = tool.diameter / 2;
-  const step = Math.max(0.05, (params.stepover ?? 0.25) * tool.diameter);
+  const step = stepOf(tool, params);
   const tolerance = params.tolerance ?? 0.01;
   const clearance = params.clearanceHeight;
   const stockToLeave = params.stockToLeave ?? 0;
-  const pattern = params.pattern ?? 'zigzag';
-  const oneWay = pattern === 'oneway';
-  const angle = ((params.angleDeg ?? 0) * Math.PI) / 180;
   const feedPlane = entryPlane(params, params.topZ, params.bottomZ);
 
   const cl = new CLBuilder().simplify(mergeTolerance(tolerance));
@@ -193,8 +207,8 @@ export function generateParallel3d({
     mesh, stock, regions, params, radius: r, tolerance,
   });
   if (!scope) {
-    cl.warn('parallel finishing has nothing left to machine after the region filter');
-    return cl.finish();
+    cl.warn(`${label} has nothing left to machine after the region filter`);
+    return { cl, empty: true };
   }
   const {
     area, boundary, limit, limited, box, insideArea,
@@ -269,6 +283,25 @@ export function generateParallel3d({
      */
     cuttableAt: (x, y) => probe(x, y)[2],
   };
+
+  return {
+    cl, clear, params, r, step, tolerance, clearance, stockToLeave, feedPlane,
+    map, kernel, scope, area, boundary, limit, limited, box, insideArea,
+    surfaceAt, probe, sample, link,
+  };
+}
+
+export function generateParallel3d({
+  mesh, tool, params: given, stock, regions, earlier = null,
+}) {
+  const prepared = prepareFinish({ mesh, tool, params: given, stock, regions, earlier });
+  if (prepared.empty) return prepared.cl.finish();
+  const {
+    cl, params, r, step, tolerance, clearance, feedPlane, map, box, probe, sample, link,
+  } = prepared;
+  const pattern = params.pattern ?? 'zigzag';
+  const oneWay = pattern === 'oneway';
+  const angle = ((params.angleDeg ?? 0) * Math.PI) / 180;
 
   if (pattern === 'flow') {
     emitFlowPasses(cl, {
@@ -564,7 +597,7 @@ function emitFlowPasses(cl, {
  * Reversing a pass to put its near end first is free: a finishing pass over a
  * form has no preferred direction, which is why the raster zig-zags.
  */
-function emitOrdered(cl, paths, { clearance, feedPlane, link }) {
+export function emitOrdered(cl, paths, { clearance, feedPlane, link }) {
   if (paths.length === 0) return;
   const used = new Uint8Array(paths.length);
   const state = { cutting: false, at: null, gap: false };

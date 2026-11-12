@@ -110,8 +110,8 @@ and so can a `.cncam` project, or a G-code file to check.
 | Roughing | Adaptive rough, Z-level rough |
 | Profiles | Contour, Pocket, Slot |
 | Holes | Spot drill, Drill, Tap, Thread mill, Helical bore |
-| Edges and marking | Chamfer, Engrave |
-| 3D finishing | Parallel finish, Waterline finish |
+| Edges and marking | Chamfer, Engrave, V-carve (with inlay) |
+| 3D finishing | Parallel finish, Waterline finish, Constant-scallop finish, Pencil finish |
 
 Roughing is stock aware and can rest machine against what an earlier operation
 already took off, so the finisher is not cutting air for an hour.
@@ -123,6 +123,21 @@ locked to the feed, and it looks for the *tapping drill* because an M6 goes in a
 head, does every diameter of one pitch with one cutter, and comes back out of
 the hole when it breaks. The spot depth is not typed: it is a cone of the
 cutter's own point angle, sunk until it is as wide as you asked.
+
+**V-carve** fills a drawn shape with a groove whose depth follows its width, cut
+with a V bit: the opening at the surface is the outline, and the groove is as
+deep as the V reaches from the wall, down to a limit, stopping on its own where
+the shape is too narrow to go deeper. It also makes an **inlay**: a recess, and
+the plug that fits it, pulled in by the glue gap all round. It follows a DXF
+drawing — there is no font in the program, so lettering has to arrive as outlines.
+
+**Constant-scallop finishing** spaces its passes by distance *along the surface*
+rather than across the plan, so the ridge between them is the height you asked
+for on a steep wall as well as on a floor (a raster at the same plan step is 41%
+too wide on a 45° face). **Pencil finishing** finds the creases a larger cutter
+left — inside corners, valleys narrower than its ball — from the size of the
+cutter that left them, and runs a small one down them. Both see the part from
+above only, like the other heightmap finishers.
 
 ### Turning operations
 
@@ -193,6 +208,42 @@ Dry-run every program in the air.
 Posts included: LinuxCNC, GRBL, and a lathe post.
 
 ### Everything else
+
+* **Propose operations from the part.** Reads the model — the top, the enclosed
+  pockets, every round hole by size, the billet round the outline — and offers
+  the operations for them, in running order, as a checklist, with the cutters
+  (from your rack where it has them, new ones with speeds for your material
+  where it has not). A hole the size of a tapping drill offers the tap, switched
+  off: a 5 mm hole is as likely to be a 5 mm hole as an M6. Nothing is added
+  until you say, and what you tick goes in as one undo step.
+* **Material.** A setup says what its billet is made of. It sets the speeds and
+  feeds the tool wizard suggests (with chip thinning for a light cut), what each
+  cut is checked against — surface speed, chip load, and the power it takes
+  against the machine's spindle — and how the stock looks in the simulation.
+* **Feed from the cut.** One feed for a whole path is slow where the cutter is
+  barely touching and fast where it is buried. *Set feed from the cut* (on an
+  operation's Speeds tab) runs the simulation, measures how wide and how deep
+  each move cut, and varies the feed to suit — the chip stays as thick as it
+  should be where the cut is light, the removal rate stays where it was meant to
+  be where it is heavy, the machine's fastest feed and its spindle power are
+  ceilings, and it slows *before* a heavy bite. Not one coordinate moves. It is
+  measured against the app's own simulation, not a machine: dry-run it.
+* **Optimise the running order.** Fewer tool changes and less travel, without
+  moving anything that depends on what came before: operations that cut the
+  same ground, passes that read earlier ones (rest machining, the finishers),
+  the spot–drill–tap chain, commands and the cut that frees the part keep their
+  order. It shows what it saves and applies as one undo step.
+* **Copies of the part.** A grid or a circle of the same part on one billet, one
+  work offset, one program: every operation is generated over all the copies, so
+  one tool change serves every part. A face picked on the original is picked on
+  every copy. (One work offset for the whole array.)
+* **Probing blocks.** The Command operation can write a touch-off block — Z, an
+  edge, a corner, a bore centre — for you to read and run from the machine's own
+  screen. This program writes the text and nothing else.
+* **A setup sheet** for the bench: the tools with their stick-out, every
+  operation's real spindle speed and feed (an operation's own over its tool's),
+  time, tool changes, and the result of the check on the finished part, to print
+  or save as a page.
 
 * Setups with their own orientation and work offset, so you can flip the part
   and machine the other side as a second setup — and the second setup starts
@@ -346,7 +397,7 @@ git config core.hooksPath .githooks
 
 ### Tests
 
-There are over a thousand of them, among them a robustness suite that feeds the
+There are well over a thousand of them, among them a robustness suite that feeds the
 importers, the project loader, the G-code reader and every strategy input they
 were never meant to receive.
 

@@ -226,6 +226,17 @@ function repairSetup(setup, ids, notes) {
     if (out.material !== undefined) notes.push(`${label}: material ${describe(out.material)} is not one there is, set to ${defaults.material}`);
     out.material = defaults.material;
   }
+  // copies of the part: a list of placements, each three finite numbers
+  if (out.instances !== undefined && !Array.isArray(out.instances)) {
+    notes.push(`${label}: the copies of the part were not a list, set to none`);
+    out.instances = [];
+  } else if (Array.isArray(out.instances)) {
+    const kept = out.instances.filter((c) => isObject(c) && Number.isFinite(c.dx) && Number.isFinite(c.dy)
+      && (c.rotZ === undefined || Number.isFinite(c.rotZ)) && Math.abs(c.dx) < 1e6 && Math.abs(c.dy) < 1e6);
+    if (kept.length !== out.instances.length) notes.push(`${label}: ${out.instances.length - kept.length} unusable copies of the part dropped`);
+    if (kept.length > 200) notes.push(`${label}: ${kept.length} copies is more than any layout; kept the first 200`);
+    out.instances = kept.slice(0, 200).map((c) => ({ dx: c.dx, dy: c.dy, rotZ: c.rotZ ?? 0 }));
+  } else out.instances = [];
   // stock
   const stock = isObject(out.stock) ? out.stock : {};
   const stockDefaults = defaults.stock;

@@ -35,8 +35,12 @@ const PREFERRED = {
   // pointed cutters: the cone is the whole mechanism
   chamfer: ['chamfer', 'drill'],
   engrave: ['chamfer', 'flat'],
+  // the V is the whole mechanism: a flat end mill would carve nothing but a pocket
+  vcarve: ['chamfer'],
   // a flat cutter leaves steps on a curved surface; a round one rides it
   parallel3d: ['ball', 'bull'],
+  pencil: ['ball', 'bull'],
+  scallop: ['ball', 'bull'],
   finish5: ['ball', 'bull'],
   waterline: ['ball', 'bull'],
   // a helix inside a hole needs a cylindrical cutter, and a drill is not one
@@ -103,7 +107,7 @@ const DOWN_THE_AXIS = new Set(['drill', 'spot', 'tap', 'threadmill']);
  * both are a point sunk into the work, which is what a drill point is for.
  */
 const SIDE_CUTTING = ['face', 'contour2d', 'pocket', 'clear2d', 'adaptive',
-  'engrave', 'parallel3d', 'waterline', 'finish5'];
+  'engrave', 'parallel3d', 'waterline', 'finish5', 'pencil', 'scallop'];
 
 const UNUSABLE = {
   // through tipAngleOf, because a drill with the angle left blank is a 118° one
@@ -198,7 +202,7 @@ export function pickToolFor(type, tools) {
     if (matches.length === 0) continue;
     // finishing and anything going down a hole want the small one; everything
     // else wants the stiff one
-    const wantSmallest = type === 'engrave' || type === 'parallel3d' || type === 'waterline' || type.startsWith('finish5')
+    const wantSmallest = type === 'engrave' || type === 'vcarve' || type === 'parallel3d' || type === 'pencil' || type === 'scallop' || type === 'waterline' || type.startsWith('finish5')
       || type === 'turnFinish' || type === 'turnBore' || type === 'turnGroove';
     return matches.sort((a, b) => (wantSmallest ? a.diameter - b.diameter : b.diameter - a.diameter))[0];
   }

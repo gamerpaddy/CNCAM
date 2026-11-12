@@ -1,4 +1,5 @@
 import { buildJobReport, reportToHtml } from './job-report.js';
+import { gridCopies, circleCopies, overlappingCopies } from '../engine/instances.js';
 import { el, dialogCloseButton } from './layout.js';
 import { openFile, saveFile } from '../io/files.js';
 
@@ -139,6 +140,75 @@ export function showFeaturePlan({ setup, result, toolFor, onApply }) {
   dialog.append(el('button', { onclick: () => dialog.close() }, [rows.length ? 'Cancel' : 'Close']));
   dialog.addEventListener('close', () => dialog.remove(), { once: true });
   document.body.append(dialog);
+  dialog.showModal();
+}
+
+/**
+ * Copies of the part on the table, as a grid or a circle, with the placements
+ * shown before they are made and refused when two of them would touch.
+ *
+ * @param bounds the part's XY box in the frame the table sees it
+ * @param pivot the XY a copy turns about
+ * @param current the copies the setup has now
+ * @param onApply (copies) => void
+ */
+export function showArrayDialog({ setup, bounds, pivot, current, clearance = 3, onApply }) {
+  const dialog = el('dialog', { class: 'workflow-dialog array-dialog', 'aria-label': 'Copies of the part' });
+  const width = bounds.max[0] - bounds.min[0];
+  const depth = bounds.max[1] - bounds.min[1];
+  const num = (label, value, extra = {}) => {
+    const input = el('input', { type: 'number', value: String(value), step: 'any', 'aria-label': label, ...extra });
+    return { input, row: el('label', { class: 'array-field' }, [label, input]) };
+  };
+  const kind = el('select', { 'aria-label': 'Layout' }, [
+    el('option', { value: 'grid' }, ['Grid']), el('option', { value: 'circle' }, ['Circle'])]);
+  const cols = num('Columns (X)', 2, { min: '1', max: '50' });
+  const rows = num('Rows (Y)', 1, { min: '1', max: '50' });
+  const sx = num('Spacing X (mm)', Math.ceil((width + 10) * 10) / 10);
+  const sy = num('Spacing Y (mm)', Math.ceil((depth + 10) * 10) / 10);
+  const count = num('Parts in all', 4, { min: '2', max: '200' });
+  const radius = num('Circle radius (mm)', Math.ceil(Math.max(width, depth) * 1.5));
+  const start = num('Original at (degrees)', 0);
+  const turn = el('input', { type: 'checkbox', checked: true, 'aria-label': 'Turn each part to the circle' });
+  const gridRows = [cols.row, rows.row, sx.row, sy.row];
+  const circleRows = [count.row, radius.row, start.row, el('label', { class: 'array-field' }, ['Turn each to face the centre', turn])];
+  const status = el('p', { role: 'status', class: 'array-status' });
+  const apply = el('button', { disabled: true }, ['Make the copies']);
+  const copiesNow = () => (kind.value === 'grid'
+    ? gridCopies({ columns: Number(cols.input.value), rows: Number(rows.input.value), spacingX: Number(sx.input.value), spacingY: Number(sy.input.value) })
+    : circleCopies({ count: Number(count.input.value), radius: Number(radius.input.value), startDeg: Number(start.input.value), turn: turn.checked }));
+  const refresh = () => {
+    for (const r of gridRows) r.style.display = kind.value === 'grid' ? '' : 'none';
+    for (const r of circleRows) r.style.display = kind.value === 'circle' ? '' : 'none';
+    const copies = copiesNow();
+    const all = copies.every((c) => Number.isFinite(c.dx) && Number.isFinite(c.dy) && Number.isFinite(c.rotZ));
+    const clash = all ? overlappingCopies(bounds, copies, pivot, clearance) : [];
+    let message;
+    if (!all) message = 'Those numbers do not make a layout.';
+    else if (copies.length === 0) message = 'That is one part: no copies.';
+    else if (copies.length + 1 > 200) message = 'More than 200 parts is not a layout.';
+    else if (clash.length) message = `Parts ${clash[0][0] + 1} and ${clash[0][1] + 1} are closer than ${clearance} mm (${clash.length} such pair${clash.length === 1 ? '' : 's'}): the cutter has to get between them.`;
+    else message = `${copies.length + 1} parts in all: the original and ${copies.length} cop${copies.length === 1 ? 'y' : 'ies'}.`;
+    status.textContent = message;
+    status.classList.toggle('warn', !!clash.length || !all);
+    apply.disabled = !all || copies.length === 0 || clash.length > 0 || copies.length + 1 > 200;
+    return copies;
+  };
+  for (const input of [kind, cols.input, rows.input, sx.input, sy.input, count.input, radius.input, start.input, turn]) {
+    input.addEventListener('input', refresh);
+    input.addEventListener('change', refresh);
+  }
+  apply.addEventListener('click', () => { const copies = refresh(); if (apply.disabled) return; dialog.close(); onApply(copies); });
+  dialog.append(el('h2', {}, [`Copies of the part in ${setup.name}`]), dialogCloseButton(dialog),
+    el('p', {}, [`The part is ${width.toFixed(1)} × ${depth.toFixed(1)} mm. Every operation in this setup is generated over all of the copies, `
+      + 'so one tool change serves every part. They share one work offset.']),
+    el('label', { class: 'array-field' }, ['Layout', kind]), ...gridRows, ...circleRows, status,
+    apply,
+    current?.length ? el('button', { onclick: () => { dialog.close(); onApply([]); } }, [`Remove the ${current.length} copies`]) : el('span'),
+    el('button', { onclick: () => dialog.close() }, ['Cancel']));
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  document.body.append(dialog);
+  refresh();
   dialog.showModal();
 }
 

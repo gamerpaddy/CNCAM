@@ -868,6 +868,11 @@ function menuForSetup(doc, setup, app) {
     })),
     { separator: true },
     {
+      label: 'Copies of the part (array)…',
+      hint: 'A grid or a circle of the same part on one billet, cut by one program with one tool change per tool',
+      onclick: () => app?.actions?.arrayParts(setup),
+    },
+    {
       label: 'Propose operations from the part…',
       hint: 'Reads the holes, pockets, top and outline, and offers the operations for them',
       onclick: () => app?.actions?.proposeOperations(setup),

@@ -813,6 +813,53 @@ export class Viewport {
     this.requestRender();
   }
 
+  /**
+   * Draw the copies of the part a setup has — see engine/instances.js.
+   *
+   * Clones of the model objects that share their geometry, so a hundred copies
+   * cost a hundred transforms and no memory. They are placed in the frame the
+   * models are in: the setup's rotation, then the placement, then the datum
+   * shift (which the group applies), so each clone's own matrix is the
+   * placement conjugated by the rotation. Not pickable: a face is picked on the
+   * original, and every copy has it.
+   *
+   * @param copies [{ dx, dy, rotZ }]
+   * @param matrix the setup's row-major 3x3 rotation
+   * @param pivot the XY a copy turns about, in the rotated frame
+   */
+  setInstances(copies, matrix, pivot) {
+    const key = JSON.stringify([copies, matrix, pivot, [...this.modelObjects].map(([id, o]) => `${id}${o.visible}`)]);
+    if (key === this.instanceKey) return;
+    this.instanceKey = key;
+    for (const clone of this.instanceObjects ?? []) this.modelGroup.remove(clone);
+    this.instanceObjects = [];
+    if (copies?.length) {
+      const m = matrix ?? [1, 0, 0, 0, 1, 0, 0, 0, 1];
+      const rotation = new THREE.Matrix4().set(
+        m[0], m[1], m[2], 0, m[3], m[4], m[5], 0, m[6], m[7], m[8], 0, 0, 0, 0, 1);
+      const inverse = rotation.clone().transpose();
+      for (const [, object] of this.modelObjects) {
+        if (!object.visible) continue;
+        for (const copy of copies) {
+          const a = ((copy.rotZ ?? 0) * Math.PI) / 180;
+          const placement = new THREE.Matrix4()
+            .makeTranslation((copy.dx ?? 0) + pivot[0], (copy.dy ?? 0) + pivot[1], 0)
+            .multiply(new THREE.Matrix4().makeRotationZ(a))
+            .multiply(new THREE.Matrix4().makeTranslation(-pivot[0], -pivot[1], 0));
+          const clone = object.clone(true);
+          clone.matrixAutoUpdate = false;
+          clone.matrix.copy(inverse.clone().multiply(placement).multiply(rotation));
+          clone.userData = { ...clone.userData, instance: true };
+          // the copy is looked at, not picked
+          clone.traverse((node) => { node.raycast = () => {}; });
+          this.modelGroup.add(clone);
+          this.instanceObjects.push(clone);
+        }
+      }
+    }
+    this.requestRender();
+  }
+
   /** Centre of the models in group-local space, or null when there are none. */
   modelAnchor() {
     const box = new THREE.Box3();

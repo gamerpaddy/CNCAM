@@ -146,6 +146,22 @@ export const STRATEGY_DEFAULTS = {
     stockToLeave: 0,
     depth: 'edge',          // the edge is the top of the part, not of the stock
   },
+  // V-carve: the depth is a cap on how far a V bit sinks, and the stepdown is how
+  // far apart the levels are - fine, because the flank of the V between two of
+  // them is the wall of the groove.
+  vcarve: {
+    stepdown: 0.15,
+    direction: 'climb',
+    vcarveDepth: 1,
+    vcarveBottom: 'flat',
+    inlay: 'none',
+    inlayGap: 0.05,
+    inlayMargin: 4,
+    rampAngle: 0,
+    leadType: 'none',
+    stockToLeave: 0,
+    depth: 'mark',
+  },
   engrave: {
     stepdown: 0.3,          // absolute: a mark is thousandths, not tool widths
     side: 'on',             // the line is the feature; compensating moves it
@@ -189,6 +205,23 @@ export const STRATEGY_DEFAULTS = {
     // of the gaps a raster actually keeps meeting — a bore it passes either
     // side of, the step at a shoulder — rather than a number to be typed.
     linkDistance: null,
+  },
+  // Pencil: no stepover, because it is a line - the creases a bigger cutter left.
+  // The reference cutter is blank for "twice this one".
+  pencil: {
+    tolerance: 0.01,
+    stockToLeave: 0,
+    linkDistance: null,
+    pencilRefDiameter: 0,
+    pencilMinResidual: 0,
+  },
+  // Constant scallop: the cusp height is what is asked for and the spacing
+  // follows from the cutter, which is the opposite of a stepover.
+  scallop: {
+    tolerance: 0.01,
+    stockToLeave: 0,
+    linkDistance: null,
+    scallopHeight: 0.02,
   },
   // Turning. The heights mean the two ends of the cut *along the bar*: Top Z is
   // the free end where a pass starts, Bottom Z how far along it goes. Depth of

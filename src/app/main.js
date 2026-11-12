@@ -627,11 +627,13 @@ function syncStock() {
   viewport.setModelsShown(setup ? setupModelIds(setup, doc.project) : null);
   if (!setup) {
     viewport.setSetupTransform(null);
+    viewport.setInstances([], null, [0, 0]);
     viewport.setFixtures(null);
     return viewport.setStock(null);
   }
-  const { matrix, offset, stock } = resolveSetup(setup, setupMeshes(setup), computeStock);
+  const { matrix, offset, stock, pivot } = resolveSetup(setup, setupMeshes(setup), computeStock);
   viewport.setSetupTransform(matrix, offset);
+  viewport.setInstances((setup.mode ?? 'mill') === 'turn' ? [] : setup.instances, matrix, pivot);
   viewport.setStock(stock);
   // clamps are held in setup space, which is the frame the scene is already in
   viewport.setFixtures(resolveFixtures(setup.fixtures, doc.fixtureMeshes));

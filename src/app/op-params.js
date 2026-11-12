@@ -86,14 +86,14 @@ export const ENGRAVE_MODE_LABELS = {
 };
 
 const MILLING = ['face', 'contour2d', 'pocket', 'clear2d', 'adaptive', 'bore',
-  'slot', 'parallel3d', 'waterline', 'finish5'];
+  'slot', 'parallel3d', 'pencil', 'scallop', 'waterline', 'finish5'];
 // Every milling strategy, including the ones MILLING leaves out because they
 // take no stock allowance. Heights and clearances apply to all of them — the
 // four hole cycles included: spot, tap and thread mill each rapid at Clearance
 // Z, and three of them had no field for it, so the height the program crossed
 // the job at was the default and nothing on screen could move it.
 const HOLE_CYCLES = ['spot', 'drill', 'tap', 'threadMill'];
-const MILLING_ALL = [...MILLING, ...HOLE_CYCLES, 'chamfer', 'engrave'];
+const MILLING_ALL = [...MILLING, ...HOLE_CYCLES, 'chamfer', 'engrave', 'vcarve'];
 const TURNING = ['turnFace', 'turnRough', 'turnFinish', 'turnGroove', 'turnThread',
   'turnDrill', 'turnBore', 'turnPart'];
 const CLOSED_PASSES = ['contour2d', 'pocket', 'clear2d', 'waterline'];
@@ -101,7 +101,7 @@ const CLOSED_PASSES = ['contour2d', 'pocket', 'clear2d', 'waterline'];
 // takes a cut direction but has no use for leads; a chamfer is a single lap so
 // it wants leads but no ramp. A thread mill climbs or it does not — which way
 // round the helix goes is the direction and the hand together.
-const DIRECTIONAL = [...CLOSED_PASSES, 'adaptive', 'chamfer', 'engrave', 'bore', 'slot',
+const DIRECTIONAL = [...CLOSED_PASSES, 'adaptive', 'chamfer', 'engrave', 'vcarve', 'bore', 'slot',
   'threadMill'];
 const LEADABLE = [...CLOSED_PASSES, 'chamfer'];
 
@@ -130,6 +130,12 @@ export const HEIGHT_LABELS_BY_OP = {
     bottomHint: 'A floor the mark may not reach past. It does not set the depth '
       + '— "Mark depth" does, because a depth is measured from the surface and '
       + 'a surface is not always at one Z',
+  },
+  vcarve: {
+    topZ: 'Surface Z (mm)',
+    bottomZ: 'Never below Z (mm)',
+    topHint: 'The face being carved: the groove is cut from here down',
+    bottomHint: 'Not used: the depth is "Deepest groove", measured from the surface',
   },
   drill: { bottomZ: 'Bottom Z (mm)', bottomHint: 'Used when every hole goes to one depth' },
   // On a lathe Z runs along the bar, so the pair is where a pass starts and
@@ -344,7 +350,7 @@ export const OP_PARAM_GROUPS = [
         // has nothing to divide. The field was there, defaulted to 0.2, and
         // read as a promise about how much the insert takes; the strategy has
         // never looked at it.
-        ops: ['face', 'contour2d', 'pocket', 'clear2d', 'adaptive', 'waterline', 'bore', 'engrave',
+        ops: ['face', 'contour2d', 'pocket', 'clear2d', 'adaptive', 'waterline', 'bore', 'engrave', 'vcarve',
           'slot', 'turnFace', 'turnRough', 'turnBore'],
         labelFor: (op) => (op.type === 'bore' ? 'Helix pitch (mm/turn)'
           : op.type === 'turnFace' ? 'Z per pass (mm)'
@@ -462,7 +468,7 @@ export const OP_PARAM_GROUPS = [
         // single move, so the field was three numbers that did nothing. A
         // thread mill's helix is a curve, chorded to this, and was the one
         // curve in the app nobody could set it for.
-        ops: [...MILLING, 'chamfer', 'engrave', 'drill', 'threadMill', 'turnFinish'],
+        ops: [...MILLING, 'chamfer', 'engrave', 'vcarve', 'drill', 'threadMill', 'turnFinish'],
         hintFor: (op) => (op.type === 'turnFinish'
           ? 'How finely the finished profile is stepped along. Smaller is a '
             + 'smoother curve and a longer program.'
@@ -564,7 +570,7 @@ export const OP_PARAM_GROUPS = [
       },
       {
         key: 'linkDistance', label: 'Stay down across (mm)', min: 0, step: 1,
-        ops: ['parallel3d', 'finish5'], nullable: true, placeholder: '3 × tool ⌀',
+        ops: ['parallel3d', 'pencil', 'scallop', 'finish5'], nullable: true, placeholder: '3 × tool ⌀',
         hint: 'A raster over anything but a block breaks at every hole and every '
           + 'step, and climbing to clearance for each one is most of the program. '
           + 'A break shorter than this is driven straight across instead — but '
@@ -711,17 +717,40 @@ export const OP_PARAM_GROUPS = [
   },
   {
     tab: 'strategy',
+    title: 'Finishing',
+    fields: [
+      {
+        key: 'scallopHeight', label: 'Scallop height (mm)', min: 0.001, max: 2, step: 0.005,
+        ops: ['scallop'],
+        hint: 'The height of the ridge left between two passes. The spacing follows from it and '
+          + 'the cutter, and is measured along the surface, so it is the same on a wall as on a floor.',
+      },
+      {
+        key: 'pencilRefDiameter', label: 'Cutter that left it (⌀ mm)', min: 0, max: 200, step: 0.5,
+        ops: ['pencil'],
+        hint: 'The ball whose leftovers are traced: the creases it could not reach. 0 means '
+          + 'twice this cutter, the usual step from a finishing ball to a pencil.',
+      },
+      {
+        key: 'pencilMinResidual', label: 'Least leftover worth a pass (mm)', min: 0, max: 5, step: 0.01,
+        ops: ['pencil'],
+        hint: 'A crease the bigger cutter leaves less than this is not traced. 0 means a couple of tolerances.',
+      },
+    ],
+  },
+  {
+    tab: 'strategy',
     title: 'Engraving',
     fields: [
       {
-        key: 'drawingId', label: 'Follow', type: 'drawing', ops: ['engrave'],
+        key: 'drawingId', label: 'Follow', type: 'drawing', ops: ['engrave', 'vcarve'],
         hint: 'A DXF imported onto the stock, or the part\'s own outline. A logo, '
           + 'a part number and a fold line are none of them features of the '
           + 'solid, so a drawing is the only way to cut one.',
       },
       {
         key: 'parallelBoundary', label: 'How far past the part', type: 'select',
-        ops: ['parallel3d', 'finish5'],
+        ops: ['parallel3d', 'pencil', 'scallop', 'finish5'],
         options: ['part', 'stock'],
         labels: {
           part: 'Stop at the part (plus the cutter radius)',
@@ -735,7 +764,7 @@ export const OP_PARAM_GROUPS = [
       },
       {
         key: 'boundaryExtra', label: 'Overrun past the part (mm)', min: 0, max: 1000, step: 0.5,
-        ops: ['parallel3d', 'finish5'],
+        ops: ['parallel3d', 'pencil', 'scallop', 'finish5'],
         when: (op) => (op.params.parallelBoundary ?? 'part') !== 'stock',
         hint: 'On top of the cutter radius. Worth a little where the wall has to '
           + 'be finished right to the bottom and the floor beside it is scrap.',
@@ -766,6 +795,44 @@ export const OP_PARAM_GROUPS = [
         when: (op) => (op.params.engraveMode ?? 'depth') === 'width',
       },
       { key: 'engraveReport', type: 'report', ops: ['engrave'] },
+    ],
+  },
+  {
+    tab: 'strategy',
+    title: 'V-carve',
+    fields: [
+      {
+        key: 'vcarveDepth', label: 'Deepest groove (mm)', min: 0.05, max: 12, step: 0.1,
+        ops: ['vcarve'],
+        hint: 'How far below the surface the cutter may sink. A wide part of the shape reaches it; '
+          + 'a narrow part stops sooner, where the V runs out of room.',
+      },
+      {
+        key: 'vcarveBottom', label: 'Bottom', type: 'select', ops: ['vcarve'],
+        options: ['flat', 'v'],
+        labels: { flat: 'Flat — cleared at the deepest level', v: 'V — stop at the deepest level' },
+        hint: 'Where the shape is wider than the cutter reaches at the depth limit: clear the floor '
+          + 'flat, or leave what one pass at that depth cuts.',
+      },
+      {
+        key: 'inlay', label: 'Inlay', type: 'select', ops: ['vcarve'],
+        options: ['none', 'female', 'male'],
+        labels: { none: 'No, just carve the shape', female: 'Recess (the pocket)', male: 'Plug (fits the recess)' },
+        hint: 'A pair that fits: carve the recess in one piece, and the plug in another from a MIRRORED '
+          + 'copy of the drawing. The plug is cut out round, turned over and glued in.',
+      },
+      {
+        key: 'inlayGap', label: 'Glue gap (mm)', min: 0, max: 2, step: 0.01, ops: ['vcarve'],
+        when: (op) => (op.params.inlay ?? 'none') === 'male',
+        hint: 'How much smaller than the recess the plug is, all round, for glue and for a cutter that '
+          + 'is never exactly the angle it says.',
+      },
+      {
+        key: 'inlayMargin', label: 'Carve beyond the shape (mm)', min: 0, max: 50, step: 0.5, ops: ['vcarve'],
+        when: (op) => (op.params.inlay ?? 'none') === 'male',
+        hint: 'How far out from the plug the background is cleared. Cut the plug free with a '
+          + 'contour round it, outside this.',
+      },
     ],
   },
   {

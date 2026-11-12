@@ -339,26 +339,31 @@ export function resolveRegions(doc, op, transformMeshFn, setup = null, tool = nu
     for (const [modelId, { faceIds, edgeIds }] of byModel) {
       const mesh = doc.meshes.get(modelId);
       if (!mesh) continue;
-      const placed = transformMeshFn(mesh);
-      if (faceIds.length) {
-        const { faces } = facesFor(modelId, mesh);
-        const loops = faceFootprint(placed, faces, faceIds,
-          { wallBand: wallBandFor(mode, includeGrow, op.params) });
-        if (loops.length) { out[mode].push(...loops); any = true; }
-      }
-      if (edgeIds.length) {
-        // The edges are indexed against the model's own mesh, and the band is
-        // built from the *placed* one — same vertex numbering, setup-space
-        // coordinates. Mixing those up puts the region where the part was
-        // before the setup moved it.
-        const { edges } = edgesFor(modelId, mesh);
-        const loops = edgeFootprint(placed, edges, edgeIds, EDGE_BAND);
-        if (loops.length) { out[mode].push(...loops); any = true; }
-        // Only the ones picked to *machine*. An edge picked to avoid is a
-        // keep-out, and a keep-out is exactly the flat band above.
-        if (mode === 'include') {
-          const paths = edgePolylines(placed, edges, edgeIds);
-          if (paths.length) { out.edgePaths.push(...paths); any = true; }
+      // One placement, or several: a setup with copies of the part has the same
+      // pick on every one of them — the face is picked once, on the original, and
+      // every copy has it. The copies' meshes share the original's vertex order,
+      // so the same face and edge ids index them.
+      for (const placed of [].concat(transformMeshFn(mesh))) {
+        if (faceIds.length) {
+          const { faces } = facesFor(modelId, mesh);
+          const loops = faceFootprint(placed, faces, faceIds,
+            { wallBand: wallBandFor(mode, includeGrow, op.params) });
+          if (loops.length) { out[mode].push(...loops); any = true; }
+        }
+        if (edgeIds.length) {
+          // The edges are indexed against the model's own mesh, and the band is
+          // built from the *placed* one — same vertex numbering, setup-space
+          // coordinates. Mixing those up puts the region where the part was
+          // before the setup moved it.
+          const { edges } = edgesFor(modelId, mesh);
+          const loops = edgeFootprint(placed, edges, edgeIds, EDGE_BAND);
+          if (loops.length) { out[mode].push(...loops); any = true; }
+          // Only the ones picked to *machine*. An edge picked to avoid is a
+          // keep-out, and a keep-out is exactly the flat band above.
+          if (mode === 'include') {
+            const paths = edgePolylines(placed, edges, edgeIds);
+            if (paths.length) { out.edgePaths.push(...paths); any = true; }
+          }
         }
       }
     }

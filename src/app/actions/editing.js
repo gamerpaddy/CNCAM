@@ -21,8 +21,8 @@ import { getSetting } from '../settings.js';
 import { planOrder } from '../../engine/order.js';
 import { recogniseFeatures } from '../../engine/features.js';
 import { toolForSpec } from '../../doc/feature-tools.js';
-import { mergeMeshes } from '../../geom/mesh.js';
-import { showOrderPlan, showFeaturePlan } from '../workflow-tools.js';
+import { mergeMeshes, computeBounds } from '../../geom/mesh.js';
+import { showOrderPlan, showFeaturePlan, showArrayDialog } from '../workflow-tools.js';
 import { openStrategyPicker } from '../strategy-picker.js';
 import { removalOf, nounFor } from '../item-labels.js';
 import { roughingLeftover, suggestedEntryGap, isFinishingPass } from '../op-status.js';
@@ -451,6 +451,31 @@ export function makeEditActions(ctx, space) {
     });
   }
 
+  /**
+   * Put copies of the part on the table — a grid or a circle — as one undo step.
+   * See engine/instances.js: one billet, one work offset, one program over all of
+   * them, so a tool change serves every part.
+   */
+  function arrayParts(setup = doc.activeSetup()) {
+    if (!setup) return ctx.ui.setStatus('Add a setup first', true);
+    if ((setup.mode ?? 'mill') === 'turn') return ctx.ui.setStatus('A lathe holds one bar: there is nothing to array', true);
+    // the part as the table sees it, with the datum left where the model had it so
+    // that the numbers are the part's own and do not move when copies are added
+    const bare = { ...setup, instances: [], orientation: { ...setup.orientation, origin: 'model' } };
+    const { meshes, pivot } = resolveSetupSpace(bare);
+    if (!meshes.length) return ctx.ui.setStatus('Import a model first: there is nothing to copy', true);
+    const b = computeBounds(mergeMeshes(meshes).positions);
+    return showArrayDialog({
+      setup, bounds: b, pivot, current: setup.instances ?? [],
+      onApply: (copies) => {
+        doc.updateItem(setup, { instances: copies }, copies.length ? `array ${copies.length + 1} parts` : 'remove the copies');
+        ctx.ui.setStatus(copies.length
+          ? `${setup.name}: ${copies.length + 1} parts on the table, one work offset. Generate again - every operation now covers all of them`
+          : `${setup.name}: back to one part`);
+      },
+    });
+  }
+
   /** Drop an operation at an index — what the tree's drag-to-reorder calls. */
   function reorderOperation(setup, from, to) {
     if (from === to || from < 0 || to < 0 || to >= setup.operations.length) return;
@@ -613,6 +638,7 @@ export function makeEditActions(ctx, space) {
     reorderOperation,
     optimiseOrder,
     proposeOperations,
+    arrayParts,
     deleteItem,
     deleteSelected,
     addFixture,

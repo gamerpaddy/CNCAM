@@ -277,6 +277,11 @@ export function createSetup(name = 'Setup 1', mode = 'mill') {
     // whole — changing the material moves no toolpath and must not mark one
     // out of date. See doc/materials.js.
     material: mode === 'turn' ? 'mild-steel' : DEFAULT_MATERIAL,
+    // Copies of the part on the table, each { dx, dy, rotZ } from the original —
+    // the original is not in the list, so an empty one is an ordinary setup. One
+    // billet, one work offset, and every operation reads all of them, so a tool
+    // change serves every copy. See engine/instances.js.
+    instances: [],
     operations: [],
   };
 }
@@ -286,8 +291,8 @@ export const OP_TYPES = [
   // engine/strategies/command.js.
   'command',
   'face', 'contour2d', 'pocket', 'slot', 'clear2d', 'adaptive',
-  'spot', 'drill', 'tap', 'threadMill', 'bore', 'chamfer', 'engrave',
-  'parallel3d', 'waterline', 'finish5',
+  'spot', 'drill', 'tap', 'threadMill', 'bore', 'chamfer', 'engrave', 'vcarve',
+  'parallel3d', 'pencil', 'scallop', 'waterline', 'finish5',
   'turnFace', 'turnRough', 'turnFinish', 'turnGroove', 'turnThread',
   'turnDrill', 'turnBore', 'turnPart',
 ];
@@ -493,6 +498,19 @@ export function createOperation(type = 'contour2d') {
       // and the schema does not know about is one the fingerprint cannot see,
       // so changing it would not mark the toolpath stale.
       linkDistance: null,
+      // pencil: the diameter of the cutter whose leftovers it traces (0 = twice
+      // this one), and the least metal left that is worth a pass (0 = by tolerance)
+      pencilRefDiameter: 0,
+      pencilMinResidual: 0,
+      // constant scallop: the cusp height between passes, mm
+      scallopHeight: 0.02,
+      // V-carve: how deep the groove may go, whether its floor is flat once it gets
+      // there, and the inlay pair (a recess and the plug that fits it)
+      vcarveDepth: 1,
+      vcarveBottom: 'flat',
+      inlay: 'none',
+      inlayGap: 0.05,
+      inlayMargin: 4,
       // Parting: how much wider than the blade the slot is cut, so a deep part
       // off does not pinch the blade in its own groove.
       partWiden: 0,

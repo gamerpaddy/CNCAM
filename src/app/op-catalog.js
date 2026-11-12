@@ -101,12 +101,21 @@ const ICONS = {
   engrave:
     '<path d="M12 2l3 8h-6z"/><path d="M12 10v4" class="stroke"/>'
     + '<path d="M3 20h18" class="stroke"/><path d="M9 18h6l-3-4z" class="stroke"/>',
+  vcarve:
+    '<path d="M3 6h18v14H3z"/><path d="M5 6l7 9 7-9" class="stroke accent"/>'
+    + '<path d="M8 6l4 5 4-5" class="stroke"/>',
   finish5:
     '<path d="M2 17c4-8 8 6 12-2s6 2 8 0v5H2z"/>'
     + '<path d="M9 3l5 8" class="stroke accent"/><circle cx="14.4" cy="11.4" r="1.6"/>',
   parallel3d:
     '<path d="M2 16c4-8 8 6 12-2s6 2 8 0v6H2z"/>'
     + '<path d="M2 13c4-8 8 6 12-2s6 2 8 0M2 17c4-8 8 6 12-2s6 2 8 0" class="stroke"/>',
+  pencil:
+    '<path d="M3 5v13h18" class="stroke"/><path d="M3 18l5-3 6 0 5-3" class="stroke accent"/>'
+    + '<circle cx="8" cy="15" r="1.6"/>',
+  scallop:
+    '<path d="M2 16c4-8 8 6 12-2s6 2 8 0v6H2z"/>'
+    + '<path d="M3 13c3 0 4-2 7-2s4 2 7 2M3 17c3 0 4-2 7-2s4 2 7 2" class="stroke accent"/>',
   waterline:
     '<path d="M12 3c5 0 9 4 9 9v9H3v-9c0-5 4-9 9-9z"/>'
     + '<path d="M4 14h16M3.4 18h17.2M6 10h12" class="stroke"/>',
@@ -254,11 +263,33 @@ export const OP_CATALOG = {
       + 'line width instead of a depth.',
     cutter: 'V bit, or a small flat for a square groove',
   },
+  vcarve: {
+    group: 'Edges & marking',
+    summary: 'Fills a shape with a groove whose depth follows its width, cut with a V bit.',
+    when: 'Lettering, logos and signs from a drawing. The groove opens exactly to the outline at '
+      + 'the surface and stops deeper where the shape is wide. Also makes a recess and a '
+      + 'plug that fit each other, for an inlay.',
+    cutter: 'V bit',
+  },
   parallel3d: {
     group: '3D finishing',
     summary: 'Rasters a curved surface, the cutter riding the real form.',
     when: 'Shallow and rolling surfaces. Poor on steep walls, where the passes '
       + 'spread apart.',
+    cutter: 'Ball or bull nose',
+  },
+  pencil: {
+    group: '3D finishing',
+    summary: 'Traces the creases a bigger cutter could not reach, once, with a smaller one.',
+    when: 'After a finishing pass with a large ball: inside corners and narrow valleys it left '
+      + 'rounded. Finds them itself from the size of the cutter that left them.',
+    cutter: 'A small ball or bull nose',
+  },
+  scallop: {
+    group: '3D finishing',
+    summary: 'Spaces the passes along the surface so the ridge between them is one height everywhere.',
+    when: 'Steep and shallow faces on the same part, where a raster is ridged on the steep ones. '
+      + 'Ask for a scallop height and the spacing follows.',
     cutter: 'Ball or bull nose',
   },
   finish5: {
@@ -532,9 +563,19 @@ export function describeIntent(op, tool) {
         : `${mm(cut)} deep`;
       return `Traces the part's boundaries with ${cutter} centred on them, ${how}.`;
     }
+    case 'vcarve': {
+      const inlay = p.inlay === 'female' ? ' — the recess of an inlay' : p.inlay === 'male' ? ' — the plug of an inlay' : '';
+      return `Fills the drawn shapes with ${cutter}, down to ${mm(p.vcarveDepth ?? 1)} where they are wide enough${inlay}.`;
+    }
     case 'parallel3d':
       return `Finishes the surface with ${cutter} in ${(p.pattern ?? 'zigzag') === 'flow' ? 'streamlines of the steepest slope' : `${p.angleDeg ?? 0}° passes`}, `
         + `stepping ${mm((p.stepover ?? 0.08) * (tool?.diameter ?? 6))} between them.`;
+    case 'pencil':
+      return `Traces the creases a ⌀${p.pencilRefDiameter > 0 ? p.pencilRefDiameter : (tool?.diameter ?? 3) * 2} cutter `
+        + `leaves, with ${cutter} set into each of them.`;
+    case 'scallop':
+      return `Finishes the surface with ${cutter} in passes spaced along it for a `
+        + `${mm(p.scallopHeight ?? 0.02)} ridge between them.`;
     case 'finish5':
       return `Finishes the surface with ${cutter} leaning to it — ${p.tiltMode === 'fixed' ? 'at a fixed lean' : 'following the surface normal'}, `
         + `${p.leadAngle ?? 0}° of lead and at most ${p.maxTilt ?? 35}° from vertical — in `
