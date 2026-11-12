@@ -109,7 +109,7 @@ export function makeActions(ctx) {
 
   return {
     ...program,
-    showSetupSheet: () => showSetupSheet(doc, editing.setupStock),
+    showSetupSheet: () => showSetupSheet(doc, editing.setupStock, ctx.simulation?.sim ?? null),
     ...files,
     ...editing,
     ...check,

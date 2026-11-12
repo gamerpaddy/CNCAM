@@ -69,3 +69,5 @@ import './five-concentric.test.js';
 import './five-operations.test.js';
 
 import './five-motion-check.test.js';
+
+import './job-report.test.js';

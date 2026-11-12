@@ -1,5 +1,4 @@
-import { opFingerprint, formatTime } from './op-status.js';
-import { estimateSeconds } from '../engine/toolpath.js';
+import { buildJobReport, reportToHtml } from './job-report.js';
 import { el, dialogCloseButton } from './layout.js';
 import { openFile, saveFile } from '../io/files.js';
 
@@ -82,24 +81,48 @@ function openPresets(doc, op, app) {
   document.body.append(dialog); refresh(); dialog.showModal();
 }
 
-export function showSetupSheet(doc, stockFor) {
+const SHEET_ACCEPT = { description: 'Setup sheet', mime: { 'text/html': ['.html'] }, extensions: ['.html'] };
+
+/**
+ * The setup and tool sheet. Every figure comes from buildJobReport, which reads
+ * the numbers the program really uses (an operation's own feed over its tool's),
+ * so what is printed beside the machine is what the file says.
+ */
+export function showSetupSheet(doc, stockFor, sim = null) {
+  const report = buildJobReport(doc, { stockFor, sim });
   const dialog = el('dialog', { class: 'workflow-dialog setup-sheet', 'aria-label': 'Setup and tool sheet' });
-  dialog.append(el('h1', {}, [doc.project.name]), dialogCloseButton(dialog), el('p', {}, [`Setup and tool sheet · ${new Date().toLocaleString()}`]));
-  for (const setup of doc.setups()) {
-    const stock = stockFor?.(setup);
-    const dimensions = stock ? stock.max.map((v, i) => (v - stock.min[i]).toFixed(2)).join(' × ') + ' mm' : 'not resolved';
-    const section = el('section', {}, [el('h2', {}, [setup.name]),
-      el('p', {}, [`Machine: ${doc.machineRecord()?.name || doc.machine} · Post: ${doc.postId()} · Work offset: ${setup.wcs ?? 'not specified'}`]),
-      el('p', {}, [`Stock dimensions: ${dimensions} · Fixtures: ${(setup.fixtures ?? []).map(f => f.name || f.kind).join(', ') || 'none'}`]),
-      el('details', { open: true }, [el('summary', {}, ['Stock definition']), el('pre', {}, [JSON.stringify(setup.stock, null, 2)])])]);
-    const table = el('table', {}, [el('thead', {}, [el('tr', {}, ['Operation','Tool','RPM','Cut feed (mm/min)','Estimated time','Status'].map(x => el('th', {}, [x])))])]);
-    const body = el('tbody');
-    for (const op of setup.operations) {
-      const tool = doc.project.tools.find(t => t.id === op.toolId);
-      body.append(el('tr', {}, [op.name, tool ? `T${tool.number} ${tool.name} (Ø${tool.diameter ?? '?'} mm)` : 'No tool', tool?.spindleRpm ?? '—', tool?.feedCut ?? '—', doc.toolpaths.has(op.id) ? formatTime(estimateSeconds(doc.toolpaths.get(op.id), doc.rapidFeed())) : '—', !op.enabled ? 'Disabled' : doc.failures.get(op.id) || (doc.toolpaths.has(op.id) ? (doc.fingerprints.get(op.id) === opFingerprint(doc, op, setup) ? 'Generated — verify simulation' : 'Out of date') : 'Not generated')].map(x => el('td', {}, [String(x)]))));
-    }
-    table.append(body); section.append(table); dialog.append(section);
+  const table = (head, rows) => el('table', {}, [
+    el('thead', {}, [el('tr', {}, head.map(x => el('th', {}, [x])))]),
+    el('tbody', {}, rows.map(r => el('tr', {}, r.map(x => el('td', {}, [String(x ?? '—')])))))]);
+  dialog.append(el('h1', {}, [report.project]), dialogCloseButton(dialog),
+    el('p', {}, [`Setup and tool sheet · ${report.generatedAt} · Machine: ${report.machine} · Post: ${report.post}`]),
+    el('p', { class: 'sheet-total' }, [`Total ${report.totals.timeText} — ${report.totals.operations} operations, `
+      + `${report.totals.toolChanges} tool change${report.totals.toolChanges === 1 ? '' : 's'}`]));
+  if (report.tools.length) {
+    dialog.append(el('section', { class: 'sheet-tools' }, [el('h2', {}, ['Tools']),
+      table(['T', 'Tool', 'Type', 'Ø mm', 'Flutes', 'Stick-out mm', 'Used by'],
+        report.tools.map(t => [`T${t.number}`, t.name, t.kind, t.diameter, t.flutes, t.stickOut, t.operations.join(', ')]))]));
   }
-  dialog.append(el('p', {}, ['Programmed values are shown; verify tool assignments, stock, offsets, and simulation before machining.']), el('button', { onclick: () => window.print() }, ['Print / Save PDF']), el('button', { onclick: () => dialog.close() }, ['Close']));
+  for (const s of report.setups) {
+    dialog.append(el('section', { class: 'sheet-setup' }, [el('h2', {}, [s.name]),
+      el('p', {}, [`Work offset: ${s.wcs ?? 'not specified'} · Stock: ${s.stockSize} · Fixtures: ${s.fixtures.join(', ') || 'none'} · Time: ${s.timeText}`]),
+      el('details', { open: true }, [el('summary', {}, ['Stock definition']), el('pre', {}, [JSON.stringify(s.stock, null, 2)])]),
+      table(['Operation', 'Tool', 'RPM', 'Cut feed (mm/min)', 'Plunge', 'Estimated time', 'Status'],
+        s.rows.map(r => [r.name + (r.changesTool ? ' (tool change)' : ''),
+          r.tool ? `T${r.tool.number} ${r.tool.name} (Ø${r.tool.diameter ?? '?'} mm)` : (r.command ? 'G-code block' : 'No tool'),
+          r.rpm, r.feed, r.plunge, r.timeText, r.status]))]));
+  }
+  if (report.verify) {
+    dialog.append(el('section', { class: 'sheet-verify' }, [el('h2', {}, ['Check of the finished part']),
+      el('ul', {}, [...report.verify.lines, ...report.verify.findings].map(l => el('li', {}, [l])))]));
+  }
+  const status = el('p', { role: 'status' });
+  dialog.append(el('p', {}, ['Programmed values are shown; verify tool assignments, stock, offsets, and simulation before machining.']),
+    el('button', { onclick: () => window.print() }, ['Print / Save PDF']),
+    el('button', { onclick: async () => { try {
+      const saved = await saveFile(`${report.project || 'job'} setup sheet.html`, reportToHtml(report), SHEET_ACCEPT);
+      status.textContent = saved ? 'Saved as a page that opens in any browser' : 'Not saved';
+    } catch (e) { status.textContent = e.message; } } }, ['Save as HTML']),
+    el('button', { onclick: () => dialog.close() }, ['Close']), status);
   dialog.addEventListener('close', () => dialog.remove(), { once: true }); document.body.append(dialog); dialog.showModal();
 }
