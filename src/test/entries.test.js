@@ -286,9 +286,21 @@ test('a finishing pass enters clear of the steps the roughing before it leaves',
       + `${sim.rapidCut.depth.toFixed(2)}mm`);
     assert.ok(finish.cl.notes.some((n) => /rather than 1mm/.test(n.text)),
       `${type} says why it entered higher than it was set to`);
-    // and the steps the default adaptive leaves are 12.3mm tall, which on the
-    // shallow slopes it meets whole — see heights.js stepsTooTallFor
-    assert.ok(finish.cl.notes.some((n) => n.level === 'warn' && /up to 12\.3mm at once/.test(n.text)),
-      `${type} warns that it takes the roughing's steps whole`);
+    // The default adaptive goes back up the slopes a quarter of a diameter at a
+    // time, so what it leaves is 1.8mm (1.5 and the 0.3 allowance), not its 12mm
+    // stepdown — and the finishing pass enters 2.5mm over the surface, where
+    // 2.5mm was measured to clear every step. No warning about steps taken whole.
+    assert.ok(finish.cl.notes.some((n) => /entering and linking 2\.5mm above the surface/.test(n.text)),
+      `${type} enters 2.5mm over the surface`);
+    assert.ok(!finish.cl.notes.some((n) => n.level === 'warn' && /at once/.test(n.text)),
+      `${type} does not warn about steps the roughing took off`);
   }
+  // With the step-up passes switched off the steps are the stepdown's, 12.3mm
+  // tall, which on the shallow slopes the finishing pass meets whole — see
+  // heights.js stepsTooTallFor
+  const bare = generate('adaptive', job, FLAT, { stepUp: 0 });
+  const bareEarlier = [{ type: 'adaptive', tool: FLAT, params: bare.params }];
+  const finish = generate('waterline', job, BALL, { entryGap: 1 }, { earlier: bareEarlier });
+  assert.ok(finish.cl.notes.some((n) => n.level === 'warn' && /up to 12\.3mm at once/.test(n.text)),
+    'waterline warns that it takes the roughing\'s steps whole when nothing took them off');
 });
