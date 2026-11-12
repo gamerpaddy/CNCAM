@@ -212,7 +212,7 @@ export function paramRow(doc, op, field, app) {
     return withHint(propRow(label, box), field, op, app);
   }
   if (field.type === 'report') {
-    return (REPORTS[field.key] ?? cuttingReportRow)(doc, op);
+    return (REPORTS[field.key] ?? cuttingReportRow)(doc, op, app);
   }
   if (field.type === 'drawing') {
     // Which imported drawing this pass follows, or the part's own outline. The

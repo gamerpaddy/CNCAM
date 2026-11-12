@@ -170,7 +170,7 @@ export function engraveReportRow(doc, op) {
  * tool. See `cuttingReport` — taken off the insert instead, every turning
  * operation in the app reported a speed six times slower than the truth.
  */
-export function cuttingReportRow(doc, op) {
+export function cuttingReportRow(doc, op, app = null) {
   const tool = doc.project.tools.find((t) => t.id === op.toolId);
   const setup = doc.findSetupOf(op.id);
   const stock = setup?.stock;
@@ -208,8 +208,26 @@ export function cuttingReportRow(doc, op) {
     if (check.expectedChip) lines.push(['Usual chip here', `${check.expectedChip.toFixed(3)} mm per tooth`]);
   }
   const rows = reportRows(lines);
-  if (!check?.warnings.length) return rows;
-  return el('div', {}, [rows, ...check.warnings.map((w) => el('div', { class: 'prop-note warn' }, [w]))]);
+  const extra = [...(check?.warnings ?? []).map((w) => el('div', { class: 'prop-note warn' }, [w]))];
+  // Feed from the cut — see engine/feed-opt.js. Only where it can be done: a mill
+  // operation that has a toolpath to measure.
+  const cl = doc.toolpaths.get(op.id);
+  if (!report.lathe && cl?.count > 0 && app?.actions?.optimiseFeeds) {
+    const done = cl.feedOptimised;
+    extra.push(el('div', { class: 'feed-opt' }, [
+      el('div', { class: 'prop-hint' }, [done
+        ? `Feed set from the cut: ${done.levels} levels, ${done.slowest}–${done.fastest} mm/min against ${done.programmed} programmed. `
+          + 'Generating this operation again goes back to the one feed.'
+        : 'One feed for the whole path is slow where the cutter is barely touching and fast where it is buried. '
+          + 'This measures the cut and varies the feed to suit. The moves do not change.']),
+      el('button', {
+        title: 'Run the simulation, measure how much of the cutter is in the metal along this path, and set the feed to suit',
+        onclick: () => app.actions.optimiseFeeds([op.id]),
+      }, [done ? 'Set the feed again' : 'Set feed from the cut']),
+    ]));
+  }
+  if (!extra.length) return rows;
+  return el('div', {}, [rows, ...extra]);
 }
 
 /**

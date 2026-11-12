@@ -20,7 +20,7 @@ import { boreProfile, boreNarrowestSection } from '../../engine/lathe.js';
 import { computeBounds, mergeMeshes } from '../../geom/mesh.js';
 import { opStatus, formatTime, toolChangesIn } from '../op-status.js';
 import { machineWarnings } from '../../doc/machines.js';
-import { effectiveCutting } from '../../engine/cutting.js';
+import { effectiveCutting, fastestFeedOf } from '../../engine/cutting.js';
 import { MOVE_STRIDE, OP } from '../../engine/cl.js';
 import { fieldRow, roundMicron, propRow } from './fields.js';
 import { MATERIALS } from '../../doc/materials.js';
@@ -248,7 +248,7 @@ function machineFitRows(doc, setup) {
       if (c.spindleRpm > maxRpm) { maxRpm = c.spindleRpm; at.maxRpm = op.name; }
       if (c.spindleRpm < minRpm) { minRpm = c.spindleRpm; at.minRpm = op.name; }
     }
-    const fastest = Math.max(c.feedCut, c.feedPlunge);
+    const fastest = fastestFeedOf(doc.toolpaths.get(op.id), c);
     if (fastest > maxFeed) { maxFeed = fastest; at.maxFeed = op.name; }
   }
 

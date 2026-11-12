@@ -334,11 +334,14 @@ const NULL_LOG = {
  * @param cuts what earlier setups already removed — see engine/workpiece.js
  * @param frame this setup's own { matrix, offset }, needed to read `cuts`
  * @param logEvents false for a run that only needs its finished surface
+ * @param moveLoad true to also record, for every CL move of every operation, the
+ *   radial width and depth of cut it took — see `moveLoad` in the result. Off by
+ *   default: nothing on screen reads it, and it is an array per move.
  * @returns a simulation record; feed it to SimulationPlayback
  */
 export function simulateRemoval({
   stock, ops, maxCells = DEFAULT_MAX_CELLS, rapidFeed = 3000, record = 1,
-  cuts = null, frame = null, logEvents = true, fixtures = null,
+  cuts = null, frame = null, logEvents = true, fixtures = null, moveLoad = false,
 }) {
   const spanX = stock.max[0] - stock.min[0];
   const spanY = stock.max[1] - stock.min[1];
@@ -458,6 +461,7 @@ export function simulateRemoval({
     : null;
   const UP = [0, 0, 1];
   let prevAxis = UP;
+  const moveLoadOut = moveLoad ? [] : null;
   for (const { cl, tool } of ops) {
     // the profile *and* the radius it covers, from one builder, so the sweep and
     // the shape it sweeps with can never disagree about how wide the cutter is
@@ -480,8 +484,19 @@ export function simulateRemoval({
     const feedEvents = cl.events.filter((e) => e.type === 'feeds');
     feedEvents.sort((a, b) => a.index - b.index);
     let feedCursor = 0;
+    // What each *move* took, as opposed to each step (a long move is several).
+    // The feed optimiser works in CL moves, because that is what a feed word is
+    // attached to. kind: 0 a cut, 1 an entry (plunge, ramp, descent), 2 a rapid,
+    // 3 a hole.
+    const mlWidth = moveLoadOut ? new Float32Array(cl.count) : null;
+    const mlDepth = moveLoadOut ? new Float32Array(cl.count) : null;
+    const mlKind = moveLoadOut ? new Uint8Array(cl.count) : null;
 
     for (let n = 0; n < cl.count && !truncated; n++) {
+      let accSwath = 0;
+      let accTravel = 0;
+      let accDepth = 0;
+      let accEntry = false;
       while (feedCursor < feedEvents.length && feedEvents[feedCursor].index <= n) {
         feeds = feedEvents[feedCursor++];
       }
@@ -516,6 +531,7 @@ export function simulateRemoval({
         // a hole is full width by definition and travels no distance across the
         // floor, so there is no radial width to report — only how deep it went
         load.push(2 * radius, took.depth, radius, false);
+        if (mlKind) { mlKind[n] = 3; mlDepth[n] = took.depth; mlWidth[n] = 2 * radius; }
         seconds += drillSeconds(retractZ, zBottom, feeds.plunge, rapidFeed);
         prev = [x, y, retractZ];
         prevAxis = UP;
@@ -587,6 +603,12 @@ export function simulateRemoval({
                 : Math.min(took.swath / travel, 2 * radius),
               took.depth, radius, !entry, travel,
             );
+            if (mlKind && !rapid) {
+              accSwath += took.swath;
+              accTravel += travel;
+              if (took.depth > accDepth) accDepth = took.depth;
+              if (entry) accEntry = true;
+            }
             seconds += moveSeconds(a, b, d[o + 7], feeds, rapidFeed);
             step++;
             times.push(seconds);
@@ -598,6 +620,11 @@ export function simulateRemoval({
             }
           }
           if (watch) countRapid(rapidCut, watch, note);
+          if (mlKind) {
+            mlKind[n] = rapid ? 2 : accEntry ? 1 : 0;
+            mlWidth[n] = accTravel > 1e-9 ? Math.min(accSwath / accTravel, 2 * radius) : 0;
+            mlDepth[n] = accDepth;
+          }
           prev = p;
           prevAxis = axisNow;
         }
@@ -606,10 +633,14 @@ export function simulateRemoval({
       if (log.count > maxEvents) truncated = true;
     }
     opEnds.push(step);
+    if (moveLoadOut) moveLoadOut.push({ width: mlWidth, depth: mlDepth, kind: mlKind, radius });
   }
 
   return {
     opEnds,
+    // per operation, per CL move: how wide and how deep the cut was — or null
+    // when it was not asked for. See the `moveLoad` argument.
+    moveLoad: moveLoadOut,
     // the voids the earlier setups left under this one's surface, so a
     // breakthrough is drawn as one — see engine/workpiece.js
     inherited: columns ? columns.voids > 0 : false,
@@ -676,9 +707,10 @@ const RAPID_CUT_EPS = 0.01;
  */
 export function simulateProgram({
   setups, active = 0, all = false,
-  maxCells = DEFAULT_MAX_CELLS, rapidFeed = 3000, record = 1,
+  maxCells = DEFAULT_MAX_CELLS, rapidFeed = 3000, record = 1, moveLoad = false,
 }) {
   const cuts = [];
+  const moveLoads = [];
   const last = all ? setups.length - 1 : active;
   let sim = null;
   for (let k = 0; k <= last; k++) {
@@ -694,12 +726,15 @@ export function simulateProgram({
       record,
       logEvents: watched,
       fixtures: setup.fixtures ?? null,
+      moveLoad,
     });
+    moveLoads.push(run.moveLoad);
     cuts.push(cutFromSimulation(run, run.final, setup.frame));
     if (watched) sim = run;
   }
   if (!sim) throw new Error(`no setup at index ${active} to simulate`);
-  return { sim, cuts };
+  // `moveLoads` is per setup that ran, each per operation — null unless asked for
+  return { sim, cuts, moveLoads };
 }
 
 /**

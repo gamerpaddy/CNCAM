@@ -28,6 +28,24 @@ export function effectiveCutting(op, tool) {
 }
 
 /**
+ * The fastest feed this toolpath actually asks for, in mm/min.
+ *
+ * What an operation is *set* to and what its program says are the same number
+ * until something changes the feed part-way — see engine/feed-opt.js — and then
+ * the machine's limit has to be checked against the program, not the setting.
+ * The settings are the floor: a toolpath without feed events is judged by them.
+ */
+export function fastestFeedOf(cl, effective) {
+  let fastest = Math.max(effective?.feedCut ?? 0, effective?.feedPlunge ?? 0);
+  for (const e of cl?.events ?? []) {
+    if (e.type !== 'feeds') continue;
+    if (e.cut > fastest) fastest = e.cut;
+    if (e.plunge > fastest) fastest = e.plunge;
+  }
+  return fastest;
+}
+
+/**
  * The override when it is a usable number, else the tool's own — and when that
  * is not usable either, zero, which the post already names ("no cutting feed").
  * A tool read from an old file or typed past the field's checks can hold NaN,

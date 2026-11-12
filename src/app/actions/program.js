@@ -45,9 +45,11 @@ import { describeMachine, machineWarnings } from '../../doc/machines.js';
 import { fixtureTop, resolveFixtures, withoutGeometry } from '../../engine/fixtures.js';
 import { modelPrisms, fixtureCrashes } from '../../engine/five/fixture-hits.js';
 import { MOVE_STRIDE, OP } from '../../engine/cl.js';
-import { effectiveCutting } from '../../engine/cutting.js';
+import { effectiveCutting, fastestFeedOf } from '../../engine/cutting.js';
 import { placedPaths } from '../../engine/drawing.js';
 import { openMachineManager } from '../machine-manager.js';
+import { optimiseFeeds as optimiseToolpathFeeds } from '../../engine/feed-opt.js';
+import { cutWidths } from '../../engine/cut-check.js';
 import { getSetting, SIM_CELLS } from '../settings.js';
 import { saveFile, saveFiles, safeFileName, ACCEPT } from '../../io/files.js';
 
@@ -655,7 +657,7 @@ export function makeProgramActions(ctx, space) {
         if (spindleRpm > maxRpm) { maxRpm = spindleRpm; at.maxRpm = op.name; }
         if (spindleRpm < minRpm) { minRpm = spindleRpm; at.minRpm = op.name; }
       }
-      const fastest = Math.max(feedCut, feedPlunge);
+      const fastest = fastestFeedOf(doc.toolpaths.get(op.id), { feedCut, feedPlunge });
       if (fastest > maxFeed) { maxFeed = fastest; at.maxFeed = op.name; }
     }
     return { maxRpm, minRpm: Number.isFinite(minRpm) ? minRpm : 0, maxFeed, at };
@@ -691,6 +693,91 @@ export function makeProgramActions(ctx, space) {
         setup, stock, frame: { matrix, offset }, ops: simulatableOps(setup),
       };
     });
+  }
+
+  /**
+   * Set the feed along each operation's path by how much of the cutter is in the
+   * metal there — see engine/feed-opt.js.
+   *
+   * It needs the simulation, because that is what knows how wide and how deep
+   * each move cut, and the simulation needs every setup before this one (they
+   * leave the billet it starts from). So the job is run as the simulation runs
+   * it, with the load recorded, and nothing is shown: this is a measurement, not
+   * a playback. Each toolpath it improves is *replaced* — the moves are the very
+   * same moves, only the feed events differ — and says so on itself, which the
+   * tree and the sheet can show.
+   *
+   * @param opIds the operations to do; by default the selected one, and failing
+   *   that every one in the active setup
+   */
+  async function optimiseFeeds(opIds = null) {
+    const setup = opIds?.length
+      ? doc.findSetupOf(opIds[0]) ?? doc.activeSetup()
+      : doc.activeSetup();
+    if (!setup) return ctx.ui.setStatus('Add a setup before optimising feeds', true);
+    if ((setup.mode ?? 'mill') === 'turn') {
+      return ctx.ui.setStatus('Feeds are optimised on a mill: a lathe feeds per revolution', true);
+    }
+    const chosen = opIds?.length ? opIds
+      : doc.selection?.kind === 'op' ? [doc.selection.id]
+        : setup.operations.map((o) => o.id);
+    const job = jobSetups();
+    const active = Math.max(0, job.findIndex((s) => s.setup === setup));
+    const here = simulatableOps(setup);
+    if (here.length === 0) return ctx.ui.setStatus('Generate toolpaths before optimising feeds', true);
+    ctx.ui.setStatus('Measuring the cut…');
+    ctx.ui.setBusy(true);
+    try {
+      const sim = await ctx.pool.run('simulate', {
+        setups: job.map((s) => ({
+          stock: s.stock,
+          frame: s.frame,
+          ops: s.ops.map(({ cl, tool }) => ({ cl, tool })),
+          fixtures: resolveFixtures(s.setup.fixtures, doc.fixtureMeshes),
+        })),
+        active,
+        maxCells: SIM_CELLS[getSetting('simQuality')] ?? SIM_CELLS.high,
+        rapidFeed: doc.rapidFeed(),
+        record: 1,
+        moveLoad: true,
+        verify: null,
+      });
+      const loads = sim.moveLoad ?? [];
+      const machine = doc.machineRecord();
+      const lines = [];
+      let improved = 0;
+      for (const id of chosen) {
+        const op = setup.operations.find((o) => o.id === id);
+        if (!op || !op.enabled) continue;
+        // simulatableOps skips what has no toolpath or tool, so the load
+        // records are indexed by position among the ones that remain
+        const at = here.findIndex((h) => h.cl === doc.toolpaths.get(op.id));
+        if (at < 0) continue;
+        const tool = doc.project.tools.find((t) => t.id === op.toolId);
+        const before = doc.toolpaths.get(op.id);
+        const widths = cutWidths(op, tool);
+        const r = optimiseToolpathFeeds(before, loads[at], {
+          op, tool, material: setup.material, machine,
+          nominalWidth: widths.ae ?? null, nominalDepth: widths.ap ?? null,
+        });
+        if (r.refused) { lines.push(`${op.name}: left alone — ${r.refused}`); continue; }
+        if (!r.changed) { lines.push(`${op.name}: already the right feed everywhere`); continue; }
+        doc.toolpaths.set(op.id, r.cl);
+        const t0 = estimateSeconds(before, doc.rapidFeed());
+        const t1 = estimateSeconds(r.cl, doc.rapidFeed());
+        improved++;
+        lines.push(`${op.name}: ${r.stats.levels} feed levels, ${r.stats.slowest}–${r.stats.fastest} mm/min `
+          + `(programmed ${r.stats.programmed}), ${formatTime(t0)} → ${formatTime(t1)}`);
+      }
+      ctx.ui.setStatus(`${improved ? 'Feeds set from the cut. ' : ''}${lines.join(' · ')}`, false);
+      return lines;
+    } catch (err) {
+      console.error(err);
+      ctx.ui.setStatus(`Could not optimise feeds: ${err.message}`, true);
+      return null;
+    } finally {
+      ctx.ui.setBusy(false);
+    }
   }
 
   /**
@@ -1415,6 +1502,7 @@ export function makeProgramActions(ctx, space) {
   return {
     generate,
     simulate,
+    optimiseFeeds,
     simulateOrGenerate,
     seekSimulation,
     closeSimulation,

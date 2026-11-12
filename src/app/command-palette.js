@@ -46,6 +46,10 @@ export function paletteCommands(ctx) {
   add('File', 'Export G-code — a file per operation…', 'exportOperationsSeparately');
   add('File', 'Setup and tool sheet…', 'showSetupSheet');
   add('Job', 'Add a setup', 'addSetup');
+  add('Job', 'Optimise the running order…', 'optimiseOrder',
+    'Fewer tool changes and less travel, without moving anything that depends on what came before');
+  add('Job', 'Set feeds from the cut (selected operation, or all)', 'optimiseFeeds',
+    'Measures how much of the cutter is in the metal along each path and varies the feed to suit');
   add('Tools', 'Add cutters from the library…', 'addToolsFromLibrary');
   add('Tools', 'Make a new cutter…', 'newTool');
   add('Tools', 'Import a tool catalogue…', 'importTools');
