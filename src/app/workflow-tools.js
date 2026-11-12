@@ -81,6 +81,27 @@ function openPresets(doc, op, app) {
   document.body.append(dialog); refresh(); dialog.showModal();
 }
 
+/**
+ * The proposed running order: what it saves and in what order it would run, with
+ * nothing done until Apply — and one undo step when it is.
+ */
+export function showOrderPlan({ setup, plan, nameOf, onApply }) {
+  const dialog = el('dialog', { class: 'workflow-dialog order-plan', 'aria-label': 'Optimise the running order' });
+  const secs = (v) => `${Math.round(v)} s`;
+  dialog.append(el('h2', {}, [`Running order for ${setup.name}`]), dialogCloseButton(dialog),
+    el('p', {}, [`Tool changes: ${plan.before.changes} → ${plan.after.changes}. `
+      + `Travel between operations: ${secs(plan.before.travelSeconds)} → ${secs(plan.after.travelSeconds)}. `
+      + `Saves about ${secs(plan.before.seconds - plan.after.seconds)} in all.`]),
+    el('p', {}, ['Operations that cut the same ground, anything that reads what came before it, holes (spot, drill, then tap), '
+      + 'commands and the cut that frees the part keep their order; only operations in different places change places.']),
+    el('ol', {}, plan.order.map((id) => el('li', {}, [nameOf(id)]))),
+    el('button', { onclick: () => { dialog.close(); onApply(); } }, ['Apply']),
+    el('button', { onclick: () => dialog.close() }, ['Leave the order as it is']));
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  document.body.append(dialog);
+  dialog.showModal();
+}
+
 const SHEET_ACCEPT = { description: 'Setup sheet', mime: { 'text/html': ['.html'] }, extensions: ['.html'] };
 
 /**

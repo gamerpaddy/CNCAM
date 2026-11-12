@@ -18,6 +18,8 @@ import { pickToolFor } from '../../engine/tool-match.js';
 import { drillOversize } from '../../engine/lathe.js';
 import { tipLengthOf } from '../../engine/tool-geometry.js';
 import { getSetting } from '../settings.js';
+import { planOrder } from '../../engine/order.js';
+import { showOrderPlan } from '../workflow-tools.js';
 import { openStrategyPicker } from '../strategy-picker.js';
 import { removalOf, nounFor } from '../item-labels.js';
 import { roughingLeftover, suggestedEntryGap, isFinishingPass } from '../op-status.js';
@@ -355,6 +357,51 @@ export function makeEditActions(ctx, space) {
     reorderOperation(setup, from, from + delta);
   }
 
+  /**
+   * Work out a cheaper running order for a setup and offer it — see
+   * engine/order.js. Nothing changes until the user says so, and when it does it
+   * is one undo step: the order is the meaning of the program, and a button that
+   * rearranges it unasked is not one anybody would press twice.
+   */
+  function optimiseOrder(setup = doc.activeSetup()) {
+    if (!setup) return ctx.ui.setStatus('Add a setup first', true);
+    if ((setup.mode ?? 'mill') === 'turn') {
+      return ctx.ui.setStatus('A lathe’s order is its meaning: there is nothing here to reorder', true);
+    }
+    const machine = doc.machineRecord();
+    const ops = setup.operations.map((op) => {
+      const tool = doc.project.tools.find((t) => t.id === op.toolId);
+      return {
+        id: op.id, type: op.type, enabled: op.enabled, params: op.params,
+        toolNumber: tool && op.type !== 'command' ? tool.number : null,
+        radius: (tool?.diameter ?? 0) / 2,
+        cl: doc.toolpaths.get(op.id) ?? null,
+      };
+    });
+    const plan = planOrder(ops, {
+      stock: resolveSetupSpace(setup).stock,
+      rapid: doc.rapidFeed(),
+      changeSeconds: machine?.toolChangeSeconds ?? 10,
+    });
+    const nameOf = (id) => setup.operations.find((o) => o.id === id)?.name ?? id;
+    if (!plan.changed) {
+      const why = plan.reason ? `${plan.reason}.` : 'Nothing is cheaper without changing what is cut after what.';
+      return ctx.ui.setStatus(`${setup.name}: the order stands. ${why}`);
+    }
+    return showOrderPlan({
+      setup, plan, nameOf,
+      onApply: () => {
+        doc.group('optimise order', () => {
+          plan.order.forEach((id, to) => {
+            const from = setup.operations.findIndex((o) => o.id === id);
+            if (from !== to) doc.reorderOperation(setup, from, to);
+          });
+        });
+        ctx.ui.setStatus(`${setup.name}: ${plan.before.changes} tool changes down to ${plan.after.changes} - Ctrl+Z puts the order back`);
+      },
+    });
+  }
+
   /** Drop an operation at an index — what the tree's drag-to-reorder calls. */
   function reorderOperation(setup, from, to) {
     if (from === to || from < 0 || to < 0 || to >= setup.operations.length) return;
@@ -515,6 +562,7 @@ export function makeEditActions(ctx, space) {
     duplicateOperation,
     moveOperation,
     reorderOperation,
+    optimiseOrder,
     deleteItem,
     deleteSelected,
     addFixture,

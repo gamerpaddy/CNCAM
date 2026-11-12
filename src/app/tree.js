@@ -868,6 +868,11 @@ function menuForSetup(doc, setup, app) {
     })),
     { separator: true },
     {
+      label: 'Optimise the running order…',
+      hint: 'Fewer tool changes and less travel, without moving anything that depends on what came before',
+      onclick: () => app?.actions?.optimiseOrder(setup),
+    },
+    {
       label: 'Duplicate setup',
       hint: 'Stock, fixturing, clamps and every operation — the start of a second op',
       onclick: () => app?.actions?.duplicateSetup(setup),

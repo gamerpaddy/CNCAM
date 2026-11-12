@@ -74,3 +74,4 @@ import './job-report.test.js';
 import './probe-macros.test.js';
 import './materials.test.js';
 import './feed-opt.test.js';
+import './order.test.js';
