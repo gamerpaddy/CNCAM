@@ -129,8 +129,16 @@ export function profileSteps(tool, spacing, maxBands = 12) {
   return steps;
 }
 
-/** Cell reads a tool-location field may cost: about three seconds of planning. */
-const FIELD_BUDGET = 2.5e9;
+/** Cell reads a tool-location field may cost: about a second of planning on a part like the sloped one. */
+const FIELD_BUDGET = 1.5e9;
+// Measured against a 0.05mm reference field on the sloped part (bench/audit/
+// field-accuracy.mjs) — error in the tool height it reports, and how often it
+// reports the tool too low, which is the direction that would gouge:
+//   2.5e9   1.9 s   median 0.020  p95 0.138mm  too low at 0.2% of points
+//   1.5e9   1.2 s   median 0.026  p95 0.179mm  too low at 0.1%
+//   1.0e9   0.8 s   median 0.032  p95 0.211mm  too low at 0.0%
+// The error is the grid's rounding at steep walls and it falls on the high side,
+// so it costs a little cusp rather than a gouge; the middle one is the trade.
 
 /**
  * The drop-cutter field for a shaped cutter, on a grid as fine as the budget

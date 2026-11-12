@@ -29,6 +29,7 @@ running every time are in `src/test/simulate.test.js` instead.
 | `audit/field-check.mjs` | The waterline's drop-cutter field with and without run bounds: values must match to the last bit. |
 | `audit/levels.mjs` | Cutting length by Z level — what a pass such as adaptive's step-ups really adds. |
 | `audit/contour-check.mjs` | A contour after an adaptive rough, plain and skipping what the rough cleared: minutes, air, removed volume, whether the surfaces match. |
+| `audit/field-accuracy.mjs` | The waterline's drop-cutter field at several budgets against a fine reference: error in the reported tool height, how often it reports the tool too low (the gouging direction), and the time. |
 
 ## Tangency
 
