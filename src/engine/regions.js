@@ -227,6 +227,41 @@ export function standingTopAt(regions, x, y, z) {
   return best;
 }
 
+/**
+ * How high the stock can stand under a cutter that goes along `points`
+ * ([x0, y0, x1, y1, …]), on the word of the ground earlier passes cleared: the
+ * deepest level above `z` at which *the whole cutter* stands in cleared ground
+ * at every one of those points — the same test that deducts a cleared stretch
+ * from a pass. `fallback` where no level above does.
+ *
+ * A pass that was told some of its path is already cleared still has to come
+ * down somewhere, and coming down from the top of the billet through ground
+ * the deduction has just declared empty is the whole of the cost the deduction
+ * was meant to save.
+ */
+export function standingTopOver(regions, points, z, fallback,
+  { radius = 0, tolerance = 0.01, minClearedWidth = 0, samples = 40 } = {}) {
+  const stack = regions?.cleared;
+  if (!hasAny(stack) || !stack[0]?.loops) return fallback;
+  const n = points.length / 2;
+  const stride = Math.max(1, Math.floor(n / samples));
+  let top = fallback;
+  // shallowest slice first would stop at the first that holds every point; the
+  // stack is deepest first, so walk it from the far end
+  const above = stack.filter((slice) => slice.z > z + 1e-6).sort((a, b) => a.z - b.z);
+  for (const slice of above) {
+    if (slice.z >= top) break;
+    const eroded = worthSkippingOnce(regions, slice.loops, radius, tolerance, minClearedWidth);
+    if (eroded.length === 0) continue;
+    let all = true;
+    for (let i = 0; i < n; i += stride) {
+      if (!pointInLoops(eroded, points[i * 2], points[i * 2 + 1])) { all = false; break; }
+    }
+    if (all) { top = slice.z; break; }
+  }
+  return top;
+}
+
 /** Restrict a filled machining region (clearing, facing, raster bounds). */
 export function applyRegionsToArea(loops, regions, {
   radius = 0, tolerance = 0.01, includeGrow, z, minClearedWidth = 0,

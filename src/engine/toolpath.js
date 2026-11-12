@@ -37,7 +37,7 @@ const strategies = {
   // survive a reorder and a save. See strategies/command.js.
   command: generateCommand,
   face: generateFace,
-  contour2d: generateContour,
+  contour2d: generateContourFaster,
   pocket: generatePocket,
   clear2d: generateClear,
   adaptive: generateAdaptive,
@@ -463,6 +463,31 @@ export function toolpathStats(cl, rapidFeed = 3000) {
     // whatever else it emitted
     empty: cuts === 0 && drills === 0,
   };
+}
+
+/**
+ * A contour that skips what earlier passes cleared, or the plain one — whichever
+ * the machine gets through sooner.
+ *
+ * Skipping the ground that is already clear is only a saving if the rest of the
+ * pass can still be one continuous descent. What is left after the deduction
+ * differs from level to level, so it is cut level by level, each with its lead
+ * in and out and its retract — and on a part whose outline is the same at every
+ * depth that is several times the program it was meant to shorten. Both are
+ * valid programs; the shorter one is kept, and it says so when it is the plain one.
+ */
+function generateContourFaster(args) {
+  const skipping = generateContour(args);
+  if (!Array.isArray(args.regions?.cleared) || args.regions.cleared.length === 0) return skipping;
+  if (skipping.count === 0) return skipping;
+  const plain = generateContour({ ...args, regions: { ...args.regions, cleared: [] } });
+  if (plain.count === 0 || !(estimateSeconds(plain) < estimateSeconds(skipping))) return skipping;
+  plain.notes = [...(plain.notes ?? []), {
+    level: 'info',
+    text: 'skipping what the passes before cleared would have taken longer — leads, retracts '
+      + 'and a descent at every level — so this is the whole outline in one descent.',
+  }];
+  return plain;
 }
 
 /**

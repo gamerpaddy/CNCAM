@@ -28,6 +28,7 @@ running every time are in `src/test/simulate.test.js` instead.
 | `audit/hash.mjs` | Generation time and a hash of the program. Run before and after a speed-up: an equal hash is the proof it changed nothing. |
 | `audit/field-check.mjs` | The waterline's drop-cutter field with and without run bounds: values must match to the last bit. |
 | `audit/levels.mjs` | Cutting length by Z level — what a pass such as adaptive's step-ups really adds. |
+| `audit/contour-check.mjs` | A contour after an adaptive rough, plain and skipping what the rough cleared: minutes, air, removed volume, whether the surfaces match. |
 
 ## Tangency
 

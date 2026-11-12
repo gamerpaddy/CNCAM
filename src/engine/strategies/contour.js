@@ -40,7 +40,7 @@ import {
   orientLoop, leadInPoints, leadOutPoints, emitLeadOut,
   internalLeadStart, startOnSegment, leadOnLoop, leadRoomFor, leadFits, roomOutside,
 } from '../leads.js';
-import { applyRegionsToPaths, regionRefusal } from '../regions.js';
+import { applyRegionsToPaths, regionRefusal, standingTopOver } from '../regions.js';
 import { approach, entryPlane, crossingPlane, goHome } from '../heights.js';
 import { applyCutting } from '../cutting.js';
 import {
@@ -128,6 +128,12 @@ export function generateContour({
   // Loops started again from the top of the metal rather than from the level
   // above — see emitLevel.
   let restarted = 0;
+  // Where a pass along `path` may come down from: no higher than the stock can
+  // stand under it, when earlier passes cleared the ground round the path above
+  // this level — see regions.standingTopOver. Rest machining only.
+  const clearedTop = (path, z) => (Array.isArray(regions?.cleared) && regions.cleared.length
+    ? standingTopOver(regions, path, z, params.topZ, { radius: r, tolerance, minClearedWidth: params.stepdown ? 0 : 0 })
+    : params.topZ);
   const emitLevel = (shadow, allowance, z, useTabs, zAbove) => {
     const profiles = selectProfiles(shadow, params.profile ?? 'outer');
     // Offsetting a boundary inward by more than its own half-width collapses
@@ -155,7 +161,7 @@ export function generateContour({
       // it everywhere while the cutter stuck out past the pass above into metal
       // standing the full height of the billet: on the clamp part a rapid 5mm
       // into it and then 9mm taken at once, three levels in one.
-      let from = entryHeight(ground, sweptBy(loop, r, true), z, params.topZ);
+      let from = Math.min(entryHeight(ground, sweptBy(loop, r, true), z, params.topZ), clearedTop(loop, z));
       if (from > zAbove + 1e-9) restarted++;
       for (const zz of depthPasses(from, z, params.stepdown)) {
         const useTabsHere = (useTabs && zz <= z + 1e-9) || zz < tabTop - 1e-9;
@@ -166,7 +172,7 @@ export function generateContour({
       }
     }
     for (const path of open) {
-      let from = entryHeight(ground, sweptBy(path, r), z, params.topZ);
+      let from = Math.min(entryHeight(ground, sweptBy(path, r), z, params.topZ), clearedTop(path, z));
       for (const zz of depthPasses(from, z, params.stepdown)) {
         if (cutOpenPass(cl, path, zz, {
           clearance, feedPlane: entryPlane(params, from, zz), entry, zEntry: from, params,
