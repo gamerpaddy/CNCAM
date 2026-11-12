@@ -208,6 +208,25 @@ export function clearedEdgeAt(regions, { radius = 0, tolerance = 0.01, z, minCle
   return toolAdjusted(regions, radius, tolerance, -radius, true, z, minClearedWidth).cleared;
 }
 
+/**
+ * How high the stock still stands at (x, y), as far as earlier passes' cleared
+ * ground says: the deepest level above `z` that cleared it, or null where no
+ * level above did — which means nothing is known about it.
+ *
+ * What a level cleared is empty down to that level, so the stock under it
+ * cannot be higher.
+ */
+export function standingTopAt(regions, x, y, z) {
+  const stack = regions?.cleared;
+  if (!hasAny(stack) || !stack[0]?.loops) return null;
+  let best = null;
+  for (const slice of stack) {
+    if (slice.z <= z + 1e-6 || (best !== null && slice.z >= best)) continue;
+    if (pointInLoops(slice.loops, x, y)) best = slice.z;
+  }
+  return best;
+}
+
 /** Restrict a filled machining region (clearing, facing, raster bounds). */
 export function applyRegionsToArea(loops, regions, {
   radius = 0, tolerance = 0.01, includeGrow, z, minClearedWidth = 0,

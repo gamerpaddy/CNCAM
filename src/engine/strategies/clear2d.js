@@ -17,7 +17,7 @@ import {
 } from '../../geom/clipper.js';
 import { SilhouetteStack, silhouetteAbove } from '../../geom/silhouette.js';
 import { depthLevelsFor, depthRefusal, stockOutline } from '../stock.js';
-import { applyRegionsToArea, clearedEdgeAt, regionRefusal } from '../regions.js';
+import { applyRegionsToArea, clearedEdgeAt, regionRefusal, standingTopAt } from '../regions.js';
 import { loopBorderedBy, pointInLoops, distanceToLoops } from '../../geom/inside.js';
 import { cutLoopPass, finishLaps } from './contour.js';
 import { roomOutside } from '../leads.js';
@@ -193,6 +193,12 @@ export function generateClear({
       // adaptive's step-up levels was exactly that lap, round the dome and the
       // ramp, at every level.
       const clearedEdge = clearedEdgeAt(regions, { radius: r, tolerance, z, minClearedWidth: step });
+      // Where this piece's stock actually starts. A rest pass is told what the
+      // levels above it cleared, and the ground it is about to cut may have been
+      // cleared down to most of the way here: entering from the top of the billet
+      // ramps through all of that air. Measured on the clamp, 61% of a rest pass
+      // was a ramp from the top of the stock through air at every deep level.
+      const zStart = standingTop(regions, rings[0] ?? loops, keepout, r, z, zEntry);
       const ordered = orderRings(rings, touchesStockEdge(piece.outer, outer),
         { air: outer, part: keepout }, step);
       const trimmed = clearedEdge.length === 0 ? ordered : ordered.flatMap((pass) => {
@@ -203,14 +209,14 @@ export function generateClear({
         // open spans, and each of those is ramped into along itself — so it is
         // worth it only where the lap saved is longer than the ramps it costs.
         const ramp = (params.rampAngle ?? 0) > 0
-          ? Math.max(0, zEntry - z) / Math.tan((params.rampAngle * Math.PI) / 180) : 0;
+          ? Math.max(0, zStart - z) / Math.tan((params.rampAngle * Math.PI) / 180) : 0;
         const kept = runs.reduce((sum, run) => sum + flatLength(run.path), 0);
         const saved = flatLength(pass.loop) - kept;
         if (!(saved > 1.5 * ramp * runs.length)) return [pass];
         return runs.map((run) => ({ ...pass, loop: run.path, closed: run.closed }));
       });
       const passes = entryPasses(trimmed, {
-        depth: zEntry - z, rampAngle: params.rampAngle ?? 0, radius: r, tolerance, area: loops,
+        depth: zStart - z, rampAngle: params.rampAngle ?? 0, radius: r, tolerance, area: loops,
       });
       // Everything cut so far at this level, as the paths it was cut along.
       // A span may drop straight to depth onto one of them, because the pass
@@ -231,11 +237,11 @@ export function generateClear({
         // only the last ring is a finished wall, so leads are wasted motion on
         // the interior passes — ramp those in along the path instead
         const cut = closed
-          ? cutLoopPass(cl, loop, zEntry, z, {
+          ? cutLoopPass(cl, loop, zStart, z, {
             clearance, direction, params, crossAt, leadRoom,
             lead: ringSide(loop, k === 0 ? lead : { type: 'none', radius: 0 }, keepout),
           })
-          : cutSpanPass(cl, loop, zEntry, z, {
+          : cutSpanPass(cl, loop, zStart, z, {
             clearance, params, crossAt, step,
             // Where the pass before this one cleared, so this one can drop into
             // the space rather than ramp its way in — see `cutSpanPass`.
@@ -444,6 +450,42 @@ function orderRings(rings, airOutside, sides, step) {
  * @returns [{ path, closed }] — the whole path when none of it is the edge,
  *   nothing when all of it is
  */
+/**
+ * The height to enter a piece of a rest pass from: the highest the stock stands
+ * under any of the places the cutter will be, or `zEntry` where that cannot be
+ * said — no cleared ground above, or somewhere the cutter goes that none of it
+ * covers.
+ *
+ * Read at the ring points and a radius to each side of them, which is the
+ * ground the cutter is over. A point inside the keep-out is the part's own
+ * allowance, which this pass does not cut and which stands as tall as the part.
+ */
+function standingTop(regions, loops, keepout, radius, z, zEntry) {
+  if (!Array.isArray(regions?.cleared) || regions.cleared.length === 0) return zEntry;
+  const outline = [];
+  for (const loop of loops) {
+    const n = loop.length / 2;
+    const stride = Math.max(1, Math.floor(n / 24));
+    for (let i = 0; i < n; i += stride) outline.push(loop[i * 2], loop[i * 2 + 1]);
+  }
+  let top = z;
+  for (let i = 0; i < outline.length; i += 2) {
+    const x = outline[i];
+    const y = outline[i + 1];
+    for (const [dx, dy] of [[0, 0], [radius, 0], [-radius, 0], [0, radius], [0, -radius]]) {
+      const qx = x + dx;
+      const qy = y + dy;
+      const at = standingTopAt(regions, qx, qy, z);
+      if (at === null) {
+        if (keepout.length && pointInLoops(keepout, qx, qy)) continue;
+        return zEntry;
+      }
+      if (at > top) top = at;
+    }
+  }
+  return Math.min(zEntry, top);
+}
+
 function flatLength(path, closed = false) {
   let sum = 0;
   for (let i = 2; i < path.length; i += 2) sum += Math.hypot(path[i] - path[i - 2], path[i + 1] - path[i - 1]);
