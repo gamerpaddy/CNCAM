@@ -20,6 +20,9 @@ running every time are in `src/test/simulate.test.js` instead.
 | `sim-perf.js` | Timing only, on three real jobs at three of the grid sizes the app offers (medium, high, ultra). |
 | `audit/harness.js` | Run in the page, against the real app: reads the CL an operation produced, sweeps its own cutter over its own grid, and compares what is left with the sample part as a formula. Shares no code with the simulator. |
 | `audit/readback.js` | A second G-code interpreter, written without `post/parse.js`, to compare a posted file with the CL it was printed from. |
+| `audit/sweep.js` | One table per strategy x cutter x real sample part: generation time, cutting and rapid minutes, the share of cutting that removes nothing (`air`), the radial width and chip area of the load (`w95`, `wMax`, `area99/max`), rapids driving the tool into standing stock (`crash`), and lifts. Finishing passes are run on the material an adaptive rough left and told about that rough, as the app does. `--air`, `--heavy`, `--set=key=value` and `--part=` narrow it. Plain `node`; nothing from the test suite. |
+| `audit/draw.mjs` | Draws one Z window of one operation to a PNG, coloured by what each move removed (`ONLYAIR=1`, `TIME=1`, `AFTER_ROUGH=1`). The shape of a waste is visible where its count is not. |
+| `audit/retract.mjs` | What an operation's rapids are made of: how many retract-cross-plunge sequences, how high each lifts above its own ends. |
 
 ## Tangency
 

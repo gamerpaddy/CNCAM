@@ -40,11 +40,15 @@ const FINISHING = new Set(['parallel3d', 'pencil', 'scallop', 'waterline', 'fini
  * the passes ahead of `op`. Works for an operation not yet in the setup: then
  * every enabled pass in it is before it.
  */
-export function roughingLeftover(setup, op) {
+export function roughingLeftover(setup, op, doc = null) {
   const earlier = [];
   for (const previous of setup?.operations ?? []) {
     if (previous.id === op.id) break;
-    if (previous.enabled) earlier.push(previous);
+    if (!previous.enabled) continue;
+    // with its cutter where it can be found, as the engine is given them —
+    // an adaptive pass's steps depend on the diameter (heights.js)
+    const tool = doc?.project?.tools?.find((t) => t.id === previous.toolId);
+    earlier.push(tool ? { type: previous.type, params: previous.params, tool } : previous);
   }
   return leftoverAfter(earlier);
 }
@@ -540,7 +544,7 @@ export function opPreflight(doc, op) {
   // pass raises its own gap past them (engine/heights.js clearOfRoughing);
   // this says what it will use, and why, before it is generated.
   if (FINISHING.has(op.type) && setup) {
-    const leftover = roughingLeftover(setup, op);
+    const leftover = roughingLeftover(setup, op, doc);
     const gap = p.entryGap ?? DEFAULT_ENTRY_GAP;
     if (leftover > 0 && gap <= leftover + 1e-9) {
       notes.push(`The roughing before this leaves steps up to ${round3(leftover)}mm above the `

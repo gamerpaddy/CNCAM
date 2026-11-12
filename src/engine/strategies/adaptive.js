@@ -597,6 +597,9 @@ class LevelCutter {
               pool.push({
                 span, ring, opener: ring === 0 && (openWith || openedByBore(loop, hole)),
                 entry: ring < entryRings,
+                // a seeded ring is a circle about a point, clipped to the piece it
+                // is in: see trimToMaterial
+                seeded: hole,
               });
             }
           }
@@ -783,7 +786,9 @@ class LevelCutter {
       }
       // Re-entering each ring at the vertex nearest the tool was tried here and
       // reverted — see the note below, which applies to this path too.
-      this.cutSpan(run, item.entry);
+      for (const part of item.entry || !item.seeded ? [run] : this.trimToMaterial(run)) {
+        this.cutSpan(part, item.entry);
+      }
       return;
     }
     // Re-entering each ring at the vertex nearest the tool was tried here and
@@ -795,6 +800,90 @@ class LevelCutter {
     // the crossing planes in cutSpan took 3408mm of clearance travel down to
     // 117mm on the same job by themselves.
     this.cutSpan(span, item.entry);
+  }
+
+  /**
+   * The stretches of a span that have material under them, and nothing of the
+   * rest.
+   *
+   * `removesMaterial` decides whether a span is worth cutting at all, and a span
+   * with *one* probe over stock is then cut from end to end. That is right for a
+   * ring running beside its neighbour — all of it is cutting — and wrong for the
+   * ring of a seeded peel, which is a circle about a point and is clipped to the
+   * whole piece the seed is in: it arrives over ground the outer peel cleared,
+   * with a short arc of stock somewhere along it, and the tool drove the whole
+   * circle for that arc. Measured on the sloped part, 2915mm of a level's seeded
+   * rings against 98mm that cut anything: a quarter of the program's cutting
+   * distance, at the cutting feed, in air.
+   *
+   * So only the stretches that meet stock are cut, each a little longer than the
+   * stock (a probe is one cell, and the raster's mask is a cell generous besides),
+   * and gaps shorter than a cutter's width are cut through because crossing them
+   * costs less than leaving and coming back. The pieces keep the span's order and
+   * direction, so a climb cut stays one. Whatever they leave out had no stock
+   * under the cutter by the same reading that kept the rest.
+   *
+   * @returns an array of spans — the span itself when all of it is stock
+   */
+  trimToMaterial(span) {
+    const length = pathLength(span);
+    const step = this.probeStep;
+    if (!(length > 4 * step)) return [span];
+    const n = Math.ceil(length / step);
+    const along = [0];
+    for (let i = 1; i < span.length; i++) {
+      along.push(along[i - 1] + Math.hypot(span[i][0] - span[i - 1][0], span[i][1] - span[i - 1][1]));
+    }
+    // the point at distance s along the span
+    const at = (s) => {
+      // the first vertex at or beyond s, by bisection
+      let lo = 1;
+      let hi = span.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (along[mid] < s) lo = mid + 1; else hi = mid;
+      }
+      const seg = lo;
+      const span0 = along[seg] - along[seg - 1];
+      const t = span0 > 1e-12 ? Math.min(1, Math.max(0, (s - along[seg - 1]) / span0)) : 0;
+      return [span[seg - 1][0] + (span[seg][0] - span[seg - 1][0]) * t,
+        span[seg - 1][1] + (span[seg][1] - span[seg - 1][1]) * t];
+    };
+    const flags = new Uint8Array(n + 1);
+    let stock = 0;
+    for (let k = 0; k <= n; k++) {
+      const [x, y] = at((k / n) * length);
+      if (this.map.engagementAt(x, y) > 0) { flags[k] = 1; stock++; }
+    }
+    if (stock === n + 1) return [span];
+    if (stock === 0) return [];
+    const spacing = length / n;
+    const margin = 1;                                // a probe either side
+    const joinGap = Math.max(1, Math.floor(2 * this.map.radius / spacing));
+    // the runs of stock, widened by the margin, and merged across short gaps
+    const runs = [];
+    for (let k = 0; k <= n; k++) {
+      if (!flags[k]) continue;
+      const a = Math.max(0, k - margin);
+      let b = k;
+      while (b + 1 <= n && flags[b + 1]) b++;
+      const last = runs[runs.length - 1];
+      const end = Math.min(n, b + margin);
+      if (last && a - last[1] <= joinGap) last[1] = end;
+      else runs.push([a, end]);
+      k = b;
+    }
+    if (runs.length === 1 && runs[0][0] === 0 && runs[0][1] === n) return [span];
+    return runs.map(([a, b]) => {
+      const s0 = (a / n) * length;
+      const s1 = (b / n) * length;
+      const piece = [at(s0)];
+      for (let i = 1; i < span.length - 1; i++) {
+        if (along[i] > s0 + 1e-9 && along[i] < s1 - 1e-9) piece.push(span[i]);
+      }
+      piece.push(at(s1));
+      return piece;
+    }).filter((piece) => piece.length >= 2 && pathLength(piece) > 1e-6);
   }
 
   /**

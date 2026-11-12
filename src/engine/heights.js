@@ -162,7 +162,19 @@ export function roughingLeftover(earlier) {
   for (const previous of earlier ?? []) {
     if (previous.enabled === false || !ROUGHING.has(previous.type)) continue;
     const q = previous.params ?? {};
-    most = Math.max(most, (q.stepdown ?? 0) + Math.max(0, q.stockToLeave ?? 0));
+    // A deep adaptive level leaves a step as tall as its stepdown on every
+    // slope, and then goes back up them a fraction of a diameter at a time
+    // (strategies/adaptive.js stepUpPasses) — so what stands there afterwards is
+    // that fraction, not the stepdown. Measured on the sloped and the clamp part
+    // after the default ⌀6 adaptive (12mm stepdown, 0.25D step-up): finishing
+    // entered and linked 12.5mm above the surface for nothing, and at 2.5mm no
+    // rapid met the steps at all.
+    let stairs = q.stepdown ?? 0;
+    const diameter = previous.tool?.diameter;
+    if (previous.type === 'adaptive' && q.stepUp > 0 && diameter > 0) {
+      stairs = Math.min(stairs, q.stepUp * diameter);
+    }
+    most = Math.max(most, stairs + Math.max(0, q.stockToLeave ?? 0));
   }
   return most;
 }

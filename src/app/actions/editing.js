@@ -149,7 +149,7 @@ export function makeEditActions(ctx, space) {
    */
   function clearOfRoughing(setup, op, type, params) {
     if (!setup || !isFinishingPass(type)) return {};
-    const leftover = roughingLeftover(setup, op);
+    const leftover = roughingLeftover(setup, op, doc);
     if (!(leftover > 0) || (params.entryGap ?? DEFAULT_ENTRY_GAP) > leftover) return {};
     return { entryGap: suggestedEntryGap(leftover) };
   }

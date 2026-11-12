@@ -217,12 +217,18 @@ function outsideOf(stock, tolerance) {
  * cutter and every height above the ball on a ball nose.
  */
 function radiusAtHeight(profile, height) {
-  if (!(height > 0)) return profile.flat ? profile.radius : 0;
   if (profile.flat || height >= profile.edge) return profile.radius;
   const { table, samples, radius } = profile;
+  // At the tip itself (height 0) a ball nose is a point and cleared nothing
+  // wider — but a bull nose or a V bit with a flat on its end is as wide as that
+  // flat, and a pass cut at exactly this level has swept it. Reading a bull as a
+  // point there made every level the cutter had *just* cut look untouched, so a
+  // rest pass re-walked each level's whole floor: a ⌀8 bull adaptive took 7.7
+  // more minutes of step-up levels on the step plate, half of it through air.
+  const limit = Math.max(0, height) + 1e-9;
   let widest = 0;
   for (let i = 0; i <= samples; i++) {
-    if (table[i] <= height) widest = i;
+    if (table[i] <= limit) widest = i;
   }
   return (radius * widest) / samples;
 }
