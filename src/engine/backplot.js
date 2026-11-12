@@ -551,7 +551,12 @@ function pecked(points, from, to) {
     }
     if (points[k][2] < points[deepest][2]) deepest = k;
   }
-  if (deepest <= from) return -1;
+  // A hole is deeper than where it started by more than printing can blur. A
+  // cut that lifts off and comes back down to the depth it left is not one, but
+  // unrounded it comes back a ten-thousandth lower or higher at random — so the
+  // CL side saw a hole and dropped the lift, the file side (both ends printed
+  // alike) kept it, and a correct 5-axis program read as 20mm of post bug.
+  if (deepest <= from || points[from][2] - points[deepest][2] < SAME_XY) return -1;
   // came back up out of the hole, however many bites it took to get down
   const returned = points[to][2] > points[deepest][2] + 1e-9;
   return turned || returned ? deepest : -1;

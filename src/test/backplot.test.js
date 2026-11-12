@@ -801,3 +801,12 @@ test('what the reader cannot evaluate or reach is said, not dropped', () => {
   assert.ok(short.unsupported.some((u) => /R too small/.test(u.code)),
     `the short R is named: ${short.unsupported.map((u) => u.code)}`);
 });
+
+test('a lift and a return to the same depth is not read as a drilled hole', () => {
+  // unrounded, the path comes back a hair lower than it left; printed, it does not
+  const planned = [[0, 0, -5, false], [10, 0, -5.0000, false], [10, 0, 10, true], [10, 0, -5.0004, false], [20, 0, -5, false]];
+  const printed = [[0, 0, -5, false], [10, 0, -5, false], [10, 0, 10, true], [10, 0, -5, false], [20, 0, -5, false]];
+  const result = comparePaths(planned, printed);
+  assert.ok(result.worst < 0.01, `the two are one path, read ${result.worst.toFixed(3)}mm apart`);
+  assert.ok(result.extra < 0.01, 'and one length');
+});
