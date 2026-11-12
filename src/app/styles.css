@@ -749,6 +749,22 @@ input.tree-rename:focus { outline: none; }
   font: 11px var(--mono);
   color: var(--fg-dim);
 }
+/* Two lines beside the drawing — the name over its diameter — because on one
+   line the drawing and the diameter left the name forty pixels, and a rack of
+   cutters read "12m…", "6mm…", "6mm…". */
+.tree-tool {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 6px;
+  row-gap: 0;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+.tree-tool > * { grid-row: 1 / span 2; }
+.tree-tool > .tree-op-name { grid-column: 3; grid-row: 1; align-self: end; }
+.tree-tool > .tree-tool-size { grid-column: 3; grid-row: 2; align-self: start; line-height: 1.2; }
 .tree-item.selected .tree-tool-number,
 .tree-item.selected .tree-tool-size { color: rgba(255, 255, 255, 0.8); }
 .tool-icon-horizontal { flex: 0 0 auto; opacity: 0.95; }
@@ -944,6 +960,10 @@ input.tree-rename:focus { outline: none; }
 }
 .prop-row input[type="checkbox"] { flex: 0 0 auto; width: 15px; height: 15px; accent-color: var(--accent); }
 .prop-row button { flex: 1; }
+/* a choice too long for the space beside its label: label above, control across */
+.prop-row.prop-row-wide { flex-wrap: wrap; row-gap: 3px; margin-bottom: 6px; }
+.prop-row.prop-row-wide > label { flex: 1 1 100%; }
+.prop-row.prop-row-wide > select { flex: 1 1 60%; text-overflow: ellipsis; font-size: 12px; padding: 0 6px; }
 
 .prop-note {
   color: var(--fg-dim);
@@ -1086,6 +1106,14 @@ button.pick-active {
   top: var(--inspector-height, 0px);
   z-index: 2;
 }
+/* Six tabs do not fit one row of the panel at its default width, and wrapped
+   freely the sixth sat alone on a row of its own, stretched to the full width. */
+.op-tabs:has(.op-tab:nth-child(6)) {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+/* seven or eight: two rows of four, not three rows ending in one */
+.op-tabs:has(.op-tab:nth-child(7)) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .op-tab {
   flex: 1 1 auto;
   display: inline-flex;
@@ -1284,6 +1312,9 @@ button.pick-active {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
 }
+.tool-preview { flex-wrap: wrap; }
+.tool-preview-text { flex: 1 1 110px; min-width: 0; overflow-wrap: anywhere; }
+.tool-legend { flex-wrap: wrap; row-gap: 2px; }
 .tool-preview-name { font-weight: 600; }
 .tool-preview-meta { color: var(--fg-dim); font-size: 12px; margin-top: 2px; }
 
@@ -2489,9 +2520,9 @@ kbd {
   font-size: 11px;
   color: var(--fg-dim);
   font-family: var(--mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* wraps: cut short, the travel was all that showed and the rapids never did */
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 .machine-editor { overflow-y: auto; min-height: 0; padding-right: 6px; }
 .machine-editor h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--fg); }
@@ -3172,4 +3203,39 @@ input.color-input {
  .setup-sheet table { font-size: 10pt; }
  .setup-sheet tr { break-inside: avoid; }
  html, body { overflow: visible; height: auto; }
+}
+
+/* The simulation bar on a window it does not fit across.
+   Its controls and readouts add up to about 1360px, and on one line anything
+   narrower pushed the time and the Close button off the right-hand edge, where
+   nothing could reach them. So below that the bar is two lines: what you drive
+   it with — transport, speed, the scrubber, the time, Close — and under it what
+   it is telling you. The break is an element of its own because a wrapped flex
+   row breaks where it runs out, and this has to break in the same place always. */
+@media (max-width: 1440px) {
+  #sim { flex-wrap: wrap; row-gap: 5px; }
+  #sim .sim-track { flex: 1 1 160px; }
+  #sim .sim-time { order: 1; }
+  #sim .sim-close { order: 2; }
+  #sim::after { content: ''; flex: 0 0 100%; height: 0; order: 3; margin-top: -5px; }
+  #sim .sim-op, #sim .sim-load, #sim .sim-verify { order: 4; }
+  #sim .sim-op { flex: 0 1 220px; }
+  #sim .sim-load:empty, #sim .sim-verify:empty { display: none; }
+}
+
+/* The tree at its narrowest. A section's name stays on one line and gives way
+   before its buttons do — wrapped, "MILL SETUPS" ran under the row below it and
+   "TOOLS 3" sat underneath "Library". The row that adds to a setup wraps
+   instead, since a lathe has three buttons on it; and the cutter drawings give
+   up some width to the names beside them once the names have none left. */
+.tree-fold { white-space: nowrap; overflow: hidden; }
+.tree-add { white-space: nowrap; }
+.tree-add-row { flex-wrap: wrap; }
+.tree-add-op { white-space: nowrap; }
+#tree { container-type: inline-size; }
+@container (max-width: 205px) {
+  .tree-tool .tool-icon-horizontal { width: 40px; height: auto; }
+  .tree-tool { column-gap: 4px; padding-left: 3px; padding-right: 3px; }
+  .tree-tool-number { min-width: 0; }
+  .tree-add { padding: 0 4px; }
 }

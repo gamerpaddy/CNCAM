@@ -410,8 +410,31 @@ export function renderProps(container, doc, app = {}) {
 
   const head = inspectorHead(doc, kind, item, app);
   container.replaceChildren(head, ...rows);
+  widenLongChoices(container);
   settleHead(container, head);
 }
+
+/**
+ * A choice whose wording is longer than the control beside its label gets the
+ * panel's full width, under the label.
+ *
+ * The choices here are written as sentences — "One outline — the whole part
+ * (cut it free)" — because that is what makes them choosable, and a closed
+ * select shows as much of the chosen one as fits: at the panel's default width
+ * that was "The surface norm", "Outer profile only (" and eleven more like
+ * them. Decided from the longest option, not the chosen one, so a row does not
+ * change shape when its value does.
+ */
+function widenLongChoices(container) {
+  for (const select of container.querySelectorAll('.prop-row > select')) {
+    let longest = 0;
+    for (const option of select.options) longest = Math.max(longest, option.textContent.length);
+    select.parentElement.classList.toggle('prop-row-wide', longest > LONG_CHOICE);
+  }
+}
+
+/** What the control beside a label holds at the panel's default width. */
+const LONG_CHOICE = 18;
 
 /**
  * How tall the sticky header came out, for whatever sticks under it — the
