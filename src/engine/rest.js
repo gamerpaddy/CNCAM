@@ -164,10 +164,65 @@ export function clearedStack(earlier, levels, options = {}) {
   // deepest first, which is also smallest first: the area only grows as the
   // question moves up the part
   const outside = options.stock ? outsideOf(options.stock, options.tolerance ?? 0.01) : [];
-  return zs.map((z) => ({ z, loops: clearedArea(earlier, z, options) }))
+  // Between two heights nothing was cut at, the answer does not change, and a
+  // program has a handful of heights where a rest pass asks at dozens — an
+  // adaptive rough is a few deep levels and its step-up passes ask every
+  // fraction of a diameter between them. So a slice is reused for as long as
+  // the same moves are at or below it *and* none of them is within reach of the
+  // cutter's flank, where the radius it counts at depends on the height asked.
+  const byKey = new Map();
+  const slices = zs.map((z) => {
+    const key = sliceKey(earlier, z);
+    if (!byKey.has(key)) byKey.set(key, clearedArea(earlier, z, options));
+    return { z, loops: byKey.get(key) };
+  });
+  return slices
     .filter((slice) => slice.loops.length > 0)
     .map((slice) => (outside.length
       ? { z: slice.z, loops: unionLoops([...slice.loops, ...outside]) } : slice));
+}
+
+/**
+ * What makes the cleared area at `z` different from the one at any other height:
+ * how many of each program's cutting moves are at or below it, and the height
+ * itself where one of them is close enough under it for the tool to be narrower
+ * there than its full radius.
+ */
+function sliceKey(earlier, z) {
+  let key = '';
+  for (const { cl, tool } of earlier ?? []) {
+    if (!cl || !(tool?.diameter > 0)) continue;
+    const tops = cutTopsOf(cl);
+    // the number of tops at or below z, by bisection
+    let lo = 0;
+    let hi = tops.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (tops[mid] <= z + SAME_LEVEL) lo = mid + 1; else hi = mid;
+    }
+    const flank = profileTable(tool).edge;
+    const close = lo > 0 && z - tops[lo - 1] < flank - 1e-9;
+    key += `${lo}${close ? `@${z}` : ''};`;
+  }
+  return key;
+}
+
+const topsCache = new WeakMap();
+
+/** The heights each cutting move of `cl` counts from, sorted — see cuttingPathsBelow. */
+function cutTopsOf(cl) {
+  let tops = topsCache.get(cl);
+  if (tops) return tops;
+  tops = [];
+  let prev = null;
+  eachMove(cl, (op, x, y, moveZ, i, j, k, feed) => {
+    if (op === OP.DRILL) tops.push(moveZ);
+    else if (op === OP.LINE && feed !== FEED.RAPID && prev) tops.push(Math.max(moveZ, prev[2]));
+    prev = [x, y, moveZ];
+  });
+  tops.sort((a, b) => a - b);
+  topsCache.set(cl, tops);
+  return tops;
 }
 
 /** How far round the billet "there is nothing out here" is stated, in mm. */

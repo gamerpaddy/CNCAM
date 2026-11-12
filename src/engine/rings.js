@@ -39,16 +39,25 @@ const DEPTH_STEPS = 6;
  * band is wherever the part happens to be furthest from the stock.
  */
 function medialDepth(loops, step, tolerance) {
-  const leaves = (d) => leavesBand(offsetNormalized(loops, -d, tolerance));
+  // Each probe erodes what the last successful one left, not the original: an
+  // erosion by a and then by b is an erosion by a + b, and the remainder is a
+  // handful of simple loops where the original may have thousands of vertices.
+  // Measured on the sloped part's step-up levels, the probes were the largest
+  // single cost of generating the program (1.5s of 4.2s).
+  let base = loops;                 // the region eroded by `lo`
   let lo = 0;                       // known to leave something
+  const leaves = (d) => {
+    const ring = offsetNormalized(base, -(d - lo), tolerance);
+    if (!leavesBand(ring)) return false;
+    base = ring;
+    lo = d;
+    return true;
+  };
   let hi = step;
-  while (hi < step * MAX_RINGS && leaves(hi)) {
-    lo = hi;
-    hi *= 2;
-  }
+  while (hi < step * MAX_RINGS && leaves(hi)) hi *= 2;
   for (let i = 0; i < DEPTH_STEPS; i++) {
     const mid = (lo + hi) / 2;
-    if (leaves(mid)) lo = mid; else hi = mid;
+    if (!leaves(mid)) hi = mid;
   }
   return lo;
 }

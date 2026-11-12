@@ -109,8 +109,24 @@ function toolAdjusted(regions, radius, tolerance, includeGrow = -radius, keepPic
       : [],
     // eroded, not grown: see the note at the top of the file
     cleared: cleared.length
-      ? worthSkipping(cleared, radius, tolerance, minClearedWidth) : [],
+      ? worthSkippingOnce(regions, cleared, radius, tolerance, minClearedWidth) : [],
   };
+}
+
+/**
+ * `worthSkipping`, remembered for the region set it was asked of.
+ *
+ * A strategy asks the same question of the same level more than once — the
+ * region it will cut, and then the edge of what is already cleared — and each
+ * answer is two offsets of a union that may have thousands of vertices.
+ */
+const skipped = new WeakMap();
+function worthSkippingOnce(regions, cleared, radius, tolerance, minClearedWidth) {
+  let byKey = skipped.get(cleared);
+  if (!byKey) { byKey = new Map(); skipped.set(cleared, byKey); }
+  const key = `${radius}|${tolerance}|${minClearedWidth}`;
+  if (!byKey.has(key)) byKey.set(key, worthSkipping(cleared, radius, tolerance, minClearedWidth));
+  return byKey.get(key);
 }
 
 /**
@@ -178,6 +194,18 @@ function adjustedInclude(loops, grow, tolerance, keepPick) {
   if (Math.abs(grow) < 1e-9) return loops;
   const moved = offsetLoops(loops, grow, tolerance);
   return moved.length || !keepPick ? moved : loops;
+}
+
+/**
+ * The edge, in tool-centre terms, of what earlier passes have cleared at `z`.
+ *
+ * A cutter whose centre is on it has its whole disc over cleared ground and
+ * touches the stock that remains only tangentially, so a pass along it removes
+ * nothing — the same fact as the stock edge, which clearing already leaves out.
+ */
+export function clearedEdgeAt(regions, { radius = 0, tolerance = 0.01, z, minClearedWidth = 0 } = {}) {
+  if (!regionsActive(regions)) return [];
+  return toolAdjusted(regions, radius, tolerance, -radius, true, z, minClearedWidth).cleared;
 }
 
 /** Restrict a filled machining region (clearing, facing, raster bounds). */

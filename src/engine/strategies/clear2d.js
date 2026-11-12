@@ -17,7 +17,7 @@ import {
 } from '../../geom/clipper.js';
 import { SilhouetteStack, silhouetteAbove } from '../../geom/silhouette.js';
 import { depthLevelsFor, depthRefusal, stockOutline } from '../stock.js';
-import { applyRegionsToArea, regionRefusal } from '../regions.js';
+import { applyRegionsToArea, clearedEdgeAt, regionRefusal } from '../regions.js';
 import { loopBorderedBy, pointInLoops, distanceToLoops } from '../../geom/inside.js';
 import { cutLoopPass, finishLaps } from './contour.js';
 import { roomOutside } from '../leads.js';
@@ -186,8 +186,30 @@ export function generateClear({
       // only while the part sits wholly inside the billet. Where it runs out to
       // an edge, the piece has no holes at all, so every ring came back "all
       // air" and the march had nothing to turn round at.
-      const passes = entryPasses(orderRings(rings, touchesStockEdge(piece.outer, outer),
-        { air: outer, part: keepout }, step), {
+      // A rest pass's region is bounded by what earlier passes cleared as well as
+      // by the part and the billet, and the outermost ring along *that* edge is
+      // tangent to the stock — a lap that cuts nothing, like the one along the
+      // billet's edge (see orderRings). Measured on the sloped part, half of
+      // adaptive's step-up levels was exactly that lap, round the dome and the
+      // ramp, at every level.
+      const clearedEdge = clearedEdgeAt(regions, { radius: r, tolerance, z, minClearedWidth: step });
+      const ordered = orderRings(rings, touchesStockEdge(piece.outer, outer),
+        { air: outer, part: keepout }, step);
+      const trimmed = clearedEdge.length === 0 ? ordered : ordered.flatMap((pass) => {
+        if (pass.k !== 0) return [pass];
+        const runs = offEdgeRuns(pass.loop, pass.closed, clearedEdge);
+        if (runs.length === 0) return [];
+        // Cutting only the stretches off the edge turns one closed ring into
+        // open spans, and each of those is ramped into along itself — so it is
+        // worth it only where the lap saved is longer than the ramps it costs.
+        const ramp = (params.rampAngle ?? 0) > 0
+          ? Math.max(0, zEntry - z) / Math.tan((params.rampAngle * Math.PI) / 180) : 0;
+        const kept = runs.reduce((sum, run) => sum + flatLength(run.path), 0);
+        const saved = flatLength(pass.loop) - kept;
+        if (!(saved > 1.5 * ramp * runs.length)) return [pass];
+        return runs.map((run) => ({ ...pass, loop: run.path, closed: run.closed }));
+      });
+      const passes = entryPasses(trimmed, {
         depth: zEntry - z, rampAngle: params.rampAngle ?? 0, radius: r, tolerance, area: loops,
       });
       // Everything cut so far at this level, as the paths it was cut along.
@@ -422,6 +444,12 @@ function orderRings(rings, airOutside, sides, step) {
  * @returns [{ path, closed }] — the whole path when none of it is the edge,
  *   nothing when all of it is
  */
+function flatLength(path, closed = false) {
+  let sum = 0;
+  for (let i = 2; i < path.length; i += 2) sum += Math.hypot(path[i] - path[i - 2], path[i + 1] - path[i - 1]);
+  return sum;
+}
+
 function offEdgeRuns(path, closed, edge, eps = 1e-4) {
   const n = path.length / 2;
   if (n < 2) return [];

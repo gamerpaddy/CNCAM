@@ -23,6 +23,8 @@ running every time are in `src/test/simulate.test.js` instead.
 | `audit/sweep.js` | One table per strategy x cutter x real sample part: generation time, cutting and rapid minutes, the share of cutting that removes nothing (`air`), the radial width and chip area of the load (`w95`, `wMax`, `area99/max`), rapids driving the tool into standing stock (`crash`), and lifts. Finishing passes are run on the material an adaptive rough left and told about that rough, as the app does. `--air`, `--heavy`, `--set=key=value` and `--part=` narrow it. Plain `node`; nothing from the test suite. |
 | `audit/draw.mjs` | Draws one Z window of one operation to a PNG, coloured by what each move removed (`ONLYAIR=1`, `TIME=1`, `AFTER_ROUGH=1`). The shape of a waste is visible where its count is not. |
 | `audit/retract.mjs` | What an operation's rapids are made of: how many retract-cross-plunge sequences, how high each lifts above its own ends. |
+| `audit/profile.mjs` | One generation, timed; run it under `node --cpu-prof` to see where the time goes. |
+| `audit/rest-check.mjs` | A rough then a rest pass with a smaller cutter on one billet: what the pair removes (volume and a surface hash) and how long the rest pass is. Compare before and after a change to rest machining — equal hash, shorter program. |
 
 ## Tangency
 
