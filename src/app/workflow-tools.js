@@ -102,6 +102,46 @@ export function showOrderPlan({ setup, plan, nameOf, onApply }) {
   dialog.showModal();
 }
 
+/**
+ * What was recognised on the part and the operations proposed for it, as a
+ * checklist. Nothing is added until Apply, and everything ticked is added as one
+ * undo step. A proposal whose cutter is not in the rack says so, because the
+ * apply will make that cutter.
+ *
+ * @param toolFor (proposal) => { tool, created } — the cutter it would get
+ */
+export function showFeaturePlan({ setup, result, toolFor, onApply }) {
+  const dialog = el('dialog', { class: 'workflow-dialog feature-plan', 'aria-label': 'Operations for this part' });
+  const boxes = [];
+  const rows = result.proposals.map((p) => {
+    const box = el('input', { type: 'checkbox', 'aria-label': p.label });
+    box.checked = p.enabled;
+    boxes.push([p, box]);
+    const got = toolFor(p);
+    const toolText = got ? `${got.created ? 'new ' : ''}T${got.tool.number} ${got.tool.name}` : '';
+    return el('li', { class: 'feature-row' }, [
+      el('label', {}, [box, ' ', p.label]),
+      el('div', { class: 'prop-hint' }, [[p.detail, toolText && `cutter: ${toolText}`].filter(Boolean).join(' · ')]),
+      ...p.warnings.map((w) => el('div', { class: 'prop-note warn' }, [w])),
+    ]);
+  });
+  dialog.append(el('h2', {}, [`Operations for ${setup.name}`]), dialogCloseButton(dialog),
+    el('p', {}, [result.summary]),
+    rows.length ? el('ul', { class: 'feature-list' }, rows) : el('p', {}, [result.warnings.join(' ') || 'Nothing to propose.']),
+    el('p', {}, ['These are a starting point: every one is an ordinary operation you can change. Read each toolpath before you cut.']));
+  if (rows.length) {
+    dialog.append(el('button', { onclick: () => {
+      const chosen = boxes.filter(([, box]) => box.checked).map(([p]) => p.id);
+      dialog.close();
+      onApply(chosen);
+    } }, ['Add the ticked operations']));
+  }
+  dialog.append(el('button', { onclick: () => dialog.close() }, [rows.length ? 'Cancel' : 'Close']));
+  dialog.addEventListener('close', () => dialog.remove(), { once: true });
+  document.body.append(dialog);
+  dialog.showModal();
+}
+
 const SHEET_ACCEPT = { description: 'Setup sheet', mime: { 'text/html': ['.html'] }, extensions: ['.html'] };
 
 /**

@@ -868,6 +868,11 @@ function menuForSetup(doc, setup, app) {
     })),
     { separator: true },
     {
+      label: 'Propose operations from the part…',
+      hint: 'Reads the holes, pockets, top and outline, and offers the operations for them',
+      onclick: () => app?.actions?.proposeOperations(setup),
+    },
+    {
       label: 'Optimise the running order…',
       hint: 'Fewer tool changes and less travel, without moving anything that depends on what came before',
       onclick: () => app?.actions?.optimiseOrder(setup),

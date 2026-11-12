@@ -3192,6 +3192,10 @@ input.color-input {
 .workflow-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .preset-row { display: flex; align-items: start; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .preset-row details { flex: 1; }
+.feature-list { list-style: none; padding: 0; margin: 0 0 12px; }
+.feature-row { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.feature-row label { display: flex; gap: 8px; align-items: center; }
+.order-plan ol { margin: 0 0 12px 20px; }
 .setup-sheet table { width: 100%; border-collapse: collapse; }
 .setup-sheet th, .setup-sheet td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); }
 .save-state { white-space: nowrap; color: var(--fg-dim); margin: 0 10px; }

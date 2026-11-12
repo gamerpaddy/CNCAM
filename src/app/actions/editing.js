@@ -19,7 +19,10 @@ import { drillOversize } from '../../engine/lathe.js';
 import { tipLengthOf } from '../../engine/tool-geometry.js';
 import { getSetting } from '../settings.js';
 import { planOrder } from '../../engine/order.js';
-import { showOrderPlan } from '../workflow-tools.js';
+import { recogniseFeatures } from '../../engine/features.js';
+import { toolForSpec } from '../../doc/feature-tools.js';
+import { mergeMeshes } from '../../geom/mesh.js';
+import { showOrderPlan, showFeaturePlan } from '../workflow-tools.js';
 import { openStrategyPicker } from '../strategy-picker.js';
 import { removalOf, nounFor } from '../item-labels.js';
 import { roughingLeftover, suggestedEntryGap, isFinishingPass } from '../op-status.js';
@@ -402,6 +405,52 @@ export function makeEditActions(ctx, space) {
     });
   }
 
+  /**
+   * Read the part and propose the operations for it — see engine/features.js.
+   * Proposed, not added: the checklist is the user's, and Apply adds what is
+   * ticked as one undo step, making any cutter the rack does not have.
+   */
+  function proposeOperations(setup = doc.activeSetup()) {
+    if (!setup) return ctx.ui.setStatus('Add a setup first', true);
+    if ((setup.mode ?? 'mill') === 'turn') {
+      return ctx.ui.setStatus('Operations are proposed for a milled part; a lathe job is a profile and a sequence you choose', true);
+    }
+    const { meshes, stock } = resolveSetupSpace(setup);
+    if (!meshes.length) return ctx.ui.setStatus('Import a model first: there is no part to read', true);
+    const result = recogniseFeatures(mergeMeshes(meshes), { stock });
+    // the cutter each would get, with the ones it would have to make counted into
+    // the rack as it goes, so two new drills do not both claim the same number
+    const preview = () => {
+      let rack = [...doc.project.tools];
+      return (proposal) => {
+        const got = toolForSpec(proposal.toolSpec, rack, { material: setup.material });
+        if (got.created) rack = [...rack, got.tool];
+        return got;
+      };
+    };
+    const toolFor = new Map();
+    const lookup = preview();
+    for (const p of result.proposals) toolFor.set(p.id, lookup(p));
+    return showFeaturePlan({
+      setup, result, toolFor: (p) => toolFor.get(p.id),
+      onApply: (ids) => {
+        let added = 0;
+        doc.group('add recognised features', () => {
+          for (const p of result.proposals) {
+            if (!ids.includes(p.id)) continue;
+            const got = toolForSpec(p.toolSpec, doc.project.tools, { material: setup.material });
+            if (got.created) doc.addTool(got.tool);
+            const op = addOperationTo(setup, p.opType);
+            assignTool(op, got.tool.id);
+            if (Object.keys(p.params).length) doc.updateItem(op.params, p.params, `${p.opType} for the recognised feature`);
+            added++;
+          }
+        });
+        ctx.ui.setStatus(`${plural(added, 'operation')} added to ${setup.name} - Generate, and read each toolpath. Ctrl+Z takes them all back`);
+      },
+    });
+  }
+
   /** Drop an operation at an index — what the tree's drag-to-reorder calls. */
   function reorderOperation(setup, from, to) {
     if (from === to || from < 0 || to < 0 || to >= setup.operations.length) return;
@@ -563,6 +612,7 @@ export function makeEditActions(ctx, space) {
     moveOperation,
     reorderOperation,
     optimiseOrder,
+    proposeOperations,
     deleteItem,
     deleteSelected,
     addFixture,
