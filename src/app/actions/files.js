@@ -414,6 +414,7 @@ export function makeFileActions(ctx, program, space = null) {
   function newTool() {
     openToolWizard({
       machine: doc.machine,
+      material: doc.activeSetup()?.material,
       number: nextToolNumber(),
       onCreate: (tool) => {
         doc.addTool(tool);
@@ -437,6 +438,7 @@ export function makeFileActions(ctx, program, space = null) {
     if (!tool) return;
     openToolWizard({
       machine: doc.machine,
+      material: doc.activeSetup()?.material,
       number: tool.number,
       tool,
       onCreate: (next) => {

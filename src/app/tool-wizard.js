@@ -30,6 +30,7 @@ import {
   toolWarnings, cuttingReadout, defaultsForType, coarsePitch,
   loadCatalogs, DEFAULT_CATALOG,
 } from '../doc/tool-library.js';
+import { materialOf } from '../doc/materials.js';
 import { toolLength, reachCheck, latheReachOf, fluteLengthOf } from '../engine/tool-geometry.js';
 import {
   isLatheTool, parseInsertCode, isPolygon,
@@ -226,12 +227,14 @@ const SPEED_KEYS = new Set(SPEED_FIELDS.map((f) => f.key));
  * @param machine 'mill' | 'turn' — which families to offer first
  * @param number the tool number to give it
  * @param tool an existing tool to edit rather than a blank one to build
+ * @param material the id of what the stock is made of, when the caller knows —
+ *   the speeds it suggests are for that (doc/materials.js)
  * @param onCreate (tool) => void
  * @param onSaveToLibrary optional (tool, catalogId) => void, for the "keep
  *   this" tick and the drawer it is kept in
  */
 export function openToolWizard({
-  machine = 'mill', number = 1, tool: editing = null, onCreate, onSaveToLibrary,
+  machine = 'mill', number = 1, tool: editing = null, material = null, onCreate, onSaveToLibrary,
 }) {
   // The working record. Held as a flat draft rather than a tool so the shank
   // and holder — which the user thinks of as two numbers — stay two numbers.
@@ -407,7 +410,7 @@ export function openToolWizard({
     }
     const suggested = suggestCutting({
       type: draft.type, diameter: draft.diameter, flutes: draft.flutes,
-      tipAngle: draft.tipAngle, pitch: draft.pitch,
+      tipAngle: draft.tipAngle, pitch: draft.pitch, material: material ?? undefined,
     });
     draft.flutes = suggested.flutes;
     if (!draft.speedsEdited) {
@@ -709,9 +712,9 @@ export function openToolWizard({
         `${vc.toFixed(0)} m/min surface speed · ${load.toFixed(3)}mm ${loadLabel}`,
       ]),
       el('div', {}, [machineForType(draft.type) === 'turn'
-        ? 'Computed for a ⌀30 bar in free-cutting steel. Surface speed on a lathe '
-          + 'is set by the work, so change these when the bar changes.'
-        : `Computed from ${draft.diameter}mm at a light chip load in aluminium. `
+        ? `Computed for a ⌀30 bar in ${material ? materialOf(material).name : 'free-cutting steel'}. `
+          + 'Surface speed on a lathe is set by the work, so change these when the bar changes.'
+        : `Computed from ${draft.diameter}mm at a light chip load in ${material ? materialOf(material).name : 'aluminium'}. `
           + 'Conservative on purpose — a starting point, not a recommendation.']),
     );
 

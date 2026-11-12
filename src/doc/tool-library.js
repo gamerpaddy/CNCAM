@@ -11,6 +11,7 @@
 import { uid } from './schema.js';
 import { parseInsertCode, isLatheTool, insertIcOf } from '../engine/insert.js';
 import { reachCheck, fluteLengthOf } from '../engine/tool-geometry.js';
+import { materialOf, speedKindOf, chipThinningFactor } from './materials.js';
 
 export const LIBRARY_VERSION = 1;
 
@@ -530,6 +531,7 @@ export function coarsePitch(diameter) {
  */
 export function suggestCutting({
   type = 'flat', diameter = 6, flutes, tipAngle = 0, workDiameter = 30, pitch = 0,
+  material, radialEngagement,
 }) {
   // A spot drill is its own family now, but projects saved before it was still
   // hold theirs as short, blunt drills — and those are spot drills whatever
@@ -540,7 +542,19 @@ export function suggestCutting({
   const spinning = Math.max(0.5, lathe ? workDiameter : diameter);
   const teeth = Math.max(1, flutes ?? defaultFlutes(type, diameter));
 
-  const rpm = clampRound((1000 * spec.vc) / (Math.PI * spinning), 300, spec.maxRpm, 50);
+  // The material, when the caller knows it, scales the surface speed and the
+  // chip against the table's aluminium baseline (doc/materials.js). Without one
+  // the numbers are exactly what they always were.
+  const mat = material ? materialOf(material) : null;
+  const vcFactor = mat ? mat.speed[speedKindOf(family)] : 1;
+  const chipFactor = mat && !lathe ? mat.chip : 1;
+  // A light radial cut makes a thinner chip than the feed per tooth says, so
+  // the feed is raised to keep the chip honest. Only where the caller says how
+  // light the cut is: a slot is full width and takes the table as it stands.
+  const thinning = lathe || family === 'tap' || PLUNGE_IS_THE_CUT.has(family)
+    ? 1 : chipThinningFactor(radialEngagement);
+
+  const rpm = clampRound((1000 * spec.vc * vcFactor) / (Math.PI * spinning), 300, spec.maxRpm, 50);
   // a lathe's feed is per revolution, not per tooth
   const feedCut = family === 'tap'
     // A tap is a screw. One turn is one pitch, so the feed is arithmetic and
@@ -549,7 +563,7 @@ export function suggestCutting({
     ? Math.round(rpm * (pitch > 0 ? pitch : coarsePitch(diameter)))
     : lathe
       ? clampRound(rpm * spec.fz, 10, 600, 5)
-      : clampRound(rpm * teeth * spec.fz * diameter, 20, 6000, 10);
+      : clampRound(rpm * teeth * spec.fz * chipFactor * thinning * diameter, 20, 6000, 10);
   return {
     flutes: teeth,
     fluteLength: Math.round(defaultFluteLength(type, diameter, tipAngle) * 10) / 10,

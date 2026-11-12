@@ -27,6 +27,7 @@ import { createMachine, MACHINE_KINDS } from './machines.js';
 import { createFixture } from '../engine/fixtures.js';
 import { boundsOf } from '../io/dxf.js';
 import { plural } from '../engine/text.js';
+import { isMaterialId } from './materials.js';
 
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
@@ -219,6 +220,12 @@ function repairSetup(setup, ids, notes) {
   }
   const defaults = createSetup(out.name, out.mode);
   if (typeof out.wcs !== 'string') out.wcs = 'G54';
+  // What it is made of. A file from before the field existed has none, and the
+  // default for the machine it was set up on is what it was implicitly cut as.
+  if (!isMaterialId(out.material)) {
+    if (out.material !== undefined) notes.push(`${label}: material ${describe(out.material)} is not one there is, set to ${defaults.material}`);
+    out.material = defaults.material;
+  }
   // stock
   const stock = isObject(out.stock) ? out.stock : {};
   const stockDefaults = defaults.stock;

@@ -62,7 +62,10 @@ const jobs = {
     if (check && text.length <= check.maxLength) {
       try {
         postCheck = checkPost({ ops, text, lineMap, fitTolerance: check.fitTolerance });
-        checkStatus = postCheck.over > 0 || postCheck.axisOver > 0 ? 'Read-back check: differences found' : 'Read-back check: passed';
+        // checkPost answers null for a program with no operations or no mapped
+        // lines — there is nothing to compare, which is not a failure to run
+        checkStatus = !postCheck ? 'Read-back check: nothing to compare'
+          : postCheck.over > 0 || postCheck.axisOver > 0 ? 'Read-back check: differences found' : 'Read-back check: passed';
       } catch (err) {
         // a check that cannot run is no verdict, not a failed post
         console.error(err);

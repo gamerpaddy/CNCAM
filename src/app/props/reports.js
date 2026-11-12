@@ -10,6 +10,7 @@
 import { el } from '../layout.js';
 import { plural, pluralEs } from '../../engine/text.js';
 import { cuttingReport } from '../../engine/cutting.js';
+import { cutCheck } from '../../engine/cut-check.js';
 import { isRoundStock } from '../../engine/stock.js';
 import { chamferGeometry, maxWidthFor } from '../../engine/strategies/chamfer.js';
 import { tipAngleOf } from '../../engine/tool-geometry.js';
@@ -195,7 +196,20 @@ export function cuttingReportRow(doc, op) {
       ['Feed per tooth', fmt(report.feedPerTooth, 'mm', 3)],
       ['At', `⌀${report.diameter}mm · ${report.flutes ?? '?'} flutes`],
     ];
-  return reportRows(lines);
+  // What it comes to in this material, on this machine — only for a mill, where
+  // the stock's material is a fact about the cut and the spindle has a power.
+  const check = report.lathe ? null : cutCheck(op, tool, setup?.material, doc.machineRecord());
+  if (check) {
+    lines.push(['Material', check.material.name]);
+    if (check.ae && check.ap) {
+      lines.push(['Cut', `${check.ae.toFixed(2)} × ${check.ap.toFixed(2)} mm · ${check.mrr.toFixed(1)} cm³/min`]);
+      lines.push(['Power', `${check.powerKw.toFixed(2)} kW${check.spindleKw ? ` of ${check.spindleKw}` : ''}`]);
+    }
+    if (check.expectedChip) lines.push(['Usual chip here', `${check.expectedChip.toFixed(3)} mm per tooth`]);
+  }
+  const rows = reportRows(lines);
+  if (!check?.warnings.length) return rows;
+  return el('div', {}, [rows, ...check.warnings.map((w) => el('div', { class: 'prop-note warn' }, [w]))]);
 }
 
 /**

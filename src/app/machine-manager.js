@@ -77,6 +77,11 @@ const FIELDS = [
       + 'running at a third of the surface speed it was chosen for.',
   },
   {
+    key: 'spindlePower', label: 'Spindle power (kW)', type: 'number', min: 0, step: 0.05,
+    hint: 'What the spindle can put into the cut — used to tell you when a '
+      + 'roughing pass would ask for more than it has. 0 leaves the check off.',
+  },
+  {
     // Milling only: how many rotary axes the machine has for indexed 3+1 / 3+2
     // work. A lathe's turning axis is not this.
     key: 'rotary', kind: 'mill', type: 'rotaryKind', label: 'Rotary axes',

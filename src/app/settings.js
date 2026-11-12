@@ -411,12 +411,13 @@ export const SETTINGS = [
       + 'step between two passes is still there, because it is real.',
   },
   {
-    key: 'stockMaterial',
+    key: 'stockLook',
     label: 'Stock material',
     group: 'Simulation',
     type: 'select',
-    options: ['classic', 'aluminium', 'steel', 'brass', 'wood', 'plastic', 'wax'],
+    options: ['setup', 'classic', 'aluminium', 'steel', 'brass', 'wood', 'plastic', 'wax'],
     labels: {
+      setup: 'Match the setup’s material',
       classic: 'Classic — tan billet, blue-grey cut',
       aluminium: 'Aluminium',
       steel: 'Steel',
@@ -425,9 +426,9 @@ export const SETTINGS = [
       plastic: 'Plastic',
       wax: 'Machining wax',
     },
-    default: 'aluminium',
-    hint: 'How the billet looks, uncut and cut. Purely visual — the cutting '
-      + 'data does not change with it. Each material has a dull raw face and a '
+    default: 'setup',
+    hint: 'How the billet looks, uncut and cut. By default it is the material the '
+      + 'setup says it is made of; pick another to override. Each material has a dull raw face and a '
       + 'brighter machined one, because telling the two apart is the point of '
       + 'watching the simulation.',
   },

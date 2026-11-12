@@ -35,6 +35,7 @@ import {
   opStatus, opBlockedReason, formatTime, toolChangesIn,
 } from './op-status.js';
 import { BUILD } from '../version.js';
+import { materialOf } from '../doc/materials.js';
 
 /**
  * The meshes a setup machines, as one question asked in one place.
@@ -103,6 +104,7 @@ function refresh(kind) {
   }
   syncViewportModels();
   syncStock();
+  syncStockLook();
   syncDrawings();
   syncToolpaths();
   // the selected operation's path stands out from the rest of the setup's
@@ -525,6 +527,23 @@ function applyPickHandler() {
   });
 }
 
+/**
+ * How the billet looks: the setup's own material, unless the user has picked a
+ * look of their own in Options. One list of materials, one description of what
+ * each is — the cutting data and the colour of the stock used to be two.
+ */
+function stockLookFor() {
+  const chosen = getSetting('stockLook');
+  return chosen === 'setup' ? materialOf(ctx.doc.activeSetup()?.material).look : chosen;
+}
+let shownStockLook = null;
+function syncStockLook() {
+  const look = stockLookFor();
+  if (look === shownStockLook) return;
+  shownStockLook = look;
+  ctx.viewport.simulation?.setStockLook({ material: look });
+}
+
 let shownToolpathKeys = '';
 let shownGizmoOpId = null;
 let shownFixtureId = null;
@@ -666,9 +685,9 @@ function applySettings(key = null) {
   if (touches('lightingPreset') || touches('envReflection')) {
     viewport.setLook({ preset: getSetting('lightingPreset'), reflection: getSetting('envReflection') });
   }
-  if (touches('stockMaterial') || touches('surfaceContrast')) {
+  if (touches('stockLook') || touches('surfaceContrast')) {
     viewport.simulation.setStockLook({
-      material: getSetting('stockMaterial'), contrast: getSetting('surfaceContrast'),
+      material: stockLookFor(), contrast: getSetting('surfaceContrast'),
     });
   }
   if (touches('cutTint')) viewport.simulation.setCutTint(getSetting('cutTint'));

@@ -6,6 +6,7 @@ import { createStock } from '../engine/stock.js';
 import { encodeMesh, decodeMesh } from './mesh-codec.js';
 import { defaultMachines, MACHINE_KINDS } from './machines.js';
 import { repairProject } from './repair.js';
+import { DEFAULT_MATERIAL } from './materials.js';
 
 // v3 → v4: the project carries machines, not just a post id. A post is how a
 // move is spelled; a machine is how far the table goes, how fast a rapid
@@ -269,6 +270,13 @@ export function createSetup(name = 'Setup 1', mode = 'mill') {
     // setup respects. See engine/fixtures.js
     fixtures: [],
     modelIds: [],
+    // What the billet is made of: a fact about how it cuts, so it sets the
+    // speeds and feeds the tool wizard and the cutting report suggest and the
+    // power a cut is checked against, and picks the look the simulation gives
+    // the stock. It is not in `stock`, which the operation fingerprint hashes
+    // whole — changing the material moves no toolpath and must not mark one
+    // out of date. See doc/materials.js.
+    material: mode === 'turn' ? 'mild-steel' : DEFAULT_MATERIAL,
     operations: [],
   };
 }

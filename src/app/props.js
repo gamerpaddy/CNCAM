@@ -30,6 +30,7 @@ import { computeBounds } from '../geom/mesh.js';
 import {
   toolWarnings, cuttingReadout, defaultsForType, suggestCutting, machineCanHold,
 } from '../doc/tool-library.js';
+import { materialOf } from '../doc/materials.js';
 import { reportRows } from './props/reports.js';
 import { fieldRow } from './props/fields.js';
 import { setupSections } from './props/setup-panel.js';
@@ -734,11 +735,12 @@ function latheToolPreviewRow(tool) {
 function speedSuggestion(doc, tool) {
   const want = suggestCutting({
     type: tool.type, diameter: tool.diameter, flutes: tool.flutes, tipAngle: tool.tipAngle,
+    material: doc.activeSetup()?.material,
   });
   const off = (a, b) => a > 0 && b > 0 && Math.abs(a - b) / Math.max(a, b) > 0.35;
   if (!off(want.spindleRpm, tool.spindleRpm) && !off(want.feedCut, tool.feedCut)) return [];
   return [el('div', { class: 'prop-note' }, [
-    el('div', {}, [`For a ⌀${tool.diameter} of this family the suggestion is `
+    el('div', {}, [`For a ⌀${tool.diameter} of this family in ${materialOf(doc.activeSetup()?.material).name} the suggestion is `
       + `${want.spindleRpm} RPM and ${want.feedCut} mm/min.`]),
     el('button', {
       style: 'margin-top: 6px',

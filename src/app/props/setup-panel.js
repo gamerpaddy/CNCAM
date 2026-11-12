@@ -23,6 +23,7 @@ import { machineWarnings } from '../../doc/machines.js';
 import { effectiveCutting } from '../../engine/cutting.js';
 import { MOVE_STRIDE, OP } from '../../engine/cl.js';
 import { fieldRow, roundMicron, propRow } from './fields.js';
+import { MATERIALS } from '../../doc/materials.js';
 import { fiveAxisChecks } from '../../engine/five/assistant.js';
 import { fiveAxisEnabled } from '../settings.js';
 import { numberInput, parseNumber, formatNumber } from '../number-input.js';
@@ -56,6 +57,13 @@ function isTurning(setup) { return (setup.mode ?? 'mill') === 'turn'; }
 function milling(setup) { return !isTurning(setup); }
 
 const STOCK_FIELDS = [
+  {
+    path: 'material', label: 'Material', type: 'select',
+    options: MATERIALS.map((m) => m.id),
+    labels: Object.fromEntries(MATERIALS.map((m) => [m.id, m.name])),
+    hint: 'What the billet is made of. Sets the speeds and feeds the tool wizard '
+      + 'suggests, what a cut is checked against, and the look of the stock in the simulation.',
+  },
   {
     path: 'stock.kind', label: 'Stock', type: 'select',
     options: STOCK_KINDS, labels: STOCK_KIND_LABELS,
@@ -282,7 +290,8 @@ export function setupSections(doc, setup, app) {
   const seed = () => ensureStockShape(doc, setup);
   for (const f of STOCK_FIELDS) {
     if (f.when && !f.when(setup)) continue;
-    rows.push(f.path === 'stock.kind'
+    rows.push(f.path === 'material' ? fieldRow(doc, setup, f, null, null, app)
+      : f.path === 'stock.kind'
       ? fieldRow(doc, setup, f, null, seed, app)
       : fieldRow(doc, setup, f, seed, null, app));
     if (f.path === 'stock.cylinder.diameter') rows.push(snapDiameterRow(doc, setup));
