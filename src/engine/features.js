@@ -18,10 +18,11 @@
 
 import { computeBounds, flatLevels } from '../geom/mesh.js';
 import { sliceMeshZ } from '../geom/slice.js';
+import { surfaceProbe } from '../geom/heightmap.js';
 import {
   unionLoops, enclosedVoids, offsetLoops, loopArea, loopsBounds,
 } from '../geom/clipper.js';
-import { findHoles, fitCircle } from './strategies/drill.js';
+import { findHoles, fitCircle, roomAroundHole } from './strategies/drill.js';
 import { tapDrillDiameter } from './strategies/holes.js';
 
 /** Metric coarse threads and the pitch each is tapped at. */
@@ -30,6 +31,8 @@ const METRIC = [
 ];
 /** A hole this much off a tapping drill is not one. */
 const TAP_DRILL_TOLERANCE = 0.1;
+/** A spot drill is this much narrower than the way down to the hole, mm. */
+const SPOT_CLEARANCE = 0.4;
 /** Above this a hole is bored with an end mill, not drilled. */
 const BORE_FROM = 16;
 /** Sizes an end mill comes in, mm. */
@@ -69,13 +72,101 @@ export function inscribedDiameter(loop) {
   return 2 * lo;
 }
 
+/** Slopes shallower than this are flat and steeper than this are wall; between is a surface to finish. */
+const SLOPE_FROM = 2;
+const SLOPE_TO = 88;
+/** Where a slope is steep enough that waterline finishing beats a raster, degrees from horizontal. */
+const STEEP_FROM = 40;
+/** Plan area, mm², below which a slope is an edge break and not a surface. */
+const SLOPE_MIN_AREA = 4;
+
+/**
+ * The sloped surface the part presents to the cutter from above: every triangle
+ * that is neither flat nor a wall, and that is not under something else.
+ *
+ * Neither flat nor wall is the whole definition, which is why the flat floors, the
+ * pocket strategy's walls and a drill's bore never count and a ring's bevel, a
+ * cone or a dome always do. "Not under something" is asked of the surface itself
+ * (the top surface is read at the triangle's centre) and not of its winding, which
+ * nothing here trusts: a part that has been mirrored by a setup's orientation has
+ * every triangle turned inside out.
+ *
+ * @returns { plan, shallow, steep, lo, hi, angle } — plan areas in mm², the Z range, and the mean angle
+ */
+export function slopedSurface(mesh) {
+  const { positions, indices } = mesh;
+  const probe = surfaceProbe(mesh);
+  const count = indices.length / 3;
+  const stride = Math.max(1, Math.floor(count / 30000));
+  let shallow = 0, steep = 0, angleSum = 0, lo = Infinity, hi = -Infinity;
+  for (let t = 0; t < count; t += stride) {
+    const a = indices[t * 3] * 3, b = indices[t * 3 + 1] * 3, c = indices[t * 3 + 2] * 3;
+    const ux = positions[b] - positions[a], uy = positions[b + 1] - positions[a + 1], uz = positions[b + 2] - positions[a + 2];
+    const vx = positions[c] - positions[a], vy = positions[c + 1] - positions[a + 1], vz = positions[c + 2] - positions[a + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const len = Math.hypot(nx, ny, nz);
+    if (!(len > 1e-12)) continue;
+    const angle = (Math.acos(Math.min(1, Math.abs(nz) / len)) * 180) / Math.PI;
+    if (angle < SLOPE_FROM || angle > SLOPE_TO) continue;
+    const cx = (positions[a] + positions[b] + positions[c]) / 3;
+    const cy = (positions[a + 1] + positions[b + 1] + positions[c + 1]) / 3;
+    const cz = (positions[a + 2] + positions[b + 2] + positions[c + 2]) / 3;
+    if (probe(cx, cy) > cz + 0.05 || probe(cx, cy) < cz - 0.05) continue;   // under something, or not top surface
+    const plan = (Math.abs(nz) / 2) * stride;
+    if (angle >= STEEP_FROM) steep += plan; else shallow += plan;
+    angleSum += angle * plan;
+    lo = Math.min(lo, positions[a + 2], positions[b + 2], positions[c + 2]);
+    hi = Math.max(hi, positions[a + 2], positions[b + 2], positions[c + 2]);
+  }
+  const plan = shallow + steep;
+  return { plan, shallow, steep, lo, hi, angle: plan > 0 ? angleSum / plan : 0 };
+}
+
+/** Operations that cut a round hole out to size whatever they were asked for, when the cutter is smaller than it. */
+const CLEARS_HOLES = ['pocket', 'adaptive', 'clear2d', 'bore'];
+
+/**
+ * Whether the setup already does what a proposal would add, as a phrase for the
+ * summary, or null.
+ *
+ * A proposal is the same as an operation when it is the same strategy with the
+ * same reach: nothing restricted to picked faces counts, because it does not
+ * cover the part. Holes are the case worth the care — a pocket, a clear or an
+ * adaptive with a cutter narrower than a hole opens the hole as it clears, so a
+ * spot and a drill proposed after one are a pair of cuts into air.
+ */
+function alreadyDone(p, existing) {
+  const open = existing.filter((e) => !e.restricted);
+  const same = (types) => open.find((e) => types.includes(e.type));
+  const d = p.toolSpec?.diameter ?? p.diameter;
+  switch (p.id) {
+    case 'face': return same(['face']) && 'a facing operation';
+    case 'outline': return same(['contour2d']) && 'an outline operation';
+    case 'rough': return same(['adaptive', 'clear2d']) && 'a roughing operation';
+    case 'pocket': return same(['pocket']) && 'a pocket operation';
+    case 'slope-waterline': return same(['waterline']) && 'a waterline finish';
+    case 'slope-parallel': return same(['parallel3d', 'scallop']) && 'a raster finish';
+    case 'spot': return same(['spot']) && 'a spot operation';
+    default: break;
+  }
+  if (p.id.startsWith('drill-')) {
+    return open.some((e) => e.type === 'drill' && Math.abs((e.toolDiameter ?? -1) - d) <= 0.06) && `a ⌀${fmt(d)} drill`;
+  }
+  if (p.id.startsWith('bore-')) return same(['bore']) && 'a bore';
+  if (p.id.startsWith('tap-')) return open.some((e) => e.type === 'tap') && 'a tap operation';
+  return null;
+}
+
 /**
  * @param mesh the part, in the setup's own space (what the strategies are given)
  * @param options.stock the setup's resolved stock `{ min, max }`
+ * @param options.existing what the setup already does, `[{ type, toolDiameter, restricted }]`
+ *   — `restricted` when the operation is limited to picked faces. Whatever is
+ *   already done is left out rather than proposed again, and said so.
  * @returns { proposals, summary, warnings } — proposals in running order, each
  *   `{ id, group, label, detail, opType, params, toolSpec, enabled, warnings }`
  */
-export function recogniseFeatures(mesh, { stock = null } = {}) {
+export function recogniseFeatures(mesh, { stock = null, existing = [] } = {}) {
   const proposals = [];
   const warnings = [];
   if (!mesh?.positions?.length || !mesh.indices?.length) {
@@ -86,6 +177,7 @@ export function recogniseFeatures(mesh, { stock = null } = {}) {
   const bottom = bounds.min[2];
   const height = top - bottom;
   const summary = [];
+  const left = [];
 
   // --- the top: face it when the billet stands above the part --------------
   const skim = stock?.max ? stock.max[2] - top : 0;
@@ -101,6 +193,55 @@ export function recogniseFeatures(mesh, { stock = null } = {}) {
       warnings: [],
     });
     summary.push('a top to face');
+  }
+
+  // --- slopes: a surface a 2D operation cannot make ------------------------
+  // Every other operation here is a profile at some depth; a bevel, a cone or a
+  // dome is not one, and without a proposal for it the part comes out as the
+  // stack of profiles at its widest — faced, drilled, outlined and still a block
+  // where the slope should be.
+  const slopes = slopedSurface(mesh);
+  const hasSlope = slopes.plan >= Math.max(SLOPE_MIN_AREA, 0.005 * (bounds.max[0] - bounds.min[0]) * (bounds.max[1] - bounds.min[1]));
+  if (hasSlope && stock?.max) {
+    proposals.push({
+      id: 'rough',
+      group: 'Slopes',
+      label: 'Rough the stock down to the part',
+      detail: 'the billet over a slope is not a profile: it comes off in steps and the finish cut takes the last 0.3 mm',
+      opType: 'adaptive',
+      params: {},
+      toolSpec: { family: 'flat', maxDiameter: 12, prefer: 'largest', what: 'rough', soft: true },
+      enabled: true,
+      warnings: [],
+    });
+  }
+  if (hasSlope) {
+    const share = (v) => v >= SLOPE_MIN_AREA && v >= 0.2 * slopes.plan;
+    const what = (area) => `${fmt(area)} mm² of slope seen from above`;
+    const finishers = [];
+    if (share(slopes.steep) || !share(slopes.shallow)) {
+      finishers.push({
+        id: 'slope-waterline', opType: 'waterline', label: 'Finish the steep slopes',
+        detail: `${what(slopes.steep)} at 40° or more from flat; a ball nose follows the surface level by level`,
+      });
+    }
+    if (share(slopes.shallow)) {
+      finishers.push({
+        id: 'slope-parallel', opType: 'parallel3d', label: 'Finish the shallow slopes',
+        detail: `${what(slopes.shallow)} under 40° from flat; a ball nose rasters over them`,
+      });
+    }
+    for (const f of finishers) {
+      proposals.push({
+        group: 'Slopes',
+        ...f,
+        params: {},
+        toolSpec: { family: 'ball', maxDiameter: 6, prefer: 'largest', what: 'finish' },
+        enabled: true,
+        warnings: [],
+      });
+    }
+    summary.push(`a slope of about ${Math.round(slopes.angle)}°`);
   }
 
   // --- pockets: the enclosed voids that are not round holes ----------------
@@ -141,7 +282,14 @@ export function recogniseFeatures(mesh, { stock = null } = {}) {
   }
 
   // --- holes: grouped by diameter, and the ones that are tapping drills ----
-  const found = findHoles(mesh, { topZ: top, bottomZ: bottom, bounds });
+  // A hole a pocket-type operation of the setup already opens, because its cutter
+  // is narrower than the hole, is cut: it is not one to spot and drill.
+  const opener = existing.filter((e) => !e.restricted && CLEARS_HOLES.includes(e.type) && e.toolDiameter > 0)
+    .reduce((m, e) => Math.min(m, e.toolDiameter), Infinity);
+  const allHoles = findHoles(mesh, { topZ: top, bottomZ: bottom, bounds });
+  const found = allHoles.filter((h) => !(h.r * 2 > opener * 1.05));
+  const opened = allHoles.length - found.length;
+  if (opened) left.push(`a pocket or clear that already opens ${opened} hole${opened === 1 ? '' : 's'}`);
   const groups = new Map();
   for (const h of found) {
     const d = round(h.r * 2, 0.05);
@@ -156,18 +304,33 @@ export function recogniseFeatures(mesh, { stock = null } = {}) {
   // sized to the hole the way drilling is — so it is offered for all of them.
   if (found.length) {
     const bored = found.filter((h) => round(h.r * 2, 0.05) > BORE_FROM).length;
+    // The spot drill has to go down to the highest hole on each centre, through
+    // whatever stands round it: a hole in the floor of a 5mm pocket is not spotted
+    // by a ⌀6 cutter, whatever it would do to a hole on the top face.
+    const reach = new Map();
+    for (const h of found) {
+      const key = `${round(h.cx, 0.05)},${round(h.cy, 0.05)}`;
+      if (!reach.has(key) || h.top > reach.get(key).top) reach.set(key, h);
+    }
+    let room = Infinity;
+    for (const h of reach.values()) room = Math.min(room, roomAroundHole(mesh, h, top));
+    const fits = room === Infinity ? 0 : Math.max(0, room - SPOT_CLEARANCE);
     proposals.push({
       id: 'spot',
       group: 'Holes',
       label: `Spot the ${found.length} hole${found.length === 1 ? '' : 's'}`,
-      detail: bored
-        ? `so each drill starts where it was told; ${bored === 1 ? 'the large one is' : `${bored} large ones are`} only marked`
-        : 'so each drill starts where it was told',
+      detail: [
+        bored
+          ? `so each drill starts where it was told; ${bored === 1 ? 'the large one is' : `${bored} large ones are`} only marked`
+          : 'so each drill starts where it was told',
+        room < Infinity ? `the narrowest way down to one is ${fmt(room)} mm, so the spot drill is ⌀${fmt(fits)} or under` : null,
+      ].filter(Boolean).join('; '),
       opType: 'spot',
       params: {},
-      toolSpec: { family: 'spot', prefer: 'any' },
+      toolSpec: { family: 'spot', prefer: 'any', ...(room < Infinity ? { maxDiameter: fits } : {}) },
       enabled: true,
-      warnings: [],
+      warnings: room < Infinity && fits < 1
+        ? [`a hole is reached through ${fmt(room)} mm: no spot drill goes down it`] : [],
     });
   }
   for (const g of sizes) {
@@ -240,10 +403,19 @@ export function recogniseFeatures(mesh, { stock = null } = {}) {
     }
   }
 
-  if (!proposals.length) warnings.push('nothing here to propose: no top to face, no pockets, no round holes, no billet round it');
+  // --- what the setup already does -------------------------------------------
+  const kept = proposals.filter((p) => {
+    const why = alreadyDone(p, existing);
+    if (why) left.push(why);
+    return !why;
+  });
+  if (!kept.length && !left.length) warnings.push('nothing here to propose: no top to face, no pockets, no round holes, no billet round it');
   return {
-    proposals,
-    summary: summary.length ? `Found ${summary.join(', ')}.` : 'Nothing recognised.',
+    proposals: kept,
+    summary: [
+      summary.length ? `Found ${summary.join(', ')}.` : 'Nothing recognised.',
+      left.length ? `Left out, because this setup already has ${left.join(', ')}.` : '',
+    ].filter(Boolean).join(' '),
     warnings,
   };
 }

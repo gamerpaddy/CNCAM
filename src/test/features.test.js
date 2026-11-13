@@ -16,7 +16,8 @@ import { createTool } from '../doc/schema.js';
 import { defaultParamsFor } from '../engine/op-defaults.js';
 import { generateToolpath } from '../engine/toolpath.js';
 import { OP, MOVE_STRIDE } from '../engine/cl.js';
-import { makePocketAndHole } from './fixtures.js';
+import { makePocketAndHole, makeRevolved, makePocketBlock } from './fixtures.js';
+import { roomAroundHole } from '../engine/strategies/drill.js';
 
 async function sample(name, margin = 1) {
   const mesh = meshFromSoup(parseSTL(await loadSampleBuffer(name)));
@@ -105,7 +106,7 @@ test('the cutter for a proposal is the rack one when the rack has it, and a new 
   ];
   const have = toolForSpec({ family: 'drill', diameter: 6 }, rack);
   assert.ok(!have.created && have.tool === rack[0]);
-  const made = toolForSpec({ family: 'drill', diameter: 8 }, rack, { material: 'aluminium' });
+  const made = toolForSpec({ family: 'drill', diameter: 8 }, rack, { material: 'aluminium', rackOnly: false });
   assert.ok(made.created);
   assert.eq(made.tool.type, 'drill');
   assert.eq(made.tool.diameter, 8);
@@ -113,14 +114,14 @@ test('the cutter for a proposal is the rack one when the rack has it, and a new 
   assert.ok(/8mm drill/.test(made.tool.name));
   assert.ok(made.tool.spindleRpm > 0 && made.tool.feedCut > 0);
   // steel is slower than aluminium for the same drill
-  assert.ok(toolForSpec({ family: 'drill', diameter: 8 }, rack, { material: 'stainless' }).tool.spindleRpm < made.tool.spindleRpm);
+  assert.ok(toolForSpec({ family: 'drill', diameter: 8 }, rack, { material: 'stainless', rackOnly: false }).tool.spindleRpm < made.tool.spindleRpm);
   // an end mill: the largest that fits
   assert.eq(toolForSpec({ family: 'flat', maxDiameter: 12 }, rack).tool, rack[1]);
   assert.eq(toolForSpec({ family: 'flat', maxDiameter: 5 }, rack).tool, rack[2], 'the 10 is too wide');
-  const newMill = toolForSpec({ family: 'flat', maxDiameter: 2.4 }, rack);
+  const newMill = toolForSpec({ family: 'flat', maxDiameter: 2.4 }, rack, { rackOnly: false });
   assert.ok(newMill.created && newMill.tool.diameter === 2, `a 2mm end mill, got ${newMill.tool.diameter}`);
   // taps are by thread, not by diameter alone
-  const tap = toolForSpec({ family: 'tap', nominal: 6, pitch: 1 }, rack);
+  const tap = toolForSpec({ family: 'tap', nominal: 6, pitch: 1 }, rack, { rackOnly: false });
   assert.ok(tap.created && tap.tool.type === 'tap' && tap.tool.pitch === 1 && /M6/.test(tap.tool.name), tap.tool.name);
   assert.eq(millSizeFor(7), 6);
   assert.eq(millSizeFor(0.2), MILL_SIZES[0]);
@@ -145,7 +146,7 @@ test('every proposed operation cuts what it was proposed for, and nothing warns 
     let rack = [];
     for (const p of r.proposals) {
       if (!p.enabled) continue;
-      const got = toolForSpec(p.toolSpec, rack, { material: 'aluminium' });
+      const got = toolForSpec(p.toolSpec, rack, { material: 'aluminium', rackOnly: false });
       if (got.created) rack = [...rack, got.tool];
       const cl = generate(p, mesh, stock, got.tool);
       assert.ok(cl.count > 0, `${file}: ${p.id} produced no moves — ${cl.notes.map((n) => n.text).join(' | ')}`);
@@ -184,4 +185,138 @@ test('a STEP cube read by OpenCASCADE has no features invented on it', async () 
   assert.close(b.max[2] - b.min[2], 300, 1e-3, 'a 300mm cube');
   const r = recogniseFeatures(mesh, { stock: { min: [b.min[0] - 1, b.min[1] - 1, b.min[2]], max: [b.max[0] + 1, b.max[1] + 1, b.max[2] + 1] } });
   assert.eq(JSON.stringify(r.proposals.map((p) => p.opType)), '["face","contour2d"]');
+});
+
+// A ring whose outside is a bevel widening towards the base: the slope is the
+// part, and a profile at any one depth is the wrong shape for it.
+const bevelRing = () => makeRevolved([[10, 0], [30, 0], [30, 4], [22, 12], [10, 12], [10, 0]]);
+
+test('a ring with a bevel is proposed the roughing and the finishing of the slope, after the face and before the holes and outline', () => {
+  const mesh = bevelRing();
+  const b = computeBounds(mesh.positions);
+  const stock = { kind: 'box', min: [b.min[0] - 2, b.min[1] - 2, b.min[2]], max: [b.max[0] + 2, b.max[1] + 2, b.max[2] + 2] };
+  const r = recogniseFeatures(mesh, { stock });
+  const order = r.proposals.map((p) => p.opType);
+  assert.ok(order.includes('waterline'), `the 45° bevel is steep enough for waterline: ${order}`);
+  assert.ok(!order.includes('parallel3d'), 'and there is no shallow slope on the part');
+  assert.ok(order.indexOf('face') < order.indexOf('adaptive') && order.indexOf('adaptive') < order.indexOf('waterline'), order.join());
+  assert.eq(order[order.length - 1], 'contour2d');
+  const finish = byId(r, 'slope-waterline');
+  assert.eq(finish.toolSpec.family, 'ball');
+  // 8 in plan by 8 high: 45° exactly, and the area is the cone's, 2*pi*r*8 about r 26
+  assert.ok(/4[0-9]°|45°/.test(finish.detail) || /about 4/.test(finish.detail), finish.detail);
+  assert.ok(Math.abs(Math.round(recogniseFeatures(mesh, { stock }).summary.match(/(\d+)°/)[1]) - 45) <= 1, r.summary);
+});
+
+test('flat plates, pockets and holes alone are not slopes', async () => {
+  for (const file of ['test-hole-plate.stl', 'test-step-plate.stl']) {
+    const { mesh, stock } = await sample(file, 2);
+    const r = recogniseFeatures(mesh, { stock });
+    assert.ok(!r.proposals.some((p) => p.group === 'Slopes'), `${file}: ${r.proposals.map((p) => p.id)}`);
+  }
+});
+
+test('a shallow slope gets a raster, not a waterline; a dome and a ramp together get both', async () => {
+  const { mesh, stock } = await sample('test-slope.stl');
+  const r = recogniseFeatures(mesh, { stock });
+  const ids = r.proposals.map((p) => p.id);
+  assert.ok(ids.includes('slope-parallel') || ids.includes('slope-waterline'), ids.join());
+  // a gentle ramp: 10 degrees
+  const ramp = makeRevolved([[10, 0], [30, 0], [30, 8], [12, 11], [10, 11], [10, 0]]);
+  const rb = computeBounds(ramp.positions);
+  const rr = recogniseFeatures(ramp, { stock: { min: [rb.min[0], rb.min[1], rb.min[2]], max: [rb.max[0], rb.max[1], rb.max[2] + 1] } });
+  assert.ok(byId(rr, 'slope-parallel') && !byId(rr, 'slope-waterline'), rr.proposals.map((p) => p.id).join());
+});
+
+test('every slope proposal generates a toolpath with the ball it names', () => {
+  const mesh = bevelRing();
+  const b = computeBounds(mesh.positions);
+  const stock = { kind: 'box', min: [b.min[0] - 2, b.min[1] - 2, b.min[2]], max: [b.max[0] + 2, b.max[1] + 2, b.max[2] + 2] };
+  const r = recogniseFeatures(mesh, { stock });
+  for (const p of r.proposals.filter((q) => q.group === 'Slopes')) {
+    const got = toolForSpec(p.toolSpec, [], { material: 'aluminium' });
+    assert.ok(got.created && (got.tool.type === 'ball' || got.tool.type === 'flat'), p.id);
+    const cl = generate(p, mesh, stock, got.tool);
+    assert.ok(cl.count > 0, `${p.id} produced no moves`);
+  }
+});
+
+test('with tools of its own the project is held to them: nothing is made, and what cannot be served says what it lacks', () => {
+  const rack = [
+    Object.assign(createTool('flat'), { number: 1, diameter: 10 }),
+    Object.assign(createTool('drill'), { number: 2, diameter: 6, tipAngle: 118 }),
+  ];
+  // defaults to rack-only because the rack is not empty
+  const drill8 = toolForSpec({ family: 'drill', diameter: 8 }, rack);
+  assert.eq(drill8.tool, null);
+  assert.ok(!drill8.created && /8 drill/.test(drill8.missing), drill8.missing);
+  assert.eq(toolForSpec({ family: 'drill', diameter: 6 }, rack).tool, rack[1]);
+  assert.eq(toolForSpec({ family: 'tap', nominal: 6, pitch: 1 }, rack).tool, null);
+  assert.eq(toolForSpec({ family: 'spot' }, rack).tool, null);
+  assert.eq(toolForSpec({ family: 'ball', maxDiameter: 6 }, rack).tool, null, 'no ball nose in the rack');
+  // a feature's width is a limit: the 10 does not fit a 5mm pocket...
+  assert.eq(toolForSpec({ family: 'flat', maxDiameter: 5 }, rack).tool, null);
+  // ...but the outline's and the roughing's size is a preference: the narrowest there is
+  assert.eq(toolForSpec({ family: 'flat', maxDiameter: 6, soft: true }, rack).tool, rack[0]);
+  // a rack with a ball in it gives the largest not over the size, else the smallest
+  const balls = [Object.assign(createTool('ball'), { number: 3, diameter: 3 }), Object.assign(createTool('ball'), { number: 4, diameter: 10 })];
+  assert.eq(toolForSpec({ family: 'ball', maxDiameter: 6 }, balls).tool, balls[0]);
+  assert.eq(toolForSpec({ family: 'ball', maxDiameter: 2 }, [balls[1]]).tool, balls[1]);
+  // an empty rack is one that has not chosen: cutters are made
+  assert.ok(toolForSpec({ family: 'drill', diameter: 8 }, []).created);
+  // and the project can say so explicitly
+  assert.ok(toolForSpec({ family: 'drill', diameter: 8 }, rack, { rackOnly: false }).created);
+});
+
+test('what the setup already does is not proposed again: a pocket that opened the holes leaves no spot and no drill', async () => {
+  const { mesh, stock } = await sample('test-hole-plate.stl', 2);
+  // a 3mm pocket cutter is narrower than every hole on the plate (6, 8, 10, 20)
+  const opened = recogniseFeatures(mesh, { stock, existing: [{ type: 'pocket', toolDiameter: 3, restricted: false }] });
+  assert.ok(!opened.proposals.some((p) => ['spot', 'drill', 'bore', 'tap'].includes(p.opType)), opened.proposals.map((p) => p.id).join());
+  assert.ok(/already opens 7 holes/.test(opened.summary), opened.summary);
+  // a cutter wider than a hole does not open it: a 7mm clear opens the 8, 10 and 20 and leaves the four 6s
+  const partly = recogniseFeatures(mesh, { stock, existing: [{ type: 'clear2d', toolDiameter: 7, restricted: false }] });
+  assert.ok(byId(partly, 'drill-6') && !byId(partly, 'drill-10') && !byId(partly, 'drill-8'), partly.proposals.map((p) => p.id).join());
+  assert.ok(/Spot the 4 holes/.test(byId(partly, 'spot').label), byId(partly, 'spot').label);
+  // one restricted to picked faces does not cover the part
+  const picked = recogniseFeatures(mesh, { stock, existing: [{ type: 'pocket', toolDiameter: 3, restricted: true }] });
+  assert.ok(byId(picked, 'spot') && byId(picked, 'drill-6'));
+});
+
+test('an operation the setup has is not proposed a second time, and the summary says what was left out', async () => {
+  const { mesh, stock } = await sample('test-hole-plate.stl', 2);
+  const r = recogniseFeatures(mesh, {
+    stock,
+    existing: [{ type: 'face', toolDiameter: 12 }, { type: 'drill', toolDiameter: 6 }, { type: 'contour2d', toolDiameter: 6 }],
+  });
+  assert.ok(!byId(r, 'face') && !byId(r, 'drill-6') && !byId(r, 'outline'), r.proposals.map((p) => p.id).join());
+  assert.ok(byId(r, 'drill-8') && byId(r, 'spot'), 'the rest stays');
+  assert.ok(/Left out/.test(r.summary) && /facing/.test(r.summary) && /⌀6 drill/.test(r.summary), r.summary);
+  // with nothing left to propose it is a different thing from a part with nothing on it
+  const everything = recogniseFeatures(mesh, { stock, existing: [{ type: 'face' }, { type: 'contour2d' }, { type: 'spot' }, { type: 'drill', toolDiameter: 6 }, { type: 'drill', toolDiameter: 8 }, { type: 'drill', toolDiameter: 10 }, { type: 'bore' }] });
+  assert.eq(everything.proposals.length, 0);
+  assert.eq(everything.warnings.length, 0, 'not told there is nothing on the part');
+});
+
+// A hole at the bottom of a pocket is reached through the pocket.
+test('the way down to a hole: twice the distance to the nearest wall standing over it, and nothing over a hole on the top', () => {
+  const { mesh, top, floorZ } = makePocketBlock({ size: 40, pocketSize: 20, height: 10, depth: 6 });
+  // the middle of a 20mm pocket floor: 10mm to every wall
+  assert.close(roomAroundHole(mesh, { cx: 20, cy: 20, top: floorZ }, top), 20, 0.05);
+  // off to one side: 4mm from the near wall, so the cutter is 8mm at most
+  assert.close(roomAroundHole(mesh, { cx: 14, cy: 20, top: floorZ }, top), 8, 0.05);
+  // a hole that opens at the top of the part has nothing over it
+  assert.eq(roomAroundHole(mesh, { cx: 5, cy: 5, top }, top), Infinity);
+});
+
+test('a spot drill is no wider than the way down: the rack one that fits, none in a rack that has none, a new narrow one in an empty rack', () => {
+  const wide = Object.assign(createTool('spot'), { number: 1, diameter: 6, tipAngle: 90 });
+  const narrow = Object.assign(createTool('spot'), { number: 2, diameter: 3, tipAngle: 90 });
+  assert.eq(toolForSpec({ family: 'spot', maxDiameter: 3.9 }, [wide, narrow]).tool, narrow, 'the 6 will not go down a 4.3mm way');
+  assert.eq(toolForSpec({ family: 'spot' }, [wide, narrow]).tool, wide, 'nothing limits it on a top face: the largest');
+  const none = toolForSpec({ family: 'spot', maxDiameter: 3.9 }, [wide]);
+  assert.eq(none.tool, null);
+  assert.ok(/⌀3.9 or under/.test(none.missing), none.missing);
+  const made = toolForSpec({ family: 'spot', maxDiameter: 3.9 }, []);
+  assert.ok(made.created && made.tool.diameter === 3 && made.tool.type === 'spot', `${made.tool.diameter}`);
 });

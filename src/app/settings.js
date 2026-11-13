@@ -642,6 +642,20 @@ export const SETTINGS = [
 
   // --- editing ---
   {
+    key: 'importAtOrigin',
+    label: 'Place an imported model at the origin',
+    group: 'Editing',
+    type: 'checkbox',
+    default: true,
+    hint: 'A model keeps the coordinates it was drawn at, which in a CAD file can be '
+      + 'hundreds of millimetres from where anything is machined, so it arrives '
+      + 'nowhere near the zero point and there is no way to move it. With this on '
+      + 'its footprint is centred on X0 Y0 and its lowest point put on Z0; a second '
+      + 'model is set down beside the ones already there, not on top of them. The '
+      + 'shape does not change, and a file of several bodies keeps them where they '
+      + 'stand to each other. Off keeps the coordinates in the file.',
+  },
+  {
     key: 'hintStyle',
     label: 'Explain each setting',
     group: 'Editing',

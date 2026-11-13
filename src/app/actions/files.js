@@ -27,6 +27,8 @@ import { openProjectBrowser } from '../project-browser.js';
 import { pickPhotoFile, capturePhoto } from '../tool-photo.js';
 import { describeTool } from '../tool-shape.js';
 import { toolNumberClashes } from '../op-status.js';
+import { getSetting } from '../settings.js';
+import { placeImport } from '../../engine/placement.js';
 
 export function makeFileActions(ctx, program, space = null) {
   const { doc } = ctx;
@@ -68,12 +70,15 @@ export function makeFileActions(ctx, program, space = null) {
       // counts have to be of the job being replaced, but a parse that throws
       // must not have cost anybody their setups on the way to failing.
       const stranded = doc.strandedJob();
+      const moved = getSetting('importAtOrigin')
+        ? placeImport(parts.map((p) => p.mesh), [...doc.meshes.values()])
+        : null;
       for (const { name, mesh } of parts) {
         const model = createModel(name, file.name);
         doc.addModel(model, mesh);
       }
       ctx.viewport.frameAll();
-      ctx.ui.setStatus(`Imported ${file.name}${clearStrandedJob(stranded)}`);
+      ctx.ui.setStatus(`Imported ${file.name}${moved ? ` - placed at ${moved}` : ''}${clearStrandedJob(stranded)}`);
     } catch (err) {
       console.error(err);
       ctx.ui.setStatus(`Import failed: ${err.message}`, true);

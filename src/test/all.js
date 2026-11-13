@@ -79,3 +79,5 @@ import './features.test.js';
 import './finishing-extra.test.js';
 import './vcarve.test.js';
 import './instances.test.js';
+import './placement.test.js';
+import './faces-rounded.test.js';

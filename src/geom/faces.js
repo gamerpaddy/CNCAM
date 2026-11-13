@@ -10,6 +10,13 @@ import { projectTriangleBand } from './silhouette.js';
 import { unionLoops, bufferOpenPaths } from './clipper.js';
 
 const DEFAULT_BREAK_ANGLE = 25; // degrees of normal change that ends a face
+/** Triangles whose normals differ by less than this are one flat patch. */
+const FLAT_ANGLE = 0.5;
+/**
+ * A flat patch this many times the area of the one beside it is a floor or a
+ * wall meeting a fillet, however gently — see the flood below.
+ */
+const FLAT_TO_CURVE = 8;
 
 /**
  * Group a mesh's triangles into faces.
@@ -51,6 +58,17 @@ export function buildFaces(mesh, { breakAngleDeg = DEFAULT_BREAK_ANGLE } = {}) {
   const normals = triangleNormals(mesh);
   const adjacency = buildAdjacency(mesh, triCount);
   const cosBreak = Math.cos((breakAngleDeg * Math.PI) / 180);
+  // A fillet tessellated finely enough turns a few degrees per triangle, and a
+  // flood that only asks whether *neighbours* agree to within 25° walks straight
+  // from the flat top, round the corner and down the wall: a plate with rounded
+  // corners came back as one face, which nothing could pick a part of. What
+  // separates a floor from the rim beside it is not the angle at any one edge —
+  // that is the same few degrees as between two strips of the rim — but that the
+  // floor is one flat patch hundreds of times the size of anything it touches.
+  // So a flood does not cross from a flat patch into one very much smaller, or
+  // back. Strips of one curved surface are all about the same size, and a
+  // cylinder or a cone stays whole.
+  const patch = flatPatches(mesh, adjacency, normals, triCount);
 
   for (let seed = 0; seed < triCount; seed++) {
     if (faceOfTriangle[seed] !== -1) continue;
@@ -68,6 +86,11 @@ export function buildFaces(mesh, { breakAngleDeg = DEFAULT_BREAK_ANGLE } = {}) {
           + normals[t * 3 + 1] * normals[n * 3 + 1]
           + normals[t * 3 + 2] * normals[n * 3 + 2];
         if (dot < cosBreak) continue;
+        if (patch.of[t] !== patch.of[n]) {
+          const a = patch.area[patch.of[t]];
+          const b = patch.area[patch.of[n]];
+          if (Math.max(a, b) > FLAT_TO_CURVE * Math.min(a, b)) continue;
+        }
         faceOfTriangle[n] = id;
         stack.push(n);
       }
@@ -282,6 +305,44 @@ function chainSegments(segments) {
   return chains;
 }
 
+/**
+ * Connected runs of triangles that lie in one plane (to FLAT_ANGLE), and the area
+ * of each. `of[t]` is the patch of triangle t.
+ */
+function flatPatches(mesh, adjacency, normals, triCount) {
+  const { positions, indices } = mesh;
+  const cosFlat = Math.cos((FLAT_ANGLE * Math.PI) / 180);
+  const of = new Int32Array(triCount).fill(-1);
+  const area = [];
+  const triArea = (t) => {
+    const a = indices[t * 3] * 3, b = indices[t * 3 + 1] * 3, c = indices[t * 3 + 2] * 3;
+    const ux = positions[b] - positions[a], uy = positions[b + 1] - positions[a + 1], uz = positions[b + 2] - positions[a + 2];
+    const vx = positions[c] - positions[a], vy = positions[c + 1] - positions[a + 1], vz = positions[c + 2] - positions[a + 2];
+    return Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2;
+  };
+  for (let seed = 0; seed < triCount; seed++) {
+    if (of[seed] !== -1) continue;
+    const id = area.length;
+    let total = 0;
+    const stack = [seed];
+    of[seed] = id;
+    while (stack.length) {
+      const t = stack.pop();
+      total += triArea(t);
+      for (const n of adjacency[t]) {
+        if (of[n] !== -1) continue;
+        const dot = normals[t * 3] * normals[n * 3] + normals[t * 3 + 1] * normals[n * 3 + 1]
+          + normals[t * 3 + 2] * normals[n * 3 + 2];
+        if (dot < cosFlat) continue;
+        of[n] = id;
+        stack.push(n);
+      }
+    }
+    area.push(total);
+  }
+  return { of, area };
+}
+
 function triangleNormals(mesh) {
   const { positions, indices } = mesh;
   const out = new Float32Array(indices.length);
@@ -373,8 +434,63 @@ export function faceFootprint(mesh, faces, faceIds, { wallBand = 0 } = {}) {
       if (loop) loops.push(loop);
     }
   }
-  if (walls.length) loops.push(...bufferOpenPaths(walls, wallBand));
+  if (walls.length) loops.push(...bufferOpenPaths(chainSpans(walls), wallBand));
   return loops.length ? unionLoops(loops) : [];
+}
+
+/**
+ * Join wall spans end to end into polylines, dropping the duplicates.
+ *
+ * A wall of a finely tessellated part is thousands of slivers, each a span a few
+ * hundredths of a millimetre long, and the offsetter is run once per path: a
+ * 35,000-triangle face took over a minute to give its footprint, a hang in the
+ * Generate that asked for it. The spans of one wall lie end to end, so one
+ * polyline replaces a thousand of them and the band is the same shape.
+ *
+ * @param spans [[x0, y0, x1, y1], …]
+ * @returns flat [x, y, x, y, …] polylines
+ */
+function chainSpans(spans) {
+  const key = (x, y) => `${Math.round(x * 1e4)},${Math.round(y * 1e4)}`;
+  const seen = new Set();
+  const segs = [];
+  for (const [x0, y0, x1, y1] of spans) {
+    const a = key(x0, y0), b = key(x1, y1);
+    if (a === b) continue;
+    const id = a < b ? `${a}|${b}` : `${b}|${a}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    segs.push([x0, y0, x1, y1, a, b]);
+  }
+  const at = new Map();                     // endpoint -> the spans that have it
+  segs.forEach((sg, i) => {
+    for (const k of [sg[4], sg[5]]) { if (!at.has(k)) at.set(k, []); at.get(k).push(i); }
+  });
+  const used = new Uint8Array(segs.length);
+  const out = [];
+  // the next unused span at an endpoint, and the end of it that is not that endpoint
+  const step = (k) => {
+    for (const i of at.get(k) ?? []) {
+      if (used[i]) continue;
+      used[i] = 1;
+      const sg = segs[i];
+      return sg[4] === k ? [sg[2], sg[3], sg[5]] : [sg[0], sg[1], sg[4]];
+    }
+    return null;
+  };
+  for (let i = 0; i < segs.length; i++) {
+    if (used[i]) continue;
+    used[i] = 1;
+    const sg = segs[i];
+    const line = [sg[0], sg[1], sg[2], sg[3]];
+    // grow from the far end, then from the near one
+    for (const [grow, k0] of [[(x, y) => line.push(x, y), sg[5]], [(x, y) => line.unshift(x, y), sg[4]]]) {
+      let k = k0;
+      for (let next = step(k); next; next = step(k)) { grow(next[0], next[1]); k = next[2]; }
+    }
+    out.push(line);
+  }
+  return out;
 }
 
 /** |nz| of a triangle's own normal — 1 flat, 0 vertical. */

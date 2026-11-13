@@ -417,13 +417,24 @@ export function makeEditActions(ctx, space) {
     }
     const { meshes, stock } = resolveSetupSpace(setup);
     if (!meshes.length) return ctx.ui.setStatus('Import a model first: there is no part to read', true);
-    const result = recogniseFeatures(mergeMeshes(meshes), { stock });
+    // what the setup already does, so that it is not proposed a second time
+    const existing = setup.operations.filter((o) => o.enabled !== false).map((o) => ({
+      type: o.type,
+      toolDiameter: doc.project.tools.find((t) => t.id === o.toolId)?.diameter ?? 0,
+      restricted: (o.regions?.include?.length ?? 0) > 0,
+    }));
+    const result = recogniseFeatures(mergeMeshes(meshes), { stock, existing });
+    // A project with tools of its own is held to them: nothing is made for it, and
+    // a proposal with no cutter in the rack says so and is left unticked. One with
+    // an empty rack gets cutters made. Decided once, before any are made, so that
+    // the first new drill does not turn the rest of the proposals rack-only.
+    const rackOnly = doc.project.tools.length > 0;
     // the cutter each would get, with the ones it would have to make counted into
     // the rack as it goes, so two new drills do not both claim the same number
     const preview = () => {
       let rack = [...doc.project.tools];
       return (proposal) => {
-        const got = toolForSpec(proposal.toolSpec, rack, { material: setup.material });
+        const got = toolForSpec(proposal.toolSpec, rack, { material: setup.material, rackOnly });
         if (got.created) rack = [...rack, got.tool];
         return got;
       };
@@ -435,10 +446,12 @@ export function makeEditActions(ctx, space) {
       setup, result, toolFor: (p) => toolFor.get(p.id),
       onApply: (ids) => {
         let added = 0;
+        let skipped = 0;
         doc.group('add recognised features', () => {
           for (const p of result.proposals) {
             if (!ids.includes(p.id)) continue;
-            const got = toolForSpec(p.toolSpec, doc.project.tools, { material: setup.material });
+            const got = toolForSpec(p.toolSpec, doc.project.tools, { material: setup.material, rackOnly });
+            if (!got.tool) { skipped++; continue; }
             if (got.created) doc.addTool(got.tool);
             const op = addOperationTo(setup, p.opType);
             assignTool(op, got.tool.id);
@@ -446,7 +459,8 @@ export function makeEditActions(ctx, space) {
             added++;
           }
         });
-        ctx.ui.setStatus(`${plural(added, 'operation')} added to ${setup.name} - Generate, and read each toolpath. Ctrl+Z takes them all back`);
+        ctx.ui.setStatus(`${plural(added, 'operation')} added to ${setup.name} - Generate, and read each toolpath. Ctrl+Z takes them all back`
+          + (skipped ? `. ${plural(skipped, 'operation')} left out: no cutter for it in your tools` : ''));
       },
     });
   }

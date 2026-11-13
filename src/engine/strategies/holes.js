@@ -20,7 +20,7 @@ import { applyCutting, effectiveCutting } from '../cutting.js';
 import { holeApproachZ } from '../heights.js';
 import { regionAllowsPoint } from '../regions.js';
 import { tipAngleOf, fluteLengthOf, shankWidthBetween } from '../tool-geometry.js';
-import { findHoles, findBosses, orderHoles } from './drill.js';
+import { findHoles, findBosses, orderHoles, roomAroundHole } from './drill.js';
 
 /**
  * How much smaller than the thread the hole is, as a share of the pitch.
@@ -144,6 +144,22 @@ export function generateSpot({
   // its own: the cone starts that wide, and only the rest of the width is the
   // point's to make. Chamfering and engraving read the same field the same way.
   const tipR = Math.min(Math.max(0, (tool.tipDiameter ?? 0) / 2), maxR * 0.9);
+
+  // A hole at the bottom of a pocket is reached through the pocket: a cutter
+  // wider than the way down stops on the rim, and the program is a spot in the air.
+  const partTop = computeBounds(mesh.positions).max[2];
+  const topmost = new Map();     // the spot goes down to the highest hole on a centre
+  for (const h of holes) {
+    const key = `${h.cx.toFixed(2)},${h.cy.toFixed(2)}`;
+    if (!topmost.has(key) || h.top > topmost.get(key).top) topmost.set(key, h);
+  }
+  const blocked = [...topmost.values()].filter((h) => tool.diameter > roomAroundHole(mesh, h, partTop) + 1e-6);
+  if (blocked.length) {
+    const narrowest = Math.min(...blocked.map((h) => roomAroundHole(mesh, h, partTop)));
+    cl.warn(`${plural(blocked.length, 'hole')} ${verb(blocked.length, 'is', 'are')} reached through an opening `
+      + `${narrowest.toFixed(1)}mm wide, narrower than this ⌀${tool.diameter} cutter — it stops on the rim and `
+      + 'never reaches the hole; use a narrower spot drill or a centre drill');
+  }
 
   cl.rapid(holes[0].cx, holes[0].cy, clearance);
   let clipped = 0;

@@ -107,7 +107,8 @@ export function showOrderPlan({ setup, plan, nameOf, onApply }) {
  * What was recognised on the part and the operations proposed for it, as a
  * checklist. Nothing is added until Apply, and everything ticked is added as one
  * undo step. A proposal whose cutter is not in the rack says so, because the
- * apply will make that cutter.
+ * apply will make that cutter - unless the project has tools of its own, in
+ * which case only those are used and a proposal they cannot serve is greyed out.
  *
  * @param toolFor (proposal) => { tool, created } — the cutter it would get
  */
@@ -116,13 +117,18 @@ export function showFeaturePlan({ setup, result, toolFor, onApply }) {
   const boxes = [];
   const rows = result.proposals.map((p) => {
     const box = el('input', { type: 'checkbox', 'aria-label': p.label });
-    box.checked = p.enabled;
-    boxes.push([p, box]);
     const got = toolFor(p);
-    const toolText = got ? `${got.created ? 'new ' : ''}T${got.tool.number} ${got.tool.name}` : '';
+    // nothing in the user's own tools does it: it cannot be added, and says why
+    box.checked = p.enabled && !(got && !got.tool);
+    box.disabled = !!(got && !got.tool);
+    boxes.push([p, box]);
+    const toolText = !got ? '' : got.tool
+      ? `${got.created ? 'new ' : ''}T${got.tool.number} ${got.tool.name}`
+      : `none in your tools - needs ${got.missing}`;
     return el('li', { class: 'feature-row' }, [
       el('label', {}, [box, ' ', p.label]),
       el('div', { class: 'prop-hint' }, [[p.detail, toolText && `cutter: ${toolText}`].filter(Boolean).join(' · ')]),
+      ...(got && !got.tool ? [el('div', { class: 'prop-note warn' }, [`Your tools have no cutter for this - add ${got.missing} to them to use it.`])] : []),
       ...p.warnings.map((w) => el('div', { class: 'prop-note warn' }, [w])),
     ]);
   });

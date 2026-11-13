@@ -21,6 +21,7 @@ import { plural, verb, allOf } from '../text.js';
 import { computeBounds } from '../../geom/mesh.js';
 import { sliceMeshZ } from '../../geom/slice.js';
 import { unionLoops, loopArea } from '../../geom/clipper.js';
+import { distanceToLoops } from '../../geom/inside.js';
 import { applyCutting } from '../cutting.js';
 import { holeApproachZ } from '../heights.js';
 import { regionAllowsPoint } from '../regions.js';
@@ -471,4 +472,28 @@ function solve3(m) {
     }
   }
   return [m[0][3] / m[0][0], m[1][3] / m[1][1], m[2][3] / m[2][2]];
+}
+
+/**
+ * How wide a cutter can be and still go down to a hole: twice the distance from
+ * the hole's centre to the nearest wall standing above it, or Infinity when the
+ * hole opens at the top of the part and nothing stands over it.
+ *
+ * A hole at the bottom of a pocket is reached through the pocket. A ⌀6 spot
+ * drill over a hole in a 5mm pocket is not a spot drill that cuts the hole's
+ * centre, it is one that stops on the pocket's rim with its point in the air —
+ * and a simulation that only removes stock under the point shows the spot made.
+ * Shared by the proposal that picks the spot drill and the spot operation that
+ * warns, so that the two cannot disagree about what fits.
+ *
+ * @param hole `{ cx, cy, top }` as findHoles gives it
+ * @param partTop the Z of the top of the part
+ */
+export function roomAroundHole(mesh, hole, partTop) {
+  const z = hole.top + 0.3;
+  if (!(z < partTop - 0.05)) return Infinity;
+  const loops = unionLoops(sliceMeshZ(mesh, z));
+  if (loops.length === 0) return Infinity;
+  const d = distanceToLoops(loops, hole.cx, hole.cy);
+  return Number.isFinite(d) ? 2 * d : Infinity;
 }
