@@ -48,11 +48,12 @@ import { stockOutline } from './stock.js';
  * of the opening level ran through air a face mill had already been over, 2.1m
  * of a Z-level rough and 7.3m of an adaptive one — a third of that operation.
  *
- * Only these two, because they are the ones that cut a level at the top of the
- * stock. A second facing pass at the same height is a spring pass and has to
- * stay one.
+ * Only these, because they are the ones that start from the top of the stock
+ * (toolpath.js START_AT_STOCK_TOP: a pocket and a slot do too, when Top Z is
+ * below the billet). A second facing pass at the same height is a spring pass
+ * and has to stay one.
  */
-const ROUGHS_THE_BILLET = new Set(['clear2d', 'adaptive']);
+const ROUGHS_THE_BILLET = new Set(['clear2d', 'adaptive', 'pocket', 'slot']);
 
 /**
  * The operations ahead of `op` whose cuts it leaves out, in program order.
@@ -171,15 +172,23 @@ export function clearedStack(earlier, levels, options = {}) {
   // the same moves are at or below it *and* none of them is within reach of the
   // cutter's flank, where the radius it counts at depends on the height asked.
   const byKey = new Map();
+  // How far above a cut level metal can still stand beside the swath: a ball or
+  // bull nose leaves the shape of its own flank at the edge of every pass, up to
+  // the height of that flank. Read by whoever enters from "the stock stands at
+  // most here" — see regions.js standingTopAt.
+  let flank = 0;
+  for (const { cl, tool } of earlier ?? []) {
+    if (cl && tool?.diameter > 0) flank = Math.max(flank, profileTable(tool).edge);
+  }
   const slices = zs.map((z) => {
     const key = sliceKey(earlier, z);
     if (!byKey.has(key)) byKey.set(key, clearedArea(earlier, z, options));
-    return { z, loops: byKey.get(key) };
+    return { z, loops: byKey.get(key), flank };
   });
   return slices
     .filter((slice) => slice.loops.length > 0)
     .map((slice) => (outside.length
-      ? { z: slice.z, loops: unionLoops([...slice.loops, ...outside]) } : slice));
+      ? { z: slice.z, loops: unionLoops([...slice.loops, ...outside]), flank } : slice));
 }
 
 /**

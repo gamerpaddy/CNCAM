@@ -131,14 +131,16 @@ export function generateClear({
   // a feed plane inside solid billet and then ramped one stepdown through
   // material standing several. Only a level that cut something has lowered the
   // surface the next one comes in through. See engine/heights.js entryPlane.
-  let zEntry = params.topZ;
+  // the height the metal stands at where the first pass comes in: the top of the
+  // billet where it stands over Top Z — see engine/toolpath.js ENTERS_AT_STOCK_TOP
+  let zEntry = params.entryTopZ ?? params.topZ;
   let cutAnything = false;
   let finalShadow = null;
   let finalZ = params.bottomZ;
   const allowance = Math.max(0, params.stockToLeave ?? 0);
   // What each level cleared, for where the finish passes may come down — see
   // engine/ground.js.
-  const ground = new Ground({ stock, topZ: params.topZ });
+  const ground = new Ground({ stock, topZ: params.entryTopZ ?? params.topZ });
   // Leads left off because they would have swung into the part or a clamp —
   // see contour.js leadRoomFor. A wall ring's lead swings out over the ground
   // the level has cleared, or off the billet, and nowhere else.
@@ -469,6 +471,7 @@ function standingTop(regions, loops, keepout, radius, z, zEntry) {
     for (let i = 0; i < n; i += stride) outline.push(loop[i * 2], loop[i * 2 + 1]);
   }
   let top = z;
+  let counted = 0;
   for (let i = 0; i < outline.length; i += 2) {
     const x = outline[i];
     const y = outline[i + 1];
@@ -480,10 +483,12 @@ function standingTop(regions, loops, keepout, radius, z, zEntry) {
         if (keepout.length && pointInLoops(keepout, qx, qy)) continue;
         return zEntry;
       }
+      counted++;
       if (at > top) top = at;
     }
   }
-  return Math.min(zEntry, top);
+  // nothing to go on — every place the cutter goes is the part's own allowance
+  return counted === 0 ? zEntry : Math.min(zEntry, top);
 }
 
 function flatLength(path, closed = false) {

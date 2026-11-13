@@ -63,7 +63,9 @@ export function generatePocket({
   // traverse straight through uncut billet. A pocketing pass knows precisely
   // what it has emptied, because it emptied it.
   const levels = [];
-  let zEntry = params.topZ;
+  // where the metal stands at the first entry — see engine/toolpath.js ENTERS_AT_STOCK_TOP
+  const entryTop = params.entryTopZ ?? params.topZ;
+  let zEntry = entryTop;
   let clearedAbove = null;
   let clearedLevel = null;
   for (const z of depthLevelsFor(params, mesh, tool)) {
@@ -123,7 +125,7 @@ export function generatePocket({
     return roomAt.get(level);
   };
   let from = null;            // where the previous pass finishes
-  let fromZ = params.topZ;
+  let fromZ = entryTop;
   let slotLength = 0;         // how far the tool runs full width opening levels
 
   /**
@@ -212,7 +214,7 @@ export function generatePocket({
   // stepdowns at once, and a pocket that opens below another is entered from
   // the other one's floor, rapiding down into its own uncut metal. So each
   // pocket asks how high its own metal stands, and steps down from there.
-  const ground = new Ground({ stock, topZ: params.topZ });
+  const ground = new Ground({ stock, topZ: entryTop });
   for (const level of levels) {
     const { z, area } = level;
     if (area.length === 0) continue;
@@ -233,7 +235,7 @@ export function generatePocket({
     // is in before it goes anywhere.
     for (const found of pocketGroups(rings, area, from)) {
       const swept = unionLoops(found.flatMap(({ loop }) => sweptBy(loop, r, true)));
-      let above = Math.max(z, Math.min(params.topZ, ground.topIn(swept)));
+      let above = Math.max(z, Math.min(entryTop, ground.topIn(swept)));
       for (const zz of depthPasses(above, z, params.stepdown)) {
         planPocket(level, found, above, zz, zz <= z + 1e-9);
         if (zz <= z + 1e-9) level.swath.push(...swept);

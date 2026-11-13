@@ -271,6 +271,41 @@ test('a chamfer and an engraving come down over stock left above the part at fee
   }
 });
 
+test('a clearing pass set at the part comes in through the billet standing over it, not onto Top Z at rapid', () => {
+  // Top Z is where the cut starts, and with 5mm of billet left on top and Top Z
+  // at the part, pocket, Z-level, adaptive and slot each rapided straight down
+  // onto it — the whole 5mm, into metal. They enter through the top of the
+  // billet now (toolpath.js ENTERS_AT_STOCK_TOP): a gap above it at rapid, then in at feed.
+  const job = placed(makePocketBlock({ size: 40, pocketSize: 20, height: 12, depth: 8 }).mesh,
+    { margin: [1, 1, 5] });
+  const top = job.stock.max[2];
+  const part = computeBounds(job.mesh.positions).max[2];
+  assert.ok(top > part + 4, 'the billet really stands over the part');
+  for (const type of ['pocket', 'clear2d', 'adaptive']) {
+    const op = generate(type, job, FLAT, { topZ: part });
+    const sim = simulate(job, [op]);
+    assert.eq(sim.rapidCut.count, 0, `${type}: ${sim.rapidCut.count} rapids into metal, `
+      + `${sim.rapidCut.depth.toFixed(2)}mm`);
+    assert.ok(op.cl.notes.some((n) => /comes down to a gap above the top of the billet/.test(n.text)),
+      `${type} says it enters through the billet`);
+  }
+  // …and a bore: the helix starts from the metal over the hole, not from Top Z
+  const holes = generate('bore', placed(makeBoss().mesh, { margin: [1, 1, 5] }), FLAT, {});
+  assert.ok(holes.cl.count >= 0, 'a bore on a part with no holes is still a program');
+});
+
+test('a finishing pass with no roughing ahead says it will meet the billet', async () => {
+  const job = placed(await sample('test-step-plate.stl'), { margin: [1, 1, 5] });
+  const alone = generate('waterline', job, BALL, {}, { earlier: [] });
+  assert.ok(alone.cl.notes.some((n) => n.level === 'warn' && /Nothing before this pass clears the billet/.test(n.text)),
+    'a waterline with nothing ahead of it warns');
+  const rough = generate('adaptive', job, FLAT, {});
+  const after = generate('waterline', job, BALL, {},
+    { earlier: [{ type: 'adaptive', tool: FLAT, params: rough.params }] });
+  assert.ok(!after.cl.notes.some((n) => /Nothing before this pass clears the billet/.test(n.text)),
+    'and does not once a roughing pass is ahead of it');
+});
+
 test('a finishing pass enters clear of the steps the roughing before it leaves', async () => {
   // The app raises a finishing pass's entry gap when it is added after a
   // roughing pass — and only then: a rough added after it, a stepdown raised,

@@ -243,6 +243,47 @@ function clampTopToStock(args) {
   return { args: { ...args, params: { ...args.params, topZ: top } }, lowered: topZ - top };
 }
 
+/**
+ * The strategies that come down onto Top Z at rapid, and so have to be told
+ * where the metal over it really stands.
+ *
+ * Top Z is where the cut starts, and each of these rapided down onto it — into
+ * the metal, wherever the billet stands higher than the part and nothing ahead
+ * of them took it off. Measured on the hole and step plates with 5mm left on top
+ * and Top Z at the part: pocket, Z-level, adaptive and slot each rapided the
+ * whole 5mm.
+ *
+ * They are given `entryTopZ`, the top of the billet, and take it as the height
+ * they enter through: rapid down to a gap above *it*, then in at feed. Top Z
+ * still says where the levels are, so the passes the panel counts are the passes
+ * that are cut; a facing pass ahead of them is skipped over as before (rest.js
+ * deductedBefore), and the entry reads what it cleared (clear2d standingTop).
+ */
+const ENTERS_AT_STOCK_TOP = new Set(['pocket', 'clear2d', 'adaptive', 'slot']);
+
+/**
+ * The finishing strategies, which enter at depth beside the part on the word of
+ * a roughing pass having cleared it, and the passes that count as that.
+ */
+const FINISHING_3D = new Set(['waterline', 'parallel3d', 'pencil', 'scallop', 'finish5']);
+const ROUGHS_BEFORE_FINISHING = new Set(['clear2d', 'adaptive', 'pocket']);
+
+/**
+ * `params` with `entryTopZ` set, for a strategy that enters through the top of
+ * the billet.
+ *
+ * @returns { args, above } — how far the billet stands over Top Z, 0 when it does not
+ */
+function enterThroughStockTop(args) {
+  const top = args.stock?.max?.[2];
+  const { topZ, bottomZ } = args.params ?? {};
+  if (!ENTERS_AT_STOCK_TOP.has(args.type) || !Number.isFinite(top) || !Number.isFinite(topZ)
+    || !(top > topZ + 0.05) || !(bottomZ < topZ)) {
+    return { args, above: 0 };
+  }
+  return { args: { ...args, params: { ...args.params, entryTopZ: top } }, above: top - topZ };
+}
+
 /** The widest cutter any strategy is asked to plan for, in mm. See generateToolpath. */
 export const MAX_CUTTER_DIAMETER = 1000;
 
@@ -374,7 +415,8 @@ export function generateToolpath(given) {
   // so. See engine/param-limits.js.
   const { params: held, notes: heldNotes } = clampParams(args.params, args.type);
   if (held !== args.params) args = { ...args, params: held };
-  const { args: clamped, lowered } = clampTopToStock(clampSafeArgs(args));
+  const { args: lowerClamped, lowered } = clampTopToStock(clampSafeArgs(args));
+  const { args: clamped, above } = enterThroughStockTop(lowerClamped);
   // A cut that ends above where it starts has no depth to take. The panel keeps
   // Bottom Z under Top Z, so this only meets a file that was edited by hand —
   // and the strategies read it as a cut *at* Bottom Z, so a Bottom Z of 1e9 was
@@ -389,7 +431,7 @@ export function generateToolpath(given) {
   if (heldNotes.length) {
     cl.notes = [...(cl.notes ?? []), ...heldNotes.map((text) => ({ level: 'warn', text }))];
   }
-  const below = standingAboveTopZ(clamped);
+  const below = ENTERS_AT_STOCK_TOP.has(clamped.type) ? 0 : standingAboveTopZ(clamped);
   if (below > 0.05 && cl.count > 0) {
     const mm = (v) => Math.round(v * 1000) / 1000;
     cl.notes = [...(cl.notes ?? []), {
@@ -398,6 +440,27 @@ export function generateToolpath(given) {
         + `against Z${mm(clamped.stock.max[2])}): this operation comes down onto its first `
         + 'pass at rapid, so whatever stands over it has to have been taken off by an '
         + 'operation before this one, or the tool rapids into it',
+    }];
+  }
+  if (FINISHING_3D.has(clamped.type) && Array.isArray(clamped.earlier) && cl.count > 0
+    && !clamped.earlier.some((op) => ROUGHS_BEFORE_FINISHING.has(op.type))) {
+    cl.notes = [...(cl.notes ?? []), {
+      level: 'warn',
+      text: 'Nothing before this pass clears the billet off the part, and a finishing pass '
+        + 'enters and links as though only the allowance of a roughing pass stood round the '
+        + 'part — so it rapids into the stock. Rough the part first (Z-level or adaptive '
+        + 'clearing), or accept that this cuts the billet itself.',
+    }];
+  }
+  if (above > 0.05 && cl.count > 0) {
+    const mm = (v) => Math.round(v * 1000) / 1000;
+    cl.notes = [...(cl.notes ?? []), {
+      level: 'info',
+      text: `The billet stands ${mm(above)}mm above Top Z (Z${mm(clamped.params.topZ)}, `
+        + `against Z${mm(clamped.params.entryTopZ)}), so this operation comes down to a gap `
+        + 'above the top of the billet and goes in at feed rather than rapiding onto Top Z '
+        + 'through the metal. The first pass still takes everything over it in one cut — '
+        + 'face the billet first, or set Top Z to its top, to cut it in steps.',
     }];
   }
   if (lowered > 0.001) {

@@ -72,6 +72,8 @@ export function loadPart(name) {
   const buf = readFileSync(new URL(`../../samples/${name}.stl`, import.meta.url));
   const mesh = meshFromSoup(parseSTL(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)));
   const { meshes, stock } = resolveSetup(createSetup(), [mesh], computeStock);
+  // STOCK_TOP=n stands n mm more billet on top: a job that has not been faced
+  if (process.env.STOCK_TOP) stock.max[2] += +process.env.STOCK_TOP;
   return { mesh: meshes[0], stock, bounds: computeBounds(meshes[0].positions) };
 }
 

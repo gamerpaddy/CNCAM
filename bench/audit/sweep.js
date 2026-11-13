@@ -30,7 +30,9 @@ import { MILLING_OPS } from '../../src/engine/toolpath.js';
 import { cuttingRadiusOf } from '../../src/engine/tool-geometry.js';
 import { TOOLS, FOR, PARTS, Material, measure, loadPart, generate } from './lib.js';
 
-const FINISHERS = new Set(['contour2d', 'parallel3d', 'pencil', 'scallop', 'waterline', 'chamfer', 'engrave']);
+// --raw: nothing roughed ahead of a finishing pass — the billet as it comes
+const FINISHERS = new Set(process.argv.includes('--raw') ? []
+  : ['contour2d', 'parallel3d', 'pencil', 'scallop', 'waterline', 'chamfer', 'engrave']);
 const ROUGH_TOOL = TOOLS.flat;
 
 const args = process.argv.slice(2);

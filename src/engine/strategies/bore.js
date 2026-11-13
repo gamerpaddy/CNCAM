@@ -94,7 +94,14 @@ export function generateBore({
     // feed plane — a gap above that — was inside the billet, reached at rapid.
     // The column over a hole is not part of the part, so boring it is always
     // allowed; Top Z still caps it. See heights.js holeSurfaceZ.
-    const zTop = Math.min(params.topZ, holeSurfaceZ(hole.top, stock));
+    //
+    // And Top Z does not cap it where Top Z is the top of the hole itself: the
+    // metal standing over the hole is above Top Z, and coming down onto Top Z at
+    // rapid put the tool into it — 5mm of billet over a part, on the hole plate.
+    // A Top Z *below* the hole's top is a cut that starts inside the hole, in
+    // air, and still caps it.
+    const surface = holeSurfaceZ(hole.top, stock);
+    const zTop = params.topZ >= hole.top - 1e-6 ? surface : Math.min(params.topZ, surface);
     const zBottom = perHole ? Math.max(hole.bottom, params.bottomZ) : params.bottomZ;
     if (!(zTop > zBottom + 1e-6)) continue;
     if (tool.fluteLength > 0 && zTop - zBottom > tool.fluteLength) tooDeep++;

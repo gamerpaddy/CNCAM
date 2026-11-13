@@ -21,7 +21,7 @@
 
 import {
   diffLoops, intersectLoops, clipOpenPaths, loopToOpenPath, offsetLoops, loopArea,
-  unionWithHoles,
+  unionWithHoles, unionLoops,
 } from '../geom/clipper.js';
 import { pointInLoops } from '../geom/inside.js';
 
@@ -209,6 +209,28 @@ export function clearedEdgeAt(regions, { radius = 0, tolerance = 0.01, z, minCle
 }
 
 /**
+ * Two stacks of cleared ground as one: at every height either of them has a
+ * slice for, what the two of them cleared together.
+ *
+ * Cleared ground only ever grows toward the top of a part, so asking a stack
+ * about a height above its shallowest slice is answered by that slice — a subset
+ * of the truth, which is the safe direction. Either list may be absent, or an
+ * ordinary loop list from before this was a stack, which stands for itself.
+ */
+export function mergeCleared(a, b) {
+  if (!hasAny(a)) return b;
+  if (!hasAny(b)) return a;
+  if (!a[0]?.loops || !b[0]?.loops) return b[0]?.loops ? b : a;
+  const zs = [...new Set([...a, ...b].map((slice) => slice.z))].sort((p, q) => p - q);
+  const flank = Math.max(0, ...[...a, ...b].map((slice) => slice.flank ?? 0));
+  return zs.map((z) => ({
+    z,
+    loops: unionLoops([...clearedAt({ cleared: a }, z), ...clearedAt({ cleared: b }, z)]),
+    flank,
+  })).filter((slice) => slice.loops.length > 0);
+}
+
+/**
  * How high the stock still stands at (x, y), as far as earlier passes' cleared
  * ground says: the deepest level above `z` that cleared it, or null where no
  * level above did — which means nothing is known about it.
@@ -221,8 +243,11 @@ export function standingTopAt(regions, x, y, z) {
   if (!hasAny(stack) || !stack[0]?.loops) return null;
   let best = null;
   for (const slice of stack) {
-    if (slice.z <= z + 1e-6 || (best !== null && slice.z >= best)) continue;
-    if (pointInLoops(slice.loops, x, y)) best = slice.z;
+    // the flank a shaped cutter leaves standing beside its own pass counts as
+    // stock: it is what a rapid down to "level + gap" runs into
+    const stands = slice.z + (slice.flank ?? 0);
+    if (slice.z <= z + 1e-6 || (best !== null && stands >= best)) continue;
+    if (pointInLoops(slice.loops, x, y)) best = stands;
   }
   return best;
 }
@@ -250,14 +275,15 @@ export function standingTopOver(regions, points, z, fallback,
   // stack is deepest first, so walk it from the far end
   const above = stack.filter((slice) => slice.z > z + 1e-6).sort((a, b) => a.z - b.z);
   for (const slice of above) {
-    if (slice.z >= top) break;
+    const stands = slice.z + (slice.flank ?? 0);
+    if (stands >= top) break;
     const eroded = worthSkippingOnce(regions, slice.loops, radius, tolerance, minClearedWidth);
     if (eroded.length === 0) continue;
     let all = true;
     for (let i = 0; i < n; i += stride) {
       if (!pointInLoops(eroded, points[i * 2], points[i * 2 + 1])) { all = false; break; }
     }
-    if (all) { top = slice.z; break; }
+    if (all) { top = stands; break; }
   }
   return top;
 }

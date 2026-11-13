@@ -243,8 +243,16 @@ function clearedByEarlier(doc, op, setup, mesh, tool, stock) {
   // ring at each level: measured on the step plate, an identical ⌀12 pass
   // repeated with rest machining on cut 11054mm against the 6310mm of the pass
   // it was supposed to be cleaning up after.
-  return clearedStack(earlier, depthLevelsFor(op.params, mesh, tool),
-    { tolerance: op.params.tolerance ?? 0.01, stock });
+  // …at the levels the strategy will really cut at, which for an adaptive pass
+  // include the fine levels of its step-up passes: those above the first level
+  // it cuts itself are where a facing pass is what has been cleared.
+  const params = op.params;
+  const levels = new Set(depthLevelsFor(params, mesh, tool));
+  const step = Math.round(Math.max(0, params.stepUp ?? 0) * tool.diameter * 1000) / 1000;
+  if (op.type === 'adaptive' && step > 0.05) {
+    for (const z of depthLevelsFor({ ...params, stepdown: step }, mesh, tool)) levels.add(z);
+  }
+  return clearedStack(earlier, [...levels], { tolerance: op.params.tolerance ?? 0.01, stock });
 }
 
 /**

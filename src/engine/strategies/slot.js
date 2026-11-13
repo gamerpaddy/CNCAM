@@ -163,7 +163,7 @@ export function generateSlot({
   const orderedCentres = orderByProximity(centres.map((c) => c.points), null)
     .map((points) => centres.find((c) => c.points === points));
   for (const centre of orderedCentres) {
-  const surface = new EntrySurface(params.topZ, r);
+  const surface = new EntrySurface(params.entryTopZ ?? params.topZ, r);
   const lanePaths = lanes.map((lane) => {
     const paths = [];
     for (const shifted of shiftPath(centre.points, centre.closed, lane, tolerance)) {

@@ -30,6 +30,8 @@ running every time are in `src/test/simulate.test.js` instead.
 | `audit/levels.mjs` | Cutting length by Z level — what a pass such as adaptive's step-ups really adds. |
 | `audit/contour-check.mjs` | A contour after an adaptive rough, plain and skipping what the rough cleared: minutes, air, removed volume, whether the surfaces match. |
 | `audit/field-accuracy.mjs` | The waterline's drop-cutter field at several budgets against a fine reference: error in the reported tool height, how often it reports the tool too low (the gouging direction), and the time. |
+| `audit/near.mjs` | The moves around the first one near a given (x, y, z) in one operation's program, and the order its levels are cut in. `STOCK_TOP=n` stands n mm more billet on top, for any audit script that loads a part with `loadPart`. |
+| `audit/face-check.mjs` | A facing pass, then adaptive with what it cleared deducted, as the app does: cutting length by level — nothing should be cut above the faced plane. |
 
 ## Tangency
 

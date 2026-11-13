@@ -44,13 +44,13 @@ import {
 } from '../../geom/coverage.js';
 import { SilhouetteStack } from '../../geom/silhouette.js';
 import { depthLevelsFor, depthRefusal, stockOutline } from '../stock.js';
-import { applyRegionsToArea, regionRefusal } from '../regions.js';
+import { applyRegionsToArea, mergeCleared, regionRefusal } from '../regions.js';
 import { orientLoop } from '../leads.js';
 import { cutSpanWithRamp, rampSlopeFor } from '../linking.js';
 import { applyCutting } from '../cutting.js';
 import { entryPlane, crossingPlane, goHome } from '../heights.js';
 import { mergeTolerance } from '../simplify.js';
-import { fluteLengthOf } from '../tool-geometry.js';
+import { fluteLengthOf, profileTable } from '../tool-geometry.js';
 
 const MAX_RINGS = 4000;
 const MAX_SEEDS = 24;
@@ -143,6 +143,7 @@ export function generateAdaptive({
   mesh, tool, params, stock, regions, fixtures,
 }) {
   const r = tool.diameter / 2;
+  const flank = profileTable(tool).edge;
   const stockToLeave = params.stockToLeave ?? 0;
   const tolerance = params.tolerance ?? 0.01;
   const clearance = params.clearanceHeight;
@@ -187,7 +188,8 @@ export function generateAdaptive({
     peak: 0, entries: 0, links: 0, hops: 0, steepest: 0, seeds: 0, opened: 0, unopened: 0,
     leftAbove: 0,
   };
-  let zEntry = params.topZ;
+  // where the metal stands at the first entry — see engine/toolpath.js ENTERS_AT_STOCK_TOP
+  let zEntry = params.entryTopZ ?? params.topZ;
   let cutAnything = false;
   // How high the stock still stands, cell by cell, on the raster every level's
   // map shares — see `unreachedAbove`. Null until a level has cut; a cell no
@@ -254,7 +256,11 @@ export function generateAdaptive({
     const before = map.uncut.slice();
     const level = new LevelCutter({
       cl, map, z, zEntry, clearance, rampAngle, bite, tolerance, standing, stockHere,
-      feedPlane: entryPlane(params, zEntry, z),
+      // A level's swath edge is the cutter's own flank: a bull or ball nose leaves
+      // a ridge up to the height of that flank above the level, and an entry gap
+      // smaller than it rapids into the ridge — 0.5mm into the bull's 1.5mm
+      // corner on the step plate, at the entry of a walled-off pocket.
+      feedPlane: entryPlane(params, zEntry + flank, z),
       stockPlane,
       direction, allowed, firm, report, minSegment,
       // how far a link may stray outside `allowed` and still not reach the
@@ -1381,7 +1387,13 @@ function stepUpPasses(cl, job, levels, clearance) {
   const cleared = clearedStack([{ cl: sofar, tool }], depthLevelsFor(fine, mesh, tool), { tolerance, stock });
   if (cleared.length === 0) return null;
   const extra = generateClear({
-    ...job, params: fine, regions: { include: [], avoid: [], ...(job.regions ?? {}), cleared },
+    // What this pass left *and* what was cleared before it began — a facing
+    // pass ahead of it, say. Without the second, the fine levels above the first
+    // thing adaptive cut itself took the whole faced billet for stock: four laps
+    // of the billet through air at every level above the part, 7.6m of a 28m
+    // program on the hole plate after a face.
+    ...job, params: fine,
+    regions: { include: [], avoid: [], ...(job.regions ?? {}), cleared: mergeCleared(job.regions?.cleared, cleared) },
   });
   const heights = new Set();
   let started = false;
