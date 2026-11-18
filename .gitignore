@@ -31,3 +31,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# local preview config
+.claude/launch.json
