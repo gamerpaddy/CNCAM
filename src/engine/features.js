@@ -111,7 +111,7 @@ export function slopedSurface(mesh) {
     const cx = (positions[a] + positions[b] + positions[c]) / 3;
     const cy = (positions[a + 1] + positions[b + 1] + positions[c + 1]) / 3;
     const cz = (positions[a + 2] + positions[b + 2] + positions[c + 2]) / 3;
-    if (probe(cx, cy) > cz + 0.05 || probe(cx, cy) < cz - 0.05) continue;   // under something, or not top surface
+    if (Math.abs(probe(cx, cy) - cz) > 0.05) continue;   // under something, or not top surface
     const plan = (Math.abs(nz) / 2) * stride;
     if (angle >= STEEP_FROM) steep += plan; else shallow += plan;
     angleSum += angle * plan;
@@ -313,7 +313,8 @@ export function recogniseFeatures(mesh, { stock = null, existing = [] } = {}) {
       if (!reach.has(key) || h.top > reach.get(key).top) reach.set(key, h);
     }
     let room = Infinity;
-    for (const h of reach.values()) room = Math.min(room, roomAroundHole(mesh, h, top));
+    const slices = new Map();
+    for (const h of reach.values()) room = Math.min(room, roomAroundHole(mesh, h, top, slices));
     const fits = room === Infinity ? 0 : Math.max(0, room - SPOT_CLEARANCE);
     proposals.push({
       id: 'spot',
@@ -328,7 +329,7 @@ export function recogniseFeatures(mesh, { stock = null, existing = [] } = {}) {
       opType: 'spot',
       params: {},
       toolSpec: { family: 'spot', prefer: 'any', ...(room < Infinity ? { maxDiameter: fits } : {}) },
-      enabled: true,
+      enabled: !(fits < 1 && room < Infinity),   // no spot drill goes down it: offered, not ticked
       warnings: room < Infinity && fits < 1
         ? [`a hole is reached through ${fmt(room)} mm: no spot drill goes down it`] : [],
     });

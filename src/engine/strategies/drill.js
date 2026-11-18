@@ -488,11 +488,14 @@ function solve3(m) {
  *
  * @param hole `{ cx, cy, top }` as findHoles gives it
  * @param partTop the Z of the top of the part
+ * @param cache optional Map shared between calls, so holes at one height share one slice
  */
-export function roomAroundHole(mesh, hole, partTop) {
+export function roomAroundHole(mesh, hole, partTop, cache = new Map()) {
   const z = hole.top + 0.3;
   if (!(z < partTop - 0.05)) return Infinity;
-  const loops = unionLoops(sliceMeshZ(mesh, z));
+  const zKey = Math.round(z * 1000);
+  let loops = cache.get(zKey);
+  if (!loops) { loops = unionLoops(sliceMeshZ(mesh, z)); cache.set(zKey, loops); }
   if (loops.length === 0) return Infinity;
   const d = distanceToLoops(loops, hole.cx, hole.cy);
   return Number.isFinite(d) ? 2 * d : Infinity;

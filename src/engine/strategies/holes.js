@@ -150,12 +150,17 @@ export function generateSpot({
   const partTop = computeBounds(mesh.positions).max[2];
   const topmost = new Map();     // the spot goes down to the highest hole on a centre
   for (const h of holes) {
-    const key = `${h.cx.toFixed(2)},${h.cy.toFixed(2)}`;
+    const key = `${Math.round(h.cx / 0.05)},${Math.round(h.cy / 0.05)}`;
     if (!topmost.has(key) || h.top > topmost.get(key).top) topmost.set(key, h);
   }
-  const blocked = [...topmost.values()].filter((h) => tool.diameter > roomAroundHole(mesh, h, partTop) + 1e-6);
+  const slices = new Map();
+  const blocked = [];
+  let narrowest = Infinity;
+  for (const h of topmost.values()) {
+    const room = roomAroundHole(mesh, h, partTop, slices);
+    if (tool.diameter > room + 1e-6) { blocked.push(h); narrowest = Math.min(narrowest, room); }
+  }
   if (blocked.length) {
-    const narrowest = Math.min(...blocked.map((h) => roomAroundHole(mesh, h, partTop)));
     cl.warn(`${plural(blocked.length, 'hole')} ${verb(blocked.length, 'is', 'are')} reached through an opening `
       + `${narrowest.toFixed(1)}mm wide, narrower than this ⌀${tool.diameter} cutter — it stops on the rim and `
       + 'never reaches the hole; use a narrower spot drill or a centre drill');
